@@ -3,9 +3,9 @@ import styles from '../styles/Home.module.css';
 
 const Home = () => {
   return (
-    <div>
-      <h1>Welcome to Speak2Me Fitness</h1>
-      <p>Your fitness companion powered by AI.</p>
+    <div className={styles.main}>
+      <h1 className={styles.main}>Welcome to Speak2Me Fitness</h1>
+      <p className={styles.main}>Your fitness companion powered by AI.</p>
     </div>
   );
 };
