@@ -272,4 +272,5 @@ pyrightconfig.json
 .DS_Store
 
 # VSCode, Cursor Workspace
-speak2me-fitness-monorepo.code-workspace
+# speak2me-fitness-monorepo.code-workspace
+*.code-workspace
