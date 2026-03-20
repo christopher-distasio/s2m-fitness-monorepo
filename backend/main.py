@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .database import test_mongo_connection, init_db, close_mongo_connection
+from backend.database import test_mongo_connection, init_db, close_mongo_connection
 
 async def lifespan(app: FastAPI):
     
