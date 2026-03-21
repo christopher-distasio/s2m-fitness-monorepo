@@ -11,7 +11,7 @@ class FoodLog(Document):
     protein: Optional[float] = None
     carbs: Optional[float] = None
     fat: Optional[float] = None
-    quantity: Optional[str]
+    quantity: Optional[str] = None
     logged_at: datetime = Field(default_factory=datetime.utcnow)
 
 class Settings:
