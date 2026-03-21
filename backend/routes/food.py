@@ -20,3 +20,8 @@ async def log_food(request: FoodLogRequest):
     )
     await food_log.insert()
     return {"message": "Food logged successfully", "id": str(food_log.id)}
+
+@router.get("/food/{user_id}")
+async def get_food_logs(user_id: str):
+    logs = await FoodLog.find(FoodLog.user_id == user_id).to_list()
+    return logs
