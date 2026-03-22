@@ -16,4 +16,4 @@ class FoodLog(Document):
 
 class Settings:
     name = "food_logs"
-
+    
