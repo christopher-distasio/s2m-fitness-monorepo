@@ -14,6 +14,13 @@ interface FoodLog {
   logged_at: string;
 }
 
+function speak(text: string) {
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 0.95;
+  window.speechSynthesis.speak(utterance);
+}
+
 export default function Home() {
   const [textInput, setTextInput] = useState('');
   const [logs, setLogs] = useState<FoodLog[]>([]);
@@ -44,11 +51,15 @@ export default function Home() {
         body: JSON.stringify({ user_id: USER_ID, raw_input: textInput }),
       });
       const data = await res.json();
-      setStatus(`Logged: ${data.parsed.food} — ${data.parsed.calories} cal (${data.parsed.confidence} confidence)`);
+      const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
+      setStatus(msg);
+      speak(msg);
       setTextInput('');
       fetchLogs();
     } catch {
-      setStatus('Error logging food.');
+      const err = 'Error logging food.';
+      setStatus(err);
+      speak(err);
     } finally {
       setLoading(false);
     }
@@ -72,10 +83,14 @@ export default function Home() {
           body: formData,
         });
         const data = await res.json();
+        const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
         setStatus(`Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`);
+        speak(msg);
         fetchLogs();
       } catch {
-        setStatus('Error processing audio.');
+        const err = 'Error processing audio.';
+        setStatus(err);
+        speak(err);
       } finally {
         setLoading(false);
       }
