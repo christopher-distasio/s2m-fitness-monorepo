@@ -34,6 +34,12 @@ export default function Home() {
     fetchLogs();
   }, []);
 
+  useEffect(() => {
+    if (!status) return;
+    const timer = setTimeout(() => setStatus(''), 5000);
+    return () => clearTimeout(timer);
+  }, [status]);
+
   async function fetchLogs() {
     const res = await fetch(`${API_BASE}/food/${USER_ID}`);
     const data = await res.json();
@@ -119,7 +125,7 @@ export default function Home() {
         placeholder="e.g. two eggs and a coffee"
         style={{ width: '100%', padding: 8, fontSize: 16, marginBottom: 8 }}
       />
-      <button onClick={submitText} disabled={loading} style={{ padding: '8px 16px' }}>
+      <button onClick={submitText} disabled={loading} style={{ padding: '8px 16px', backgroundColor: "red", color: "white"}}>
         Log food
       </button>
 
@@ -132,7 +138,7 @@ export default function Home() {
         {recording ? 'Stop recording' : 'Start recording'}
       </button>
 
-      {status && <p style={{ marginTop: 12, color: '#555' }}>{status}</p>}
+      {status && <p style={{ marginTop: 12, color: 'pink' }}>{status}</p>}
 
       <h2>Today&apos;s logs</h2>
       {logs.length === 0 && <p>No logs yet.</p>}
