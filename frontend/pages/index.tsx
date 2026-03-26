@@ -36,6 +36,7 @@ export default function Home() {
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
+  const [started, setStarted] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -49,6 +50,13 @@ export default function Home() {
     const timer = setTimeout(() => setStatus(""), 5000);
     return () => clearTimeout(timer);
   }, [status]);
+
+  function handleStart() {
+    setStarted(true);
+    speak(
+      `Today you have logged ${summary.calories} calories. Protein ${summary.protein} grams, carbs ${summary.carbs} grams, fat ${summary.fat} grams.`,
+    );
+  }
 
   async function fetchLogs() {
     const res = await fetch(`${API_BASE}/food/${USER_ID}/today`);
@@ -145,6 +153,9 @@ export default function Home() {
     const res = await fetch(`${API_BASE}/food/${USER_ID}/summary`);
     const data = await res.json();
     setSummary(data);
+    speak(
+      `Today you have logged ${data.calories} calories. Protein ${data.protein} grams, carbs ${data.carbs} grams, fat ${data.fat} grams.`,
+    );
   }
 
   return (
@@ -156,8 +167,20 @@ export default function Home() {
         fontFamily: "sans-serif",
       }}
     >
-      <h1>Speak2Me Fitness</h1>
-
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <h1>Speak2Me Fitness</h1>
+        {!started && (
+          <button onClick={handleStart} style={{ padding: "10px 20px" }}>
+            Tap to start
+          </button>
+        )}
+      </div>
       <h2>Log by text</h2>
       <input
         type="text"
