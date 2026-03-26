@@ -34,6 +34,7 @@ export default function Home() {
     fetchLogs();
   }, []);
 
+  
   useEffect(() => {
     if (!status) return;
     const timer = setTimeout(() => setStatus(''), 5000);
@@ -41,7 +42,7 @@ export default function Home() {
   }, [status]);
 
   async function fetchLogs() {
-    const res = await fetch(`${API_BASE}/food/${USER_ID}`);
+    const res = await fetch(`${API_BASE}/food/${USER_ID}/today`);
     const data = await res.json();
     setLogs(data.reverse());
   }

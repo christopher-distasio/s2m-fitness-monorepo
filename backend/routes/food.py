@@ -76,6 +76,21 @@ async def log_food_voice(
     return build_response(food_log, parsed, transcription=raw_input)
 
 
+from datetime import datetime, timezone
+
+@router.get("/food/{user_id}/today")
+async def get_today_food(user_id: str):
+    now = datetime.now(timezone.utc)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    logs = await FoodLog.find(
+        FoodLog.user_id == user_id,
+        FoodLog.logged_at >= start_of_day
+    ).to_list()
+    
+    return logs
+    
+
 @router.get("/food/{user_id}")
 async def get_food_logs(user_id: str):
     logs = await FoodLog.find(FoodLog.user_id == user_id).to_list()
