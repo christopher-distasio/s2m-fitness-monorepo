@@ -13,6 +13,7 @@ class FoodLog(Document):
     fat: Optional[float] = None
     quantity: Optional[str] = None
     logged_at: datetime = Field(default_factory=datetime.utcnow)
+    modified_at: Optional[datetime] = None
 
 class Settings:
     name = "food_logs"

@@ -80,3 +80,39 @@ async def log_food_voice(
 async def get_food_logs(user_id: str):
     logs = await FoodLog.find(FoodLog.user_id == user_id).to_list()
     return logs
+
+
+@router.delete("/food/{log_id}")
+async def delete_food_log(log_id: str):
+    food_log = await FoodLog.get(log_id)
+    if not food_log:
+        raise HTTPException(status_code=404, detail="Food log not found")
+    await food_log.delete()
+    return {"message": "Food log deleted successfully"}
+
+
+@router.put("/food/{log_id}")
+async def update_food_log(log_id: str, request: FoodLogRequest):
+    food_log = await FoodLog.get(log_id)
+    if not food_log:
+        raise HTTPException(status_code=404, detail="Food log not found")
+
+    parsed = await parse_food_input(request.raw_input)
+
+    if "error" in parsed:
+        raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
+
+    food_log.raw_input = request.raw_input
+    food_log.food_name = request.food_name or parsed["food"]
+    food_log.calories = parsed.get("calories")
+    macros = parsed.get("macronutrients", {})
+    food_log.protein = macros.get("protein")
+    food_log.carbs = macros.get("carbohydrates")
+    food_log.fat = macros.get("fats")
+    food_log.quantity = parsed.get("serving_size")
+    from datetime import datetime, timezone
+    food_log.modified_at = datetime.now(timezone.utc)
+
+    await food_log.save()
+    return build_response(food_log, parsed)
+
