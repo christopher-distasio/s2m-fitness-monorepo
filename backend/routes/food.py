@@ -89,6 +89,25 @@ async def get_today_food(user_id: str):
     ).to_list()
     
     return logs
+
+
+@router.get("/food/{user_id}/summary")
+async def get_daily_summary(user_id: str):
+    now = datetime.now(timezone.utc)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    logs = await FoodLog.find(
+        FoodLog.user_id == user_id,
+        FoodLog.logged_at >= start_of_day
+    ).to_list()
+
+    return {
+        "calories": sum(log.calories or 0 for log in logs),
+        "protein": sum(log.protein or 0 for log in logs),
+        "carbs": sum(log.carbs or 0 for log in logs),
+        "fat": sum(log.fat or 0 for log in logs),
+        "entry_count": len(logs),
+    }
     
 
 @router.get("/food/{user_id}")

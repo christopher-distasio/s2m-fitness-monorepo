@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from "react";
 
-const API_BASE = 'http://localhost:8000';
-const USER_ID = 'test_user_1';
+const API_BASE = "http://localhost:8000";
+const USER_ID = "test_user_1";
 
 interface FoodLog {
   _id: string;
@@ -22,22 +22,29 @@ function speak(text: string) {
 }
 
 export default function Home() {
-  const [textInput, setTextInput] = useState('');
+  const [textInput, setTextInput] = useState("");
   const [logs, setLogs] = useState<FoodLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState("");
+  const [summary, setSummary] = useState({
+    calories: 0,
+    protein: 0,
+    carbs: 0,
+    fat: 0,
+    entry_count: 0,
+  });
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     fetchLogs();
+    fetchSummary();
   }, []);
 
-  
   useEffect(() => {
     if (!status) return;
-    const timer = setTimeout(() => setStatus(''), 5000);
+    const timer = setTimeout(() => setStatus(""), 5000);
     return () => clearTimeout(timer);
   }, [status]);
 
@@ -50,21 +57,21 @@ export default function Home() {
   async function submitText() {
     if (!textInput.trim()) return;
     setLoading(true);
-    setStatus('Parsing...');
+    setStatus("Parsing...");
     try {
       const res = await fetch(`${API_BASE}/food`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: USER_ID, raw_input: textInput }),
       });
       const data = await res.json();
       const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
       setStatus(msg);
       speak(msg);
-      setTextInput('');
+      setTextInput("");
       fetchLogs();
     } catch {
-      const err = 'Error logging food.';
+      const err = "Error logging food.";
       setStatus(err);
       speak(err);
     } finally {
@@ -73,19 +80,19 @@ export default function Home() {
   }
 
   async function deleteLog(id: string) {
-    if (!confirm('Delete this entry?')) return;
-    await fetch(`${API_BASE}/food/${id}`, { method: 'DELETE' });
+    if (!confirm("Delete this entry?")) return;
+    await fetch(`${API_BASE}/food/${id}`, { method: "DELETE" });
     fetchLogs();
   }
 
   async function updateLog(id: string) {
-    const newInput = prompt('Correct your entry:');
+    const newInput = prompt("Correct your entry:");
     if (!newInput) return;
     await fetch(`${API_BASE}/food/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ raw_input: newInput, user_id: USER_ID }),
-  });
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw_input: newInput, user_id: USER_ID }),
+    });
     fetchLogs();
   }
 
@@ -95,24 +102,26 @@ export default function Home() {
     chunksRef.current = [];
     recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
     recorder.onstop = async () => {
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
       const formData = new FormData();
-      formData.append('user_id', USER_ID);
-      formData.append('audio', blob, 'recording.webm');
+      formData.append("user_id", USER_ID);
+      formData.append("audio", blob, "recording.webm");
       setLoading(true);
-      setStatus('Transcribing...');
+      setStatus("Transcribing...");
       try {
         const res = await fetch(`${API_BASE}/food/voice`, {
-          method: 'POST',
+          method: "POST",
           body: formData,
         });
         const data = await res.json();
         const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
-        setStatus(`Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`);
+        setStatus(
+          `Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`,
+        );
         speak(msg);
         fetchLogs();
       } catch {
-        const err = 'Error processing audio.';
+        const err = "Error processing audio.";
         setStatus(err);
         speak(err);
       } finally {
@@ -122,7 +131,7 @@ export default function Home() {
     mediaRecorderRef.current = recorder;
     recorder.start();
     setRecording(true);
-    setStatus('Recording...');
+    setStatus("Recording...");
   }
 
   function stopRecording() {
@@ -130,8 +139,21 @@ export default function Home() {
     setRecording(false);
   }
 
+  async function fetchSummary() {
+    const res = await fetch(`${API_BASE}/food/${USER_ID}/summary`);
+    const data = await res.json();
+    setSummary(data);
+  }
+
   return (
-    <div style={{ maxWidth: 600, margin: '40px auto', padding: '0 20px', fontFamily: 'sans-serif' }}>
+    <div
+      style={{
+        maxWidth: 600,
+        margin: "40px auto",
+        padding: "0 20px",
+        fontFamily: "sans-serif",
+      }}
+    >
       <h1>Speak2Me Fitness</h1>
 
       <h2>Log by text</h2>
@@ -139,11 +161,15 @@ export default function Home() {
         type="text"
         value={textInput}
         onChange={(e) => setTextInput(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && submitText()}
+        onKeyDown={(e) => e.key === "Enter" && submitText()}
         placeholder="e.g. two eggs and a coffee"
-        style={{ width: '100%', padding: 8, fontSize: 16, marginBottom: 8 }}
+        style={{ width: "100%", padding: 8, fontSize: 16, marginBottom: 8 }}
       />
-      <button onClick={submitText} disabled={loading} style={{ padding: '8px 16px', backgroundColor: "red", color: "white"}}>
+      <button
+        onClick={submitText}
+        disabled={loading}
+        style={{ padding: "8px 16px", backgroundColor: "red", color: "white" }}
+      >
         Log food
       </button>
 
@@ -151,41 +177,53 @@ export default function Home() {
       <button
         onClick={recording ? stopRecording : startRecording}
         disabled={loading}
-        style={{ padding: '8px 16px', background: recording ? '#c00' : '#333', color: '#fff' }}
+        style={{
+          padding: "8px 16px",
+          background: recording ? "#c00" : "#333",
+          color: "#fff",
+        }}
       >
-        {recording ? 'Stop recording' : 'Start recording'}
+        {recording ? "Stop recording" : "Start recording"}
       </button>
 
-      {status && <p style={{ marginTop: 12, color: 'pink' }}>{status}</p>}
+      {status && <p style={{ marginTop: 12, color: "pink" }}>{status}</p>}
 
       <h2>Today&apos;s logs</h2>
       {logs.length === 0 && <p>No logs yet.</p>}
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+      <table
+        style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}
+      >
         <thead>
-          <tr style={{ borderBottom: '2px solid #ccc', textAlign: 'left' }}>
-            <th style={{ padding: '6px 8px' }}>Food</th>
-            <th style={{ padding: '6px 8px' }}>Cal</th>
-            <th style={{ padding: '6px 8px' }}>P</th>
-            <th style={{ padding: '6px 8px' }}>C</th>
-            <th style={{ padding: '6px 8px' }}>F</th>
-            <th style={{ padding: '6px 8px' }}>Actions</th>
+          <tr style={{ borderBottom: "2px solid #ccc", textAlign: "left" }}>
+            <th style={{ padding: "6px 8px" }}>Food</th>
+            <th style={{ padding: "6px 8px" }}>Cal</th>
+            <th style={{ padding: "6px 8px" }}>P</th>
+            <th style={{ padding: "6px 8px" }}>C</th>
+            <th style={{ padding: "6px 8px" }}>F</th>
+            <th style={{ padding: "6px 8px" }}>Actions</th>
           </tr>
         </thead>
         <tbody>
           {logs.map((log) => (
-            <tr key={log._id} style={{ borderBottom: '1px solid #eee' }}>
-              <td style={{ padding: '6px 8px' }}>{log.food_name}</td>
-              <td style={{ padding: '6px 8px' }}>{log.calories}</td>
-              <td style={{ padding: '6px 8px' }}>{log.protein}g</td>
-              <td style={{ padding: '6px 8px' }}>{log.carbs}g</td>
-              <td style={{ padding: '6px 8px' }}>{log.fat}g</td>
-              <td style={{ padding: '6px 8px' }}>
-                <button onClick={() => deleteLog(log._id)} style={{ background: 'red', color: 'white' }}>
+            <tr key={log._id} style={{ borderBottom: "1px solid #eee" }}>
+              <td style={{ padding: "6px 8px" }}>{log.food_name}</td>
+              <td style={{ padding: "6px 8px" }}>{log.calories}</td>
+              <td style={{ padding: "6px 8px" }}>{log.protein}g</td>
+              <td style={{ padding: "6px 8px" }}>{log.carbs}g</td>
+              <td style={{ padding: "6px 8px" }}>{log.fat}g</td>
+              <td style={{ padding: "6px 8px" }}>
+                <button
+                  onClick={() => deleteLog(log._id)}
+                  style={{ background: "red", color: "white" }}
+                >
                   Delete
                 </button>
               </td>
-              <td style={{ padding: '6px 8px' }}>
-                <button onClick={() => updateLog(log._id)} style={{ background: 'navy', color: 'white' }}>
+              <td style={{ padding: "6px 8px" }}>
+                <button
+                  onClick={() => updateLog(log._id)}
+                  style={{ background: "navy", color: "white" }}
+                >
                   Edit
                 </button>
               </td>
@@ -193,6 +231,19 @@ export default function Home() {
           ))}
         </tbody>
       </table>
+      <div
+        style={{
+          background: "#f5f5f5",
+          padding: "12px 16px",
+          borderRadius: 6,
+          marginBottom: 16,
+        }}
+      >
+        <strong>Today</strong> — {summary.calories} cal &nbsp;|&nbsp; P:{" "}
+        {summary.protein}g &nbsp;|&nbsp; C: {summary.carbs}g &nbsp;|&nbsp; F:{" "}
+        {summary.fat}g &nbsp;|&nbsp;
+        {summary.entry_count} {summary.entry_count === 1 ? "entry" : "entries"}
+      </div>
     </div>
   );
 }
