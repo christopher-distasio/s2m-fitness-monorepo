@@ -34,6 +34,8 @@ export default function Home() {
     fat: 0,
     entry_count: 0,
   });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editInput, setEditInput] = useState("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -85,17 +87,17 @@ export default function Home() {
     fetchLogs();
   }
 
-  async function updateLog(id: string) {
-    const newInput = prompt("Correct your entry:");
-    if (!newInput) return;
+  async function saveEdit(id: string) {
+    if (!editInput.trim()) return;
     await fetch(`${API_BASE}/food/${id}`, {
-      method: "PUT",
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ raw_input: newInput, user_id: USER_ID }),
+      body: JSON.stringify({ raw_input: editInput, user_id: USER_ID }),
     });
+    setEditingId(null);
     fetchLogs();
+    fetchSummary();
   }
-
   async function startRecording() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const recorder = new MediaRecorder(stream);
@@ -206,27 +208,55 @@ export default function Home() {
         <tbody>
           {logs.map((log) => (
             <tr key={log._id} style={{ borderBottom: "1px solid #eee" }}>
-              <td style={{ padding: "6px 8px" }}>{log.food_name}</td>
-              <td style={{ padding: "6px 8px" }}>{log.calories}</td>
-              <td style={{ padding: "6px 8px" }}>{log.protein}g</td>
-              <td style={{ padding: "6px 8px" }}>{log.carbs}g</td>
-              <td style={{ padding: "6px 8px" }}>{log.fat}g</td>
-              <td style={{ padding: "6px 8px" }}>
-                <button
-                  onClick={() => deleteLog(log._id)}
-                  style={{ background: "red", color: "white" }}
-                >
-                  Delete
-                </button>
-              </td>
-              <td style={{ padding: "6px 8px" }}>
-                <button
-                  onClick={() => updateLog(log._id)}
-                  style={{ background: "navy", color: "white" }}
-                >
-                  Edit
-                </button>
-              </td>
+              {editingId === log._id ? (
+                <>
+                  <td colSpan={5} style={{ padding: "6px 8px" }}>
+                    <input
+                      value={editInput}
+                      onChange={(e) => setEditInput(e.target.value)}
+                      placeholder="Describe what you ate"
+                      title="Edit food entry"
+                      style={{ width: "100%", padding: 6, fontSize: 14 }}
+                    />
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <button
+                      onClick={() => saveEdit(log._id)}
+                      style={{ marginRight: 8 }}
+                    >
+                      Save
+                    </button>
+                    <button onClick={() => setEditingId(null)}>Cancel</button>
+                  </td>
+                </>
+              ) : (
+                <>
+                  <td style={{ padding: "6px 8px" }}>{log.food_name}</td>
+                  <td style={{ padding: "6px 8px" }}>{log.calories}</td>
+                  <td style={{ padding: "6px 8px" }}>{log.protein}g</td>
+                  <td style={{ padding: "6px 8px" }}>{log.carbs}g</td>
+                  <td style={{ padding: "6px 8px" }}>{log.fat}g</td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <button
+                      onClick={() => deleteLog(log._id)}
+                      style={{ background: "red", color: "white" }}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <button
+                      onClick={() => {
+                        setEditingId(log._id);
+                        setEditInput(log.raw_input);
+                      }}
+                      style={{ background: "blue", color: "white" }}
+                    >
+                      Edit
+                    </button>
+                  </td>
+                </>
+              )}
             </tr>
           ))}
         </tbody>

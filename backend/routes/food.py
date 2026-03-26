@@ -4,6 +4,8 @@ from typing import Optional
 from backend.models import FoodLog
 from backend.services.food_parser import parse_food_input
 from backend.services.transcriber import transcribe_audio
+from beanie import PydanticObjectId
+
 
 router = APIRouter()
 
@@ -125,9 +127,9 @@ async def delete_food_log(log_id: str):
     return {"message": "Food log deleted successfully"}
 
 
-@router.put("/food/{log_id}")
+@router.patch("/food/{log_id}")
 async def update_food_log(log_id: str, request: FoodLogRequest):
-    food_log = await FoodLog.get(log_id)
+    food_log = await FoodLog.get(PydanticObjectId(log_id))
     if not food_log:
         raise HTTPException(status_code=404, detail="Food log not found")
 
