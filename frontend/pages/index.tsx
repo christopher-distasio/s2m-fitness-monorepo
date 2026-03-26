@@ -71,6 +71,23 @@ export default function Home() {
     }
   }
 
+  async function deleteLog(id: string) {
+    if (!confirm('Delete this entry?')) return;
+    await fetch(`${API_BASE}/food/${id}`, { method: 'DELETE' });
+    fetchLogs();
+  }
+
+  async function updateLog(id: string) {
+    const newInput = prompt('Correct your entry:');
+    if (!newInput) return;
+    await fetch(`${API_BASE}/food/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw_input: newInput, user_id: USER_ID }),
+  });
+    fetchLogs();
+  }
+
   async function startRecording() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const recorder = new MediaRecorder(stream);
@@ -150,6 +167,7 @@ export default function Home() {
             <th style={{ padding: '6px 8px' }}>P</th>
             <th style={{ padding: '6px 8px' }}>C</th>
             <th style={{ padding: '6px 8px' }}>F</th>
+            <th style={{ padding: '6px 8px' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -160,6 +178,16 @@ export default function Home() {
               <td style={{ padding: '6px 8px' }}>{log.protein}g</td>
               <td style={{ padding: '6px 8px' }}>{log.carbs}g</td>
               <td style={{ padding: '6px 8px' }}>{log.fat}g</td>
+              <td style={{ padding: '6px 8px' }}>
+                <button onClick={() => deleteLog(log._id)} style={{ background: 'red', color: 'white' }}>
+                  Delete
+                </button>
+              </td>
+              <td style={{ padding: '6px 8px' }}>
+                <button onClick={() => updateLog(log._id)} style={{ background: 'navy', color: 'white' }}>
+                  Edit
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
