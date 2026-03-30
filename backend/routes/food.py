@@ -5,7 +5,7 @@ from backend.models import FoodLog
 from backend.services.food_parser import parse_food_input
 from backend.services.transcriber import transcribe_audio
 from beanie import PydanticObjectId
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
 
 router = APIRouter()
@@ -176,3 +176,34 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     await food_log.save()
     return build_response(food_log, parsed)
 
+
+@router.get("/food/{user_id}/weekly")
+async def get_weekly_summary(user_id: str):
+    now = datetime.now(timezone.utc)
+    start_of_week = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+
+    logs = await FoodLog.find(
+        FoodLog.user_id == user_id,
+        FoodLog.logged_at >= start_of_week
+    ).to_list()
+
+    days = {}
+    for log in logs:
+        day = log.logged_at.strftime("%Y-%m-%d")
+        if day not in days:
+            days[day] = {"date": day, "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "entries": 0}
+        days[day]["calories"] += log.calories or 0
+        days[day]["protein"] += log.protein or 0
+        days[day]["carbs"] += log.carbs or 0
+        days[day]["fat"] += log.fat or 0
+        days[day]["entries"] += 1
+
+    return {
+        "days": sorted(days.values(), key=lambda x: x["date"]),
+        "totals": {
+            "calories": sum(log.calories or 0 for log in logs),
+            "protein": sum(log.protein or 0 for log in logs),
+            "carbs": sum(log.carbs or 0 for log in logs),
+            "fat": sum(log.fat or 0 for log in logs),
+        }
+    }
