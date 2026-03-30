@@ -11,6 +11,7 @@ interface FoodLog {
   carbs: number;
   fat: number;
   quantity: string;
+  raw_input: string;
   logged_at: string;
 }
 
@@ -124,6 +125,13 @@ export default function Home() {
           body: formData,
         });
         const data = await res.json();
+        if (data.message && !data.parsed) {
+          setStatus(data.message);
+          speak(data.message);
+          fetchLogs();
+          fetchSummary();
+          return;
+        }
         const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
         setStatus(
           `Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`,

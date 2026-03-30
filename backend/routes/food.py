@@ -5,7 +5,8 @@ from backend.models import FoodLog
 from backend.services.food_parser import parse_food_input
 from backend.services.transcriber import transcribe_audio
 from beanie import PydanticObjectId
-
+from datetime import datetime, timezone
+from backend.services.intent_classifier import classify_intent
 
 router = APIRouter()
 
@@ -59,6 +60,8 @@ async def log_food(request: FoodLogRequest):
     return build_response(food_log, parsed)
 
 
+from backend.services.intent_classifier import classify_intent
+
 @router.post("/food/voice")
 async def log_food_voice(
     user_id: str = Form(...),
@@ -67,18 +70,39 @@ async def log_food_voice(
     audio_bytes = await audio.read()
     raw_input = await transcribe_audio(audio_bytes, audio.filename)
 
-    parsed = await parse_food_input(raw_input)
+    intent = await classify_intent(raw_input)
 
+    if intent["intent"] == "delete_last":
+        last = await FoodLog.find(FoodLog.user_id == user_id).sort(-FoodLog.logged_at).first_or_none()
+        if last:
+            await last.delete()
+            return {"message": "Last entry deleted", "transcription": raw_input}
+        return {"message": "No entries to delete", "transcription": raw_input}
+
+    if intent["intent"] == "calories_today":
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        logs = await FoodLog.find(FoodLog.user_id == user_id, FoodLog.logged_at >= start).to_list()
+        total = sum(log.calories or 0 for log in logs)
+        return {"message": f"You have logged {total} calories today", "transcription": raw_input}
+
+    if intent["intent"] == "read_today":
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        logs = await FoodLog.find(FoodLog.user_id == user_id, FoodLog.logged_at >= start).to_list()
+        names = ", ".join(log.food_name for log in logs) or "nothing yet"
+        return {"message": f"Today you ate: {names}", "transcription": raw_input}
+
+    # default — treat as food log
+    parsed = await parse_food_input(raw_input)
     if "error" in parsed:
         raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
 
     food_log = build_food_log(user_id, raw_input, parsed)
     await food_log.insert()
-
     return build_response(food_log, parsed, transcription=raw_input)
-
-
-from datetime import datetime, timezone
 
 @router.get("/food/{user_id}/today")
 async def get_today_food(user_id: str):
