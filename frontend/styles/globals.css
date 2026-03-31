@@ -16,3 +16,7 @@ html, body, input {
 #id {
     color: black;
 }
+
+td {
+    font-size: 24px;
+}

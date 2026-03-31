@@ -40,10 +40,13 @@ export default function Home() {
   const [started, setStarted] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const [calorieGoal, setCalorieGoal] = useState(2000);
+  const [goalInput, setGoalInput] = useState("");
 
   useEffect(() => {
     fetchLogs();
     fetchSummary();
+    fetchProfile();
   }, []);
 
   useEffect(() => {
@@ -166,10 +169,28 @@ export default function Home() {
     );
   }
 
+  async function fetchProfile() {
+    const res = await fetch(`${API_BASE}/user/${USER_ID}/profile`);
+    const data = await res.json();
+    setCalorieGoal(data.calorie_goal);
+  }
+
+  async function saveGoal() {
+    if (!goalInput) return;
+    await fetch(`${API_BASE}/user/${USER_ID}/profile`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ calorie_goal: parseFloat(goalInput) }),
+    });
+    setCalorieGoal(parseFloat(goalInput));
+    setGoalInput("");
+    speak(`Calorie goal set to ${goalInput} calories`);
+  }
+
   return (
     <div
       style={{
-        maxWidth: 600,
+        maxWidth: 1600,
         margin: "40px auto",
         padding: "0 20px",
         fontFamily: "sans-serif",
@@ -205,7 +226,6 @@ export default function Home() {
       >
         Log food
       </button>
-
       <h2>Log by voice</h2>
       <button
         onClick={recording ? stopRecording : startRecording}
@@ -218,9 +238,7 @@ export default function Home() {
       >
         {recording ? "Stop recording" : "Start recording"}
       </button>
-
       {status && <p style={{ marginTop: 12, color: "pink" }}>{status}</p>}
-
       <h2>Today&apos;s logs</h2>
       {logs.length === 0 && <p>No logs yet.</p>}
       <table
@@ -300,11 +318,23 @@ export default function Home() {
           marginBottom: 16,
         }}
       >
-        <strong>Today</strong> — {summary.calories} cal &nbsp;|&nbsp; P:{" "}
-        {summary.protein}g &nbsp;|&nbsp; C: {summary.carbs}g &nbsp;|&nbsp; F:{" "}
-        {summary.fat}g &nbsp;|&nbsp;
+        <strong>Today</strong> — {summary.calories} / {calorieGoal} cal
+        &nbsp;|&nbsp; P: {summary.protein}g &nbsp;|&nbsp; C: {summary.carbs}g
+        &nbsp;|&nbsp; F: {summary.fat}g &nbsp;|&nbsp;
         {summary.entry_count} {summary.entry_count === 1 ? "entry" : "entries"}
+        <div style={{ marginTop: 8 }}>
+          <input
+            type="number"
+            value={goalInput}
+            onChange={(e) => setGoalInput(e.target.value)}
+            placeholder="Set calorie goal"
+            title="Calorie goal"
+            style={{ padding: 6, width: 160, marginRight: 8 }}
+          />
+          <button onClick={saveGoal}>Save goal</button>
+        </div>
       </div>
+      {" "}
     </div>
   );
 }
