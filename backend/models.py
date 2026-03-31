@@ -15,6 +15,15 @@ class FoodLog(Document):
     logged_at: datetime = Field(default_factory=datetime.utcnow)
     modified_at: Optional[datetime] = None
 
-class Settings:
-    name = "food_logs"
+    class Settings:
+        name = "food_logs"
+    
+class UserProfile(Document):
+    user_id: str
+    calorie_goal: float = 2000.0
+
+    class Settings:
+        name = "user_profiles"
+    
+    
     
