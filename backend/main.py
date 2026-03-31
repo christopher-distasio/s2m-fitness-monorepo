@@ -2,6 +2,8 @@ from backend.routes.food import router as food_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.database import test_mongo_connection, init_db, close_mongo_connection
+from backend.models import FoodLog, UserProfile
+
 
 async def lifespan(app: FastAPI):
     

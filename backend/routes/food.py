@@ -7,6 +7,8 @@ from backend.services.transcriber import transcribe_audio
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
+from backend.models import FoodLog, UserProfile
+
 
 router = APIRouter()
 
@@ -207,3 +209,22 @@ async def get_weekly_summary(user_id: str):
             "fat": sum(log.fat or 0 for log in logs),
         }
     }
+    
+@router.get("/user/{user_id}/profile")
+async def get_profile(user_id: str):
+    profile = await UserProfile.find_one(UserProfile.user_id == user_id)
+    if not profile:
+        profile = UserProfile(user_id=user_id)
+        await profile.insert()
+    return profile
+
+@router.patch("/user/{user_id}/profile")
+async def update_calorie_goal(user_id: str, calorie_goal: float):
+    profile = await UserProfile.find_one(UserProfile.user_id == user_id)
+    if not profile:
+        profile = UserProfile(user_id=user_id, calorie_goal=calorie_goal)
+        await profile.insert()
+    else:
+        profile.calorie_goal = calorie_goal
+        await profile.save()
+    return profile
