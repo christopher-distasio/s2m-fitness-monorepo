@@ -197,7 +197,7 @@ export default function Home() {
     await fetch(`${API_BASE}/user/${USER_ID}/profile`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ calorie_goal: parseFloat(goalInput) }),
+      body: JSON.stringify({ calorie_goal: Number.parseFloat(goalInput) }),
     });
     setCalorieGoal(parseFloat(goalInput));
     setGoalInput("");
@@ -401,7 +401,7 @@ export default function Home() {
             <button
               onClick={recording ? stopRecording : startRecording}
               disabled={loading}
-              aria-pressed={recording}
+              aria-pressed={recording ? "true" : "false"}
               aria-label={
                 recording
                   ? "Stop voice recording"
