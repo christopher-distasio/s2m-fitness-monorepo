@@ -24,6 +24,18 @@ class UserProfile(Document):
 
     class Settings:
         name = "user_profiles"
+        
+class User(Document):
+    user_id: str
+    calorie_goal: float = 2000.0
+    first_name: str = ""
+    last_name: str = ""
+    screen_name: str = ""
+    class Settings:
+        name = "user_profiles"
+
+    
+    
     
     
     
