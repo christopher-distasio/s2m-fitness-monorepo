@@ -104,7 +104,8 @@ export default function Home() {
   async function deleteLog(id: string) {
     if (!confirm("Delete this entry?")) return;
     await fetch(`${API_BASE}/food/${id}`, { method: "DELETE" });
-    fetchLogs();
+    await fetchLogs();
+    await fetchSummary();
   }
 
   async function saveEdit(id: string) {
