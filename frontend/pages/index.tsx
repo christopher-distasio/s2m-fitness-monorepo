@@ -142,7 +142,7 @@ export default function Home() {
           setStatus(data.message);
           speak(data.message);
           fetchLogs();
-          fetchSummary();
+          await fetchSummary();
           return;
         }
         const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
@@ -150,7 +150,8 @@ export default function Home() {
           `Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`,
         );
         speak(msg);
-        fetchLogs();
+        await fetchLogs();
+        await fetchSummary();
       } catch {
         const err = "Error processing audio.";
         setStatus(err);
@@ -163,6 +164,12 @@ export default function Home() {
     recorder.start();
     setRecording(true);
     setStatus("Recording...");
+    setTimeout(() => {
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop();
+        setRecording(false);
+      }
+    }, 8000);
   }
 
   function stopRecording() {
@@ -306,8 +313,7 @@ export default function Home() {
                 }}
               />
               <p className="text-xs text-blue-200 mt-1">
-                {caloriePercent}% of daily goal &middot;{" "}
-                {summary.entry_count}{" "}
+                {caloriePercent}% of daily goal &middot; {summary.entry_count}{" "}
                 {summary.entry_count === 1 ? "entry" : "entries"}
               </p>
             </div>
