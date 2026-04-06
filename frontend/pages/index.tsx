@@ -269,7 +269,7 @@ export default function Home() {
                   Protein
                 </p>
                 <p className="text-xl font-bold text-white">
-                  {summary.protein}
+                  {Number(summary.protein).toFixed(1)}
                   <span className="text-sm font-normal text-blue-200">g</span>
                 </p>
               </div>
@@ -278,7 +278,7 @@ export default function Home() {
                   Carbs
                 </p>
                 <p className="text-xl font-bold text-white">
-                  {summary.carbs}
+                  {Number(summary.carbs).toFixed(1)}
                   <span className="text-sm font-normal text-blue-200">g</span>
                 </p>
               </div>
@@ -287,7 +287,7 @@ export default function Home() {
                   Fat
                 </p>
                 <p className="text-xl font-bold text-white">
-                  {summary.fat}
+                  {Number(summary.fat).toFixed(1)}
                   <span className="text-sm font-normal text-blue-200">g</span>
                 </p>
               </div>
