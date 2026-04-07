@@ -19,6 +19,8 @@ export default function Login() {
     } else {
       router.push("/");
     }
+    await supabase.auth.signOut();
+    router.push("/login");
   }
 
   return (
@@ -53,7 +55,9 @@ export default function Login() {
           onClick={() => setIsRegister(!isRegister)}
           className="w-full mt-3 text-blue-200 text-sm hover:text-white"
         >
-          {isRegister ? "Already have an account? Sign in" : "Need an account? Register"}
+          {isRegister
+            ? "Already have an account? Sign in"
+            : "Need an account? Register"}
         </button>
       </div>
     </div>

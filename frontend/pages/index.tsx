@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useRouter } from "next/router";
 
-
 const API_BASE = "http://localhost:8000";
 const USER_ID = "test_user_1";
 
@@ -214,10 +213,10 @@ export default function Home() {
   );
 
   useEffect(() => {
-  supabase.auth.getSession().then(({ data: { session } }) => {
-    if (!session) router.push("/login");
-  });
-}, []);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) router.push("/login");
+    });
+  }, []);
 
   return (
     <div className="min-h-screen bg-blue-700">
@@ -234,16 +233,30 @@ export default function Home() {
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
             Speak2Me Fitness
           </h1>
-          {!started && (
-            <button
-              type="button"
-              onClick={handleStart}
-              className="px-5 py-2.5 bg-white text-blue-700 font-semibold rounded-lg shadow hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
-              aria-label="Tap to start and hear today's nutrition summary"
-            >
-              Tap to start
-            </button>
-          )}
+          <div className="flex gap-3 items-center">
+            {!started && (
+          <div className="flex gap-3 items-center">
+                <button
+                  type="button"
+                  onClick={handleStart}
+                  className="px-5 py-2.5 bg-white text-blue-700 font-semibold rounded-lg shadow hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
+                  aria-label="Tap to start and hear today's nutrition summary"
+                >
+                  Tap to start
+                </button>
+                <button
+                  onClick={async () => {
+                    await supabase.auth.signOut();
+                    router.push("/login");
+                  }}
+                  className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-semibold rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                  aria-label="Sign out"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </header>
 
         <main id="main-content">
