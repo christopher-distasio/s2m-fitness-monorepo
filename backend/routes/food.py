@@ -1,13 +1,12 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional
-from backend.models import FoodLog
+from backend.models import FoodLog, UserProfile
 from backend.services.food_parser import parse_food_input
 from backend.services.transcriber import transcribe_audio
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
-from backend.models import FoodLog, UserProfile
 
 
 router = APIRouter()

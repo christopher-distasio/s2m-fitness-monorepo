@@ -24,11 +24,9 @@ class UserProfile(Document):
     first_name: str = ""
     last_name: str = ""
     screen_name: str = ""
+    created_at: datetime = datetime.utcnow()
 
     class Settings:
         name = "user_profiles"
-    
-    
-    
     
     
