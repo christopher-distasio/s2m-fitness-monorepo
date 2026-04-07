@@ -1,4 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
+import { supabase } from "../lib/supabaseClient";
+import { useRouter } from "next/router";
+
 
 const API_BASE = "http://localhost:8000";
 const USER_ID = "test_user_1";
@@ -44,6 +47,7 @@ export default function Home() {
   const [goalInput, setGoalInput] = useState("");
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     fetchLogs();
@@ -208,6 +212,12 @@ export default function Home() {
     100,
     Math.round((summary.calories / calorieGoal) * 100),
   );
+
+  useEffect(() => {
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (!session) router.push("/login");
+  });
+}, []);
 
   return (
     <div className="min-h-screen bg-blue-700">
