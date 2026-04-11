@@ -225,19 +225,29 @@ export default function Home() {
     );
   }
   async function fetchProfile() {
-    const res = await fetch(`${API_BASE}/user/${userId}/profile`);
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
+    const uid = session.user.id;
+    const res = await fetch(`${API_BASE}/user/${uid}/profile`);
     const data = await res.json();
     setCalorieGoal(data.calorie_goal);
   }
 
   async function saveGoal() {
     if (!goalInput) return;
-    await fetch(`${API_BASE}/user/${userId}/profile`, {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
+    const uid = session.user.id;
+    await fetch(`${API_BASE}/user/${uid}/profile`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ calorie_goal: Number.parseFloat(goalInput) }),
     });
-    setCalorieGoal(parseFloat(goalInput));
+    setCalorieGoal(Number.parseFloat(goalInput));
     setGoalInput("");
     speak(`Calorie goal set to ${goalInput} calories`);
   }

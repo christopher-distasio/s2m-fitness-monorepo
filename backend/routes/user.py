@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 from typing import Optional
 from backend.models import UserProfile
@@ -24,7 +24,7 @@ async def get_profile(user_id: str):
 
 
 @router.patch("/user/{user_id}/profile")
-async def update_profile(user_id: str, updates: UpdateProfile):
+async def update_profile(user_id: str, updates: UpdateProfile = Body(...)):
     profile = await UserProfile.find_one(UserProfile.user_id == user_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
