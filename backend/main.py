@@ -1,8 +1,8 @@
 from backend.routes.food import router as food_router
+from backend.routes.user import router as user_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.database import test_mongo_connection, init_db, close_mongo_connection
-from backend.models import FoodLog, UserProfile
 
 
 async def lifespan(app: FastAPI):
@@ -27,3 +27,4 @@ async def read_root():
     return {"message": "Hello, this is a test endpoint"}
 
 app.include_router(food_router)
+app.include_router(user_router)
