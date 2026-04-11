@@ -51,11 +51,12 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
+    if (!userId) return;
     fetchLogs();
     fetchSummary();
     fetchProfile();
-  }, []);
-
+  }, [userId]);
+  
   useEffect(() => {
     if (!status) return;
     const timer = setTimeout(() => setStatus(""), 5000);
