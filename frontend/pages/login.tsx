@@ -19,8 +19,6 @@ export default function Login() {
     } else {
       router.push("/");
     }
-    await supabase.auth.signOut();
-    router.push("/login");
   }
 
   return (

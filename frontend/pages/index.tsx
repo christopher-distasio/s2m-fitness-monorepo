@@ -3,7 +3,6 @@ import { supabase } from "../lib/supabaseClient";
 import { useRouter } from "next/router";
 
 const API_BASE = "http://localhost:8000";
-const USER_ID = "test_user_1";
 
 interface FoodLog {
   _id: string;
@@ -37,6 +36,7 @@ export default function Home() {
     fat: 0,
     entry_count: 0,
   });
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
   const [started, setStarted] = useState(false);
@@ -46,6 +46,8 @@ export default function Home() {
   const [goalInput, setGoalInput] = useState("");
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+
   const router = useRouter();
 
   useEffect(() => {
@@ -66,6 +68,23 @@ export default function Home() {
     }
   }, [editingId]);
 
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) router.push("/login");
+      else setUserId(session.user.id);
+    });
+  }, []);
+
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.push("/login");
+      else setUserId(session.user.id);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
   function handleStart() {
     setStarted(true);
     speak(
@@ -74,7 +93,7 @@ export default function Home() {
   }
 
   async function fetchLogs() {
-    const res = await fetch(`${API_BASE}/food/${USER_ID}/today`);
+    const res = await fetch(`${API_BASE}/food/${userId}/today`);
     const data = await res.json();
     setLogs(data.reverse());
   }
@@ -87,7 +106,7 @@ export default function Home() {
       const res = await fetch(`${API_BASE}/food`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: USER_ID, raw_input: textInput }),
+        body: JSON.stringify({ user_id: userId, raw_input: textInput }),
       });
       const data = await res.json();
       const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
@@ -116,7 +135,7 @@ export default function Home() {
     await fetch(`${API_BASE}/food/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ raw_input: editInput, user_id: USER_ID }),
+      body: JSON.stringify({ raw_input: editInput, user_id: userId }),
     });
     setEditingId(null);
     fetchLogs();
@@ -124,6 +143,11 @@ export default function Home() {
   }
 
   async function startRecording() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
+    const uid = session.user.id;
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const recorder = new MediaRecorder(stream);
     chunksRef.current = [];
@@ -131,7 +155,7 @@ export default function Home() {
     recorder.onstop = async () => {
       const blob = new Blob(chunksRef.current, { type: "audio/webm" });
       const formData = new FormData();
-      formData.append("user_id", USER_ID);
+      formData.append("user_id", uid);
       formData.append("audio", blob, "recording.webm");
       setLoading(true);
       setStatus("Transcribing...");
@@ -181,7 +205,7 @@ export default function Home() {
   }
 
   async function fetchSummary() {
-    const res = await fetch(`${API_BASE}/food/${USER_ID}/summary`);
+    const res = await fetch(`${API_BASE}/food/${userId}/summary`);
     const data = await res.json();
     setSummary(data);
     speak(
@@ -190,14 +214,14 @@ export default function Home() {
   }
 
   async function fetchProfile() {
-    const res = await fetch(`${API_BASE}/user/${USER_ID}/profile`);
+    const res = await fetch(`${API_BASE}/user/${userId}/profile`);
     const data = await res.json();
     setCalorieGoal(data.calorie_goal);
   }
 
   async function saveGoal() {
     if (!goalInput) return;
-    await fetch(`${API_BASE}/user/${USER_ID}/profile`, {
+    await fetch(`${API_BASE}/user/${userId}/profile`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ calorie_goal: Number.parseFloat(goalInput) }),
@@ -213,6 +237,7 @@ export default function Home() {
   );
 
   useEffect(() => {
+    if (!userId) return;
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) router.push("/login");
     });
@@ -235,7 +260,7 @@ export default function Home() {
           </h1>
           <div className="flex gap-3 items-center">
             {!started && (
-          <div className="flex gap-3 items-center">
+              <div className="flex gap-3 items-center">
                 <button
                   type="button"
                   onClick={handleStart}
@@ -246,6 +271,7 @@ export default function Home() {
                 </button>
                 <button
                   onClick={async () => {
+                    if (!userId) return;
                     await supabase.auth.signOut();
                     router.push("/login");
                   }}
