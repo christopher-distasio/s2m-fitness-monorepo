@@ -39,7 +39,6 @@ export default function Home() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
-
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const [calorieGoal, setCalorieGoal] = useState(2000);
@@ -47,7 +46,6 @@ export default function Home() {
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
-
   const router = useRouter();
 
   useEffect(() => {
@@ -56,7 +54,7 @@ export default function Home() {
     fetchSummary();
     fetchProfile();
   }, [userId]);
-  
+
   useEffect(() => {
     if (!status) return;
     const timer = setTimeout(() => setStatus(""), 5000);
@@ -86,28 +84,36 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, []);
 
-  async function fetchLogs() {
-    const res = await fetch(`${API_BASE}/food/${userId}/today`);
+  async function fetchLogs(uid?: string) {
+    const id = uid ?? userId;
+    if (!id) return;
+    const res = await fetch(`${API_BASE}/food/${id}/today`);
     const data = await res.json();
     setLogs(data.reverse());
   }
 
   async function submitText() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
     if (!textInput.trim()) return;
     setLoading(true);
     setStatus("Parsing...");
+    const uid = session.user.id;
     try {
       const res = await fetch(`${API_BASE}/food`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, raw_input: textInput }),
+        body: JSON.stringify({ user_id: uid, raw_input: textInput }),
       });
       const data = await res.json();
       const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
       setStatus(msg);
       speak(msg);
       setTextInput("");
-      fetchLogs();
+      fetchLogs(uid);
+      fetchSummary(uid);
     } catch {
       const err = "Error logging food.";
       setStatus(err);
@@ -118,13 +124,23 @@ export default function Home() {
   }
 
   async function deleteLog(id: string) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
+    const uid = session.user.id;
     if (!confirm("Delete this entry?")) return;
     await fetch(`${API_BASE}/food/${id}`, { method: "DELETE" });
-    await fetchLogs();
-    await fetchSummary();
+    await fetchLogs(uid);
+    await fetchSummary(uid);
   }
 
   async function saveEdit(id: string) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
+    const uid = session.user.id;
     if (!editInput.trim()) return;
     await fetch(`${API_BASE}/food/${id}`, {
       method: "PATCH",
@@ -132,8 +148,8 @@ export default function Home() {
       body: JSON.stringify({ raw_input: editInput, user_id: userId }),
     });
     setEditingId(null);
-    fetchLogs();
-    fetchSummary();
+    fetchLogs(uid);
+    fetchSummary(uid);
   }
 
   async function startRecording() {
@@ -162,8 +178,8 @@ export default function Home() {
         if (data.message && !data.parsed) {
           setStatus(data.message);
           speak(data.message);
-          fetchLogs();
-          await fetchSummary();
+          fetchLogs(uid);
+          await fetchSummary(uid);
           return;
         }
         const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
@@ -171,8 +187,8 @@ export default function Home() {
           `Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`,
         );
         speak(msg);
-        await fetchLogs();
-        await fetchSummary();
+        await fetchLogs(uid);
+        await fetchSummary(uid);
       } catch {
         const err = "Error processing audio.";
         setStatus(err);
@@ -198,15 +214,16 @@ export default function Home() {
     setRecording(false);
   }
 
-  async function fetchSummary() {
-    const res = await fetch(`${API_BASE}/food/${userId}/summary`);
+  async function fetchSummary(uid?: string) {
+    const id = uid ?? userId;
+    if (!id) return;
+    const res = await fetch(`${API_BASE}/food/${id}/summary`);
     const data = await res.json();
     setSummary(data);
     speak(
       `Today you have logged ${data.calories} calories. Protein ${data.protein} grams, carbs ${data.carbs} grams, fat ${data.fat} grams.`,
     );
   }
-
   async function fetchProfile() {
     const res = await fetch(`${API_BASE}/user/${userId}/profile`);
     const data = await res.json();
@@ -253,7 +270,7 @@ export default function Home() {
             Speak2Me Fitness
           </h1>
           <div className="flex gap-3 items-center">
-            {(
+            {
               <div className="flex gap-3 items-center">
                 <button
                   onClick={async () => {
@@ -267,7 +284,7 @@ export default function Home() {
                   Sign out
                 </button>
               </div>
-            )}
+            }
           </div>
         </header>
 

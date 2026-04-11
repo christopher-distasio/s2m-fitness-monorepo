@@ -6,19 +6,20 @@ from backend.models import UserProfile
 
 router = APIRouter()
 
- 
+
 class UpdateProfile(BaseModel):
     calorie_goal: Optional[float] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    screen_name: Optional[str] = None 
-    
-    
+    screen_name: Optional[str] = None
+
+
 @router.get("/user/{user_id}/profile")
 async def get_profile(user_id: str):
     profile = await UserProfile.find_one(UserProfile.user_id == user_id)
     if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        profile = UserProfile(user_id=user_id)
+        await profile.insert()    
     return profile
 
 
