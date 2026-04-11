@@ -39,7 +39,7 @@ export default function Home() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
-  const [started, setStarted] = useState(false);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const [calorieGoal, setCalorieGoal] = useState(2000);
@@ -85,13 +85,6 @@ export default function Home() {
     });
     return () => subscription.unsubscribe();
   }, []);
-
-  function handleStart() {
-    setStarted(true);
-    speak(
-      `Today you have logged ${summary.calories} calories. Protein ${summary.protein} grams, carbs ${summary.carbs} grams, fat ${summary.fat} grams.`,
-    );
-  }
 
   async function fetchLogs() {
     const res = await fetch(`${API_BASE}/food/${userId}/today`);
@@ -260,16 +253,8 @@ export default function Home() {
             Speak2Me Fitness
           </h1>
           <div className="flex gap-3 items-center">
-            {!started && (
+            {(
               <div className="flex gap-3 items-center">
-                <button
-                  type="button"
-                  onClick={handleStart}
-                  className="px-5 py-2.5 bg-white text-blue-700 font-semibold rounded-lg shadow hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
-                  aria-label="Tap to start and hear today's nutrition summary"
-                >
-                  Tap to start
-                </button>
                 <button
                   onClick={async () => {
                     if (!userId) return;
