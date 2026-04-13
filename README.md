@@ -1,94 +1,87 @@
-# Speak2Me Fitness - Meal Logging Feature Prototype
+# Speak2Me Fitness
 
-## Overview
+A voice-first, accessibility-focused food logging app built to demonstrate AI integration and universal design principles.
 
-**Speak2Me Fitness** is an innovative AI-powered fitness application designed to enhance the way users track their calorie intake, fitness activities, and overall well-being. The application leverages natural language processing (NLP) to enable users to interact with the app through voice commands, providing a seamless and hands-free experience.
+## Stack
 
-This repository contains the prototype for the **Meal Logging Feature**, which is a core component of the Speak2Me Fitness app. The prototype focuses on allowing users to log their meals via voice commands and receive instant nutritional feedback.
-
-## Tech Stack
-
-- **Backend**: Django with SQLite3
-  - **Django**: Web framework used to manage backend logic, including API endpoints and database interactions.
-  - **SQLite3**: Lightweight, file-based database used during the prototype phase for simplicity and ease of setup.
-
-- **AI & NLP**: 
-  - **Google Cloud Speech-to-Text**: Service used to transcribe voice commands into text.
-  - **Hugging Face Transformers**: Pre-trained NLP models used to process and classify text input for food items and nutritional data.
-
-- **Frontend Prototype**: Streamlit
-  - **Streamlit**: Used for rapid prototyping of the user interface, allowing users to interact with the meal logging feature in a simple, web-based environment.
+**Backend**: FastAPI, Python 3.11, Poetry  
+**Database**: MongoDB Atlas (Beanie ODM)  
+**Frontend**: Next.js 14, TypeScript, Tailwind CSS  
+**Auth**: Supabase Auth (JWT, email/password)  
+**AI**: OpenAI Whisper (STT), GPT-4o-mini (nutrition parsing + intent classification)  
+**Deployment**: Render (backend), Vercel (frontend)
 
 ## Features
 
-- **Voice-Activated Meal Logging**: Users can log their meals using voice commands, which are processed and transcribed into text.
-- **Nutritional Feedback**: The application analyzes the logged meal and provides immediate feedback on the nutritional content, including calories and macronutrients.
-- **Data Storage**: Meals are stored in an SQLite3 database during the prototype phase, with plans to migrate to PostgreSQL for production.
+- **Voice-First Logging**: Record meals with 8-second auto-stop; Whisper transcribes to text
+- **Structured Nutrition Parsing**: GPT-4o-mini extracts food items, quantities, and macros; returns structured JSON
+- **Intent Classification**: Distinguish logging, summary, and goal-update intents from voice input
+- **Daily Summaries**: Aggregate calories and macros; compare to personalized goal
+- **Accessibility Throughout**: WCAG-compliant, keyboard navigable, screen-reader tested
+- **Session Persistence**: JWT-based auth with Supabase; user data isolated in MongoDB
 
 ## Getting Started
 
 ### Prerequisites
+- Python 3.11+, Node.js 18+
+- Poetry (Python), npm or yarn (Node)
+- MongoDB Atlas account (or local instance)
+- Supabase project
+- OpenAI API key
 
-- **Python 3.8+**
-- **pip** (Python package installer)
-- **Virtualenv** (optional but recommended)
+### Backend Setup
 
-### Installation
+```bash
+cd backend
+poetry install
+poetry run uvicorn app.main:app --reload
+```
 
-1. **Clone the repository**:
-    ```bash
-    git clone https://github.com/your-username/speak2me-fitness.git
-    cd speak2me-fitness
-    ```
+Environment variables (`.env`):
+```
+MONGODB_URL=...
+SUPABASE_URL=...
+SUPABASE_SERVICE_KEY=...
+OPENAI_API_KEY=...
+```
 
-2. **Create a virtual environment**:
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-    ```
+### Frontend Setup
 
-3. **Install dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-4. **Apply migrations**:
-    ```bash
-    python manage.py migrate
-    ```
+Environment variables (`.env.local`):
+```
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
 
-5. **Run the development server**:
-    ```bash
-    python manage.py runserver
-    ```
+## API Endpoints
 
-6. **Run Streamlit for the Frontend Prototype**:
-    ```bash
-    streamlit run frontend/app.py
-    ```
-
-### Usage
-
-- Access the web application by navigating to `http://127.0.0.1:8000` for the Django backend.
-- Access the frontend prototype by navigating to the URL provided by Streamlit after running the command above.
-- Use the interface to log meals via voice commands and receive nutritional feedback in real-time.
+- `POST /auth/register` – User signup
+- `POST /auth/login` – User login
+- `POST /logs` – Create food log from voice transcript
+- `GET /logs?date=YYYY-MM-DD` – Fetch logs for date
+- `GET /summary?date=YYYY-MM-DD` – Daily totals + goal comparison
+- `GET /profile` – Fetch user calorie goal
+- `PATCH /profile` – Update calorie goal
 
 ## Roadmap
 
-- **Phase 1**: Develop and refine the voice-activated meal logging feature.
-- **Phase 2**: Integrate habit formation tracking and personalized coaching features.
-- **Phase 3**: Migrate from SQLite3 to PostgreSQL for production.
-- **Phase 4**: Expand AI capabilities and improve user interaction through continuous learning models.
+**Stage 3**: Deploy to Render + Vercel _(in progress)_  
+**Stage 4**: PWA implementation  
+**Stage 5**: Voice correction flows, embeddings-based meal discovery, model evaluation
 
-## Contributing
+## Design Principles
 
-Contributions are welcome! Please fork this repository and submit a pull request with your changes. Make sure to follow the contribution guidelines and maintainers will review your PR.
+- **Accessibility as Universal Design**: Voice-first serves multiple populations (hands-busy, vision-impaired, etc.) — it's a product insight, not just compliance
+- **Feature Dependency Awareness**: Deferring features that need user context (summaries, weekly trends) until auth is solid
+- **Shipping Credibility**: Building portfolio pieces that ship > accumulating credentials
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
-
-## Disclaimer
-
-This repository contains an early prototype of the Speak2Me Fitness app, focusing on the meal logging feature. The project is under active development and may not represent the final product.
-
+MIT
