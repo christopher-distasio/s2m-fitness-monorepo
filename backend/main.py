@@ -18,10 +18,18 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://s2m-fitness-monorepo.vercel.app"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://www.speak2mefitness.com",
+        "https://speak2mefitness.com",
+        "https://www.speaktomefitness.com",
+        "https://speaktomefitness.com",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 @app.get("/test")
 async def read_root():
     return {"message": "Hello, this is a test endpoint"}
