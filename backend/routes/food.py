@@ -7,6 +7,7 @@ from backend.services.transcriber import transcribe_audio
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
+from backend.services.nutrition_service import parse_nutrition
 
 
 router = APIRouter()
@@ -208,3 +209,9 @@ async def get_weekly_summary(user_id: str):
             "fat": sum(log.fat or 0 for log in logs),
         }
     }
+
+@router.post("/test-confidence")
+async def test_confidence(transcript: str):
+    """Test confidence parsing with a sample transcript."""
+    result = await parse_nutrition(transcript)
+    return result
