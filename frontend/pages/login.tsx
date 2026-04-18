@@ -55,7 +55,13 @@ export default function Login() {
         >
           {isRegister
             ? "Already have an account? Sign in"
-            : "Need an account? Register"}
+            : "Need an account? Sign up"}
+        </button>
+        <button
+          onClick={() => router.push("/demo")}
+          className="w-full mt-3 py-2 bg-blue-400 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors"
+        >
+          Try Demo (A static diplay, no signup required)
         </button>
       </div>
     </div>
