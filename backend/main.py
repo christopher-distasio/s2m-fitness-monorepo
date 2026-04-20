@@ -20,6 +20,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:3001",
         "https://www.speak2mefitness.com",
         "https://speak2mefitness.com",
         "https://www.speaktomefitness.com",

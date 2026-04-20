@@ -220,9 +220,6 @@ export default function Home() {
     const res = await fetch(`${API_BASE}/food/${id}/summary`);
     const data = await res.json();
     setSummary(data);
-    speak(
-      `Today you have logged ${data.calories} calories. Protein ${data.protein} grams, carbs ${data.carbs} grams, fat ${data.fat} grams.`,
-    );
   }
   async function fetchProfile() {
     const {
@@ -433,7 +430,7 @@ export default function Home() {
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submitText()}
-                placeholder="e.g. two eggs and a coffee"
+                placeholder="Describe what you ate. e.g. two eggs and a coffee"
                 autoComplete="off"
                 className="flex-1 px-3 py-2.5 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-base focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
                 aria-label="Describe what you ate"
@@ -463,7 +460,6 @@ export default function Home() {
             <button
               onClick={recording ? stopRecording : startRecording}
               disabled={loading}
-              aria-pressed={recording ? "true" : "false"}
               aria-label={
                 recording
                   ? "Stop voice recording"
