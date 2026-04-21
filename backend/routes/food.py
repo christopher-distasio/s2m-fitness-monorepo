@@ -8,7 +8,6 @@ from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
 from backend.services.nutrition_service import parse_nutrition
-from backend.database import db
 
 
 router = APIRouter()
@@ -19,7 +18,18 @@ class FoodLogRequest(BaseModel):
     raw_input: str
     food_name: Optional[str] = None
 
+class CorrectionRequest(BaseModel):
+    user_id: str
+    log_id: str
+    original_food: str
+    original_calories: Optional[float] = None
+    original_confidence: Optional[str] = None
+    corrected_food: Optional[str] = None
+    corrected_calories: Optional[float] = None
+    correction_type: Optional[str] = None
 
+
+    
 def build_food_log(user_id: str, raw_input: str, parsed: dict, food_name: Optional[str] = None) -> FoodLog:
     macros = parsed.get("macronutrients", {})
     return FoodLog(
@@ -31,8 +41,10 @@ def build_food_log(user_id: str, raw_input: str, parsed: dict, food_name: Option
         carbs=macros.get("carbohydrates"),
         fat=macros.get("fats"),
         quantity=parsed.get("serving_size"),
+        confidence=parsed.get("confidence"),
+        reasoning=parsed.get("reasoning"),
+        alternatives=parsed.get("alternatives"),
     )
-
 
 def build_response(food_log: FoodLog, parsed: dict, transcription: Optional[str] = None) -> dict:
     response = {
@@ -158,9 +170,20 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
         raise HTTPException(status_code=404, detail="Food log not found")
 
     parsed = await parse_food_input(request.raw_input)
-
     if "error" in parsed:
         raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
+
+    correction = Correction(
+        user_id=request.user_id,
+        log_id=log_id,
+        original_food=food_log.food_name,
+        original_calories=food_log.calories,
+        original_confidence=food_log.confidence,
+        corrected_food=parsed["food"],
+        corrected_calories=parsed.get("calories"),
+        correction_type="food" if food_log.food_name != parsed["food"] else "quantity",
+    )
+    await correction.insert()
 
     food_log.raw_input = request.raw_input
     food_log.food_name = request.food_name or parsed["food"]
@@ -170,12 +193,10 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     food_log.carbs = macros.get("carbohydrates")
     food_log.fat = macros.get("fats")
     food_log.quantity = parsed.get("serving_size")
-    from datetime import datetime, timezone
     food_log.modified_at = datetime.now(timezone.utc)
 
     await food_log.save()
     return build_response(food_log, parsed)
-
 
 @router.get("/food/{user_id}/weekly")
 async def get_weekly_summary(user_id: str):
@@ -197,6 +218,7 @@ async def get_weekly_summary(user_id: str):
         days[day]["carbs"] += log.carbs or 0
         days[day]["fat"] += log.fat or 0
         days[day]["entries"] += 1
+
 
 
     return {
