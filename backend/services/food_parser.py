@@ -1,6 +1,5 @@
 from openai import AsyncOpenAI
 import os
-# from backend.config import settings  # adjust import to match your structure
 import json
 from dotenv import load_dotenv
 
@@ -43,7 +42,7 @@ async def parse_food_input(raw_input: str) -> dict:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": raw_input}
         ],
-        temperature=0.2,  # low temp = more consistent structured output
+        temperature=0.2,
         max_tokens=300,
     )
 
