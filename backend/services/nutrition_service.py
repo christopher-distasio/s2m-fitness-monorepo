@@ -2,13 +2,14 @@ from pydantic import BaseModel
 from openai import AsyncOpenAI
 import os
 import json
+from ..models import Correction
+
 
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class FoodAlternative(BaseModel):
     food: str
     confidence: float
-
 class NutritionParse(BaseModel):
     food: str
     quantity: str
@@ -16,6 +17,10 @@ class NutritionParse(BaseModel):
     reasoning: str
     alternatives: list[FoodAlternative]
     estimated_calories: int
+
+async def get_user_corrections(user_id: str, limit: int = 5) -> list:
+    corrections = await Correction.find({"user_id": user_id}).sort("-timestamp").limit(limit).to_list()
+    return corrections or []
 
 async def parse_nutrition(transcript: str) -> list[NutritionParse]:
     prompt = f"""Parse this food transcript and return confidence scores.

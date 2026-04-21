@@ -1,13 +1,14 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional
-from backend.models import FoodLog, UserProfile
+from backend.models import FoodLog, Correction
 from backend.services.food_parser import parse_food_input
 from backend.services.transcriber import transcribe_audio
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
 from backend.services.nutrition_service import parse_nutrition
+from backend.database import db
 
 
 router = APIRouter()
@@ -60,9 +61,6 @@ async def log_food(request: FoodLogRequest):
     await food_log.insert()
 
     return build_response(food_log, parsed)
-
-
-from backend.services.intent_classifier import classify_intent
 
 @router.post("/food/voice")
 async def log_food_voice(
@@ -200,6 +198,7 @@ async def get_weekly_summary(user_id: str):
         days[day]["fat"] += log.fat or 0
         days[day]["entries"] += 1
 
+
     return {
         "days": sorted(days.values(), key=lambda x: x["date"]),
         "totals": {
@@ -215,3 +214,14 @@ async def test_confidence(transcript: str):
     """Test confidence parsing with a sample transcript."""
     result = await parse_nutrition(transcript)
     return result
+
+@router.post("/corrections")
+async def save_correction(user_id: str, original_transcript: str, correction: dict):
+    correction_doc = Correction(
+        user_id=user_id,
+        original_transcript=original_transcript,
+        user_correction=correction
+    )
+
+    await db.corrections.insert_one(correction_doc.dict())
+    return correction_doc
