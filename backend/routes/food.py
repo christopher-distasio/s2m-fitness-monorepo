@@ -28,6 +28,8 @@ class CorrectionRequest(BaseModel):
     corrected_calories: Optional[float] = None
     correction_type: Optional[str] = None
 
+class ParseRequest(BaseModel):
+    raw_input: str
 
     
 def build_food_log(user_id: str, raw_input: str, parsed: dict, food_name: Optional[str] = None) -> FoodLog:
@@ -256,3 +258,10 @@ async def save_correction(user_id: str, original_transcript: str, correction: di
 
     await db.corrections.insert_one(correction_doc.dict())
     return correction_doc
+
+@router.post("/food/parse")
+async def parse_food_only(request: ParseRequest):
+    parsed = await parse_food_input(request.raw_input)
+    if "error" in parsed:
+        raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
+    return parsed
