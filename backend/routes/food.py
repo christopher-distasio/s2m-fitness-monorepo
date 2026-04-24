@@ -54,7 +54,6 @@ def build_response(food_log: FoodLog, parsed: dict, transcription: Optional[str]
             "food": parsed["food"],
             "calories": parsed.get("calories"),
             "confidence": parsed.get("confidence"),
-            "notes": parsed.get("notes"),
         }
     }
     if transcription:
@@ -207,7 +206,7 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
 
     await food_log.save()
     return build_response(food_log, parsed)
-    
+
 @router.get("/food/{user_id}/weekly")
 async def get_weekly_summary(user_id: str):
     now = datetime.now(timezone.utc)

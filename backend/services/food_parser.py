@@ -1,12 +1,3 @@
-from openai import AsyncOpenAI
-import os
-import json
-from dotenv import load_dotenv
-
-load_dotenv()
-
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 SYSTEM_PROMPT = """
 You are a nutrition data parser for a food logging app.
 
@@ -25,14 +16,27 @@ Return this exact shape:
     "sugar": float
   },
   "confidence": "high" | "medium" | "low",
+  "reasoning": "string — brief explanation of why this confidence level was assigned",
+  "alternatives": ["string", "string"],
   "notes": "string — optional clarification or assumption made"
 }
 
-Rules:
+Confidence rules:
+- "high": food and quantity are clear and specific (e.g. "one banana", "two scrambled eggs")
+- "medium": food is clear but quantity is vague or assumed (e.g. "some pasta", "a bowl of rice")
+- "low": food is ambiguous, multi-item and hard to estimate, or heavily vague (e.g. "a big plate of stuff", "lunch")
+
+Alternatives rules:
+- Always return 2 alternatives representing plausible variations the user might have meant
+- For quantity variations: e.g. ["small banana (90 cal)", "large banana (120 cal)"]
+- For food variations: e.g. ["whole milk yogurt (150 cal)", "non-fat yogurt (80 cal)"]
+- If confidence is high, alternatives can still reflect portion size variations
+
+Other rules:
 - Use standard USDA-style estimates when exact data is unavailable
 - If multiple foods are mentioned, combine them into one entry with a descriptive name (e.g. "2 eggs and black coffee")
 - If the input is completely unparseable as food, return { "error": "unparseable", "raw": "<input>" }
-- Never guess wildly — if uncertain, set confidence to "low" and explain in notes
+- Never guess wildly — if uncertain, set confidence to "low" and explain in reasoning
 """
 
 async def parse_food_input(raw_input: str) -> dict:
@@ -43,7 +47,7 @@ async def parse_food_input(raw_input: str) -> dict:
             {"role": "user", "content": raw_input}
         ],
         temperature=0.2,
-        max_tokens=300,
+        max_tokens=400,
     )
 
     content = response.choices[0].message.content.strip()
