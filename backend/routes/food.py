@@ -173,6 +173,16 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     if "error" in parsed:
         raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
 
+    food_changed = food_log.food_name.lower() != parsed["food"].lower()
+    quantity_changed = food_log.quantity != parsed.get("serving_size")
+
+    if food_changed and quantity_changed:
+        correction_type = "both"
+    elif food_changed:
+        correction_type = "food"
+    else:
+        correction_type = "quantity"
+
     correction = Correction(
         user_id=request.user_id,
         log_id=log_id,
@@ -181,7 +191,7 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
         original_confidence=food_log.confidence,
         corrected_food=parsed["food"],
         corrected_calories=parsed.get("calories"),
-        correction_type="food" if food_log.food_name != parsed["food"] else "quantity",
+        correction_type=correction_type,
     )
     await correction.insert()
 
@@ -197,7 +207,7 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
 
     await food_log.save()
     return build_response(food_log, parsed)
-
+    
 @router.get("/food/{user_id}/weekly")
 async def get_weekly_summary(user_id: str):
     now = datetime.now(timezone.utc)

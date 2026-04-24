@@ -22,8 +22,8 @@ async def test_mongo_connection():
 
 
 async def init_db():
-    from backend.models import FoodLog, UserProfile
-    await init_beanie(database=db, document_models=[FoodLog, UserProfile])
+    from backend.models import Correction, FoodLog, UserProfile
+    await init_beanie(database=db, document_models=[FoodLog, UserProfile, Correction])
 
 async def close_mongo_connection():
     client.close()
