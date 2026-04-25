@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useRouter } from "next/router";
 
@@ -14,6 +14,25 @@ interface FoodLog {
   quantity: string;
   raw_input: string;
   logged_at: string;
+  confidence?: "high" | "medium" | "low";
+  reasoning?: string;
+  alternatives?: string[];
+}
+
+interface ParsedResult {
+  food: string;
+  calories: number;
+  serving_size?: string;
+  macronutrients?: {
+    carbohydrates: number;
+    protein: number;
+    fats: number;
+    sugar: number;
+  };
+  confidence?: "high" | "medium" | "low";
+  reasoning?: string;
+  alternatives?: string[];
+  notes?: string;
 }
 
 function speak(text: string) {
@@ -46,14 +65,53 @@ export default function Home() {
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [pendingParse, setPendingParse] = useState<{
+    parsed: ParsedResult;
+    raw_input: string;
+    uid: string;
+  } | null>(null);
+
   const router = useRouter();
+
+  const fetchLogs = useCallback(
+    async (uid?: string) => {
+      const id = uid ?? userId;
+      if (!id) return;
+      const res = await fetch(`${API_BASE}/food/${id}/today`);
+      const data = await res.json();
+      setLogs(data.reverse());
+    },
+    [userId],
+  );
+
+  const fetchSummary = useCallback(
+    async (uid?: string) => {
+      const id = uid ?? userId;
+      if (!id) return;
+      const res = await fetch(`${API_BASE}/food/${id}/summary`);
+      const data = await res.json();
+      setSummary(data);
+    },
+    [userId],
+  );
+
+  const fetchProfile = useCallback(async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
+    const uid = session.user.id;
+    const res = await fetch(`${API_BASE}/user/${uid}/profile`);
+    const data = await res.json();
+    setCalorieGoal(data.calorie_goal);
+  }, []);
 
   useEffect(() => {
     if (!userId) return;
     fetchLogs();
     fetchSummary();
     fetchProfile();
-  }, [userId]);
+  }, [userId, fetchLogs, fetchSummary, fetchProfile]);
 
   useEffect(() => {
     if (!status) return;
@@ -72,7 +130,7 @@ export default function Home() {
       if (!session) router.push("/login");
       else setUserId(session.user.id);
     });
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const {
@@ -82,15 +140,7 @@ export default function Home() {
       else setUserId(session.user.id);
     });
     return () => subscription.unsubscribe();
-  }, []);
-
-  async function fetchLogs(uid?: string) {
-    const id = uid ?? userId;
-    if (!id) return;
-    const res = await fetch(`${API_BASE}/food/${id}/today`);
-    const data = await res.json();
-    setLogs(data.reverse());
-  }
+  }, [router]);
 
   async function submitText() {
     const {
@@ -102,18 +152,25 @@ export default function Home() {
     setStatus("Parsing...");
     const uid = session.user.id;
     try {
-      const res = await fetch(`${API_BASE}/food`, {
+      const res = await fetch(`${API_BASE}/food/parse`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: uid, raw_input: textInput }),
       });
-      const data = await res.json();
-      const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
-      setStatus(msg);
-      speak(msg);
-      setTextInput("");
-      fetchLogs(uid);
-      fetchSummary(uid);
+      const parsed = await res.json();
+
+      if (parsed.confidence === "high") {
+        await confirmLog(uid, textInput);
+      } else {
+        setPendingParse({ parsed, raw_input: textInput, uid });
+        const msg =
+          parsed.confidence === "low"
+            ? `I wasn't sure about that. ${parsed.reasoning}`
+            : `I think this is ${parsed.food}, with ${parsed.calories} calories. Does that sound right?`;
+        setStatus(msg);
+        speak(msg);
+        setTextInput("");
+      }
     } catch {
       const err = "Error logging food.";
       setStatus(err);
@@ -175,6 +232,15 @@ export default function Home() {
           body: formData,
         });
         const data = await res.json();
+
+        if (data.error) {
+          const err =
+            "I couldn't understand that. Try saying something more specific.";
+          setStatus(err);
+          speak(err);
+          return;
+        }
+
         if (data.message && !data.parsed) {
           setStatus(data.message);
           speak(data.message);
@@ -182,13 +248,28 @@ export default function Home() {
           await fetchSummary(uid);
           return;
         }
-        const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
-        setStatus(
-          `Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`,
-        );
-        speak(msg);
-        await fetchLogs(uid);
-        await fetchSummary(uid);
+
+        if (data.parsed.confidence === "high") {
+          const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
+          setStatus(
+            `Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`,
+          );
+          speak(msg);
+          await fetchLogs(uid);
+          await fetchSummary(uid);
+        } else {
+          setPendingParse({
+            parsed: data.parsed,
+            raw_input: data.transcription,
+            uid,
+          });
+          const msg =
+            data.parsed.confidence === "low"
+              ? `I wasn't sure about that. ${data.parsed.reasoning}`
+              : `I think this is ${data.parsed.food}, ${data.parsed.calories} calories. Does that sound right?`;
+          setStatus(msg);
+          speak(msg);
+        }
       } catch {
         const err = "Error processing audio.";
         setStatus(err);
@@ -214,24 +295,6 @@ export default function Home() {
     setRecording(false);
   }
 
-  async function fetchSummary(uid?: string) {
-    const id = uid ?? userId;
-    if (!id) return;
-    const res = await fetch(`${API_BASE}/food/${id}/summary`);
-    const data = await res.json();
-    setSummary(data);
-  }
-  async function fetchProfile() {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return;
-    const uid = session.user.id;
-    const res = await fetch(`${API_BASE}/user/${uid}/profile`);
-    const data = await res.json();
-    setCalorieGoal(data.calorie_goal);
-  }
-
   async function saveGoal() {
     if (!goalInput) return;
     const {
@@ -249,6 +312,21 @@ export default function Home() {
     speak(`Calorie goal set to ${goalInput} calories`);
   }
 
+  async function confirmLog(uid: string, raw_input: string) {
+    const res = await fetch(`${API_BASE}/food`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: uid, raw_input }),
+    });
+    const data = await res.json();
+    const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
+    setStatus(msg);
+    speak(msg);
+    setTextInput("");
+    setPendingParse(null);
+    fetchLogs(uid);
+    fetchSummary(uid);
+  }
   const caloriePercent = Math.min(
     100,
     Math.round((summary.calories / calorieGoal) * 100),
@@ -259,7 +337,7 @@ export default function Home() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) router.push("/login");
     });
-  }, []);
+  }, [router, userId]);
 
   return (
     <div className="min-h-screen bg-blue-700">
@@ -445,6 +523,89 @@ export default function Home() {
               </button>
             </div>
           </section>
+
+          {pendingParse && (
+            <section
+              aria-labelledby="confidence-heading"
+              aria-live="polite"
+              className={`border rounded-xl p-4 sm:p-6 mb-6 ${
+                pendingParse.parsed.confidence === "low"
+                  ? "bg-red-900/30 border-red-400/40"
+                  : "bg-yellow-900/30 border-yellow-400/40"
+              }`}
+            >
+              <h2
+                id="confidence-heading"
+                className="text-lg font-semibold text-white mb-1"
+              >
+                {pendingParse.parsed.confidence === "low"
+                  ? "Unsure"
+                  : "Less Sure"}
+              </h2>
+
+              <p className="text-white text-sm mb-1">
+                <strong>{pendingParse.parsed.food}</strong> —{" "}
+                {pendingParse.parsed.calories} cal
+              </p>
+
+              {pendingParse.parsed.reasoning && (
+                <p className="text-blue-200 text-sm mb-3">
+                  {pendingParse.parsed.reasoning}
+                </p>
+              )}
+
+              {pendingParse.parsed.alternatives &&
+                pendingParse.parsed.alternatives.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-xs text-blue-200 uppercase tracking-wide font-medium mb-2">
+                      Did you mean?
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      {pendingParse.parsed.alternatives.map((alt, i) => (
+                        <button
+                          key={i}
+                          onClick={() => {
+                            const updated = {
+                              ...pendingParse,
+                              raw_input: alt,
+                            };
+                            setPendingParse(updated);
+                            confirmLog(pendingParse.uid, alt);
+                          }}
+                          className="text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                          aria-label={`Log ${alt} instead`}
+                        >
+                          {alt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() =>
+                    confirmLog(pendingParse.uid, pendingParse.raw_input)
+                  }
+                  className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                  aria-label={`Confirm and log ${pendingParse.parsed.food}`}
+                >
+                  Yes, log it
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingParse(null);
+                    setStatus("");
+                    textInputRef.current?.focus();
+                  }}
+                  className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                  aria-label="Cancel and re-enter food"
+                >
+                  Let me re-enter
+                </button>
+              </div>
+            </section>
+          )}
 
           {/* Log by voice */}
           <section
