@@ -25,7 +25,9 @@ Return this exact shape:
     "sugar": float
   },
   "confidence": "high" | "medium" | "low",
-  "notes": "string — optional clarification or assumption made"
+  "notes": "string — optional clarification or assumption made",
+  "reasoning": "string — optional short explanation of confidence",
+  "alternatives": ["string — optional list of likely intended interpretations"]
 }
 
 Rules:
@@ -33,6 +35,8 @@ Rules:
 - If multiple foods are mentioned, combine them into one entry with a descriptive name (e.g. "2 eggs and black coffee")
 - If the input is completely unparseable as food, return { "error": "unparseable", "raw": "<input>" }
 - Never guess wildly — if uncertain, set confidence to "low" and explain in notes
+- If the input is a single common food with an explicit quantity/size (e.g. "one large banana", "2 eggs", "1 cup oatmeal"),
+  you should generally be confident and set "confidence" to "high" unless something is genuinely ambiguous.
 """
 
 async def parse_food_input(raw_input: str) -> dict:

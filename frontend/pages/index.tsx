@@ -163,9 +163,10 @@ export default function Home() {
         await confirmLog(uid, textInput);
       } else {
         setPendingParse({ parsed, raw_input: textInput, uid });
+        const explanation = parsed.reasoning || parsed.notes;
         const msg =
           parsed.confidence === "low"
-            ? `I wasn't sure about that. ${parsed.reasoning}`
+            ? `I wasn't sure about that.${explanation ? ` ${explanation}` : ""}`
             : `I think this is ${parsed.food}, with ${parsed.calories} calories. Does that sound right?`;
         setStatus(msg);
         speak(msg);

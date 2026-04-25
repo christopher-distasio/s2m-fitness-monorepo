@@ -55,11 +55,25 @@ def build_response(food_log: FoodLog, parsed: dict, transcription: Optional[str]
             "calories": parsed.get("calories"),
             "confidence": parsed.get("confidence"),
             "notes": parsed.get("notes"),
+            "reasoning": parsed.get("reasoning"),
+            "alternatives": parsed.get("alternatives"),
         }
     }
     if transcription:
         response["transcription"] = transcription
     return response
+
+
+@router.post("/food/parse")
+async def parse_food(request: FoodLogRequest):
+    """
+    Parse-only endpoint used by the frontend to decide whether to auto-log
+    (high confidence) or ask the user to confirm (medium/low confidence).
+    """
+    parsed = await parse_food_input(request.raw_input)
+    if "error" in parsed:
+        raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
+    return parsed
 
 
 @router.post("/food")
@@ -248,12 +262,7 @@ async def test_confidence(transcript: str):
     return result
 
 @router.post("/corrections")
-async def save_correction(user_id: str, original_transcript: str, correction: dict):
-    correction_doc = Correction(
-        user_id=user_id,
-        original_transcript=original_transcript,
-        user_correction=correction
-    )
-
-    await db.corrections.insert_one(correction_doc.dict())
-    return correction_doc
+async def save_correction(request: CorrectionRequest):
+    correction = Correction(**request.model_dump())
+    await correction.insert()
+    return {"message": "Correction saved", "id": str(correction.id)}
