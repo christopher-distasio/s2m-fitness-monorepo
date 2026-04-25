@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
-import { supabase } from "../lib/supabaseClient";
 import { useRouter } from "next/router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { supabase } from "../lib/supabaseClient";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -164,11 +164,13 @@ export default function Home() {
       } else {
         setPendingParse({ parsed, raw_input: textInput, uid });
         const explanation = parsed.reasoning || parsed.notes;
+        const alternatives = parsed.alternatives?.join(", or ") ?? "";
         const msg =
           parsed.confidence === "low"
-            ? `I wasn't sure about that.${explanation ? ` ${explanation}` : ""}`
-            : `I think this is ${parsed.food}, with ${parsed.calories} calories. Does that sound right?`;
+            ? `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`
+            : `I think this is ${parsed.food}, ${parsed.calories} calories. Did you mean ${alternatives}?`;
         setStatus(msg);
+        console.log(msg)
         speak(msg);
         setTextInput("");
       }
@@ -234,9 +236,10 @@ export default function Home() {
         });
         const data = await res.json();
 
+        
         if (data.error) {
           const err =
-            "I couldn't understand that. Try saying something more specific.";
+            "I couldn't understand that. Please try saying something more specific.";
           setStatus(err);
           speak(err);
           return;
@@ -264,15 +267,15 @@ export default function Home() {
             raw_input: data.transcription,
             uid,
           });
-          const msg =
-            data.parsed.confidence === "low"
-              ? `I wasn't sure about that. ${data.parsed.reasoning}`
-              : `I think this is ${data.parsed.food}, ${data.parsed.calories} calories. Does that sound right?`;
-          setStatus(msg);
+          const alternatives = data.parsed.alternatives?.join(", or ") ?? "";
+          const msg = data.parsed.confidence === "low"
+            ? `I wasn't sure about that. ${data.parsed.reasoning}. Please be more specific.`
+            : `I think this is ${data.parsed.food}, ${data.parsed.calories} calories. Did you mean ${alternatives}?`;          
+            setStatus(msg);
           speak(msg);
         }
       } catch {
-        const err = "Error processing audio.";
+        const err = "Error processing audio. Please try again.";
         setStatus(err);
         speak(err);
       } finally {

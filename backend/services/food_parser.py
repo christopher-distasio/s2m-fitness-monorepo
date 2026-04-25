@@ -37,7 +37,22 @@ Rules:
 - Never guess wildly — if uncertain, set confidence to "low" and explain in notes
 - If the input is a single common food with an explicit quantity/size (e.g. "one large banana", "2 eggs", "1 cup oatmeal"),
   you should generally be confident and set "confidence" to "high" unless something is genuinely ambiguous.
-"""
+- Only return { "error": "unparseable", "raw": "<input>" } if the input has absolutely nothing to do with food (e.g. "hello", "weather", "1234"). For vague food inputs like "food", "stuff", "something", return a low confidence result with reasoning explaining the vagueness.
+- alternatives: only populate this field when you can offer genuinely useful specific choices
+Confidence rules:
+- "high": food and quantity are clear and specific (e.g. "one banana", "two scrambled eggs")
+- "medium": food is clear but quantity is vague or assumed (e.g. "some pasta", "a bowl of rice"), or food type is ambiguous but guessable
+- "low": food is ambiguous, multi-item and hard to estimate, heavily vague, or both food type and quantity are unknown (e.g. "a big plate of stuff", "lunch")
+
+Alternatives rules:
+- For medium confidence (quantity vague, food clear): provide 2 to 3 portion size variations e.g. ["small handful of potato chips (~140 cal)", "medium handful of potato chips (~200 cal)", "large handful of potato chips (~280 cal)"]
+- For medium confidence (food ambiguous but guessable): provide 2 to 3 food type variations e.g. ["tortilla chips (140 cal)", "potato chips (150 cal)", "pita chips (130 cal)"]
+- For low confidence where the food is known but quantity is vague: still provide 2 to 3 portion size alternatives
+- For low confidence where quantity is known but food type is ambiguous: still provide 2 to 3 food type alternatives
+- For low confidence where both food and quantity are unknown: return alternatives as an empty array []
+- Never populate alternatives with generic variations that don't directly address the source of uncertainty
+- Only populate alternatives when you can offer genuinely useful specific choices
+- Match alternatives to the actual source of uncertainty — quantity uncertainty gets portion size options, food type uncertainty gets food type options"""
 
 async def parse_food_input(raw_input: str) -> dict:
     response = await client.chat.completions.create(
