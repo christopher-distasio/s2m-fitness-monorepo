@@ -1,3 +1,11 @@
+import json
+from openai import AsyncOpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+
+client = AsyncOpenAI()
+
 SYSTEM_PROMPT = """
 You are a nutrition data parser for a food logging app.
 
@@ -21,27 +29,15 @@ Return this exact shape:
   "alternatives": ["string — optional list of likely intended interpretations"]
 }
 
-Confidence rules:
-- "high": food and quantity are clear and specific (e.g. "one banana", "two scrambled eggs")
-- "medium": food is clear but quantity is vague or assumed (e.g. "some pasta", "a bowl of rice")
-- "low": food is ambiguous, multi-item and hard to estimate, or heavily vague (e.g. "a big plate of stuff", "lunch")
-
-Alternatives rules:
-- Always return 2 alternatives representing plausible variations the user might have meant
-- For quantity variations: e.g. ["small banana (90 cal)", "large banana (120 cal)"]
-- For food variations: e.g. ["whole milk yogurt (150 cal)", "non-fat yogurt (80 cal)"]
-- If confidence is high, alternatives can still reflect portion size variations
-
-Other rules:
+Rules:
 - Use standard USDA-style estimates when exact data is unavailable
 - If multiple foods are mentioned, combine them into one entry with a descriptive name (e.g. "2 eggs and black coffee")
 - If the input is completely unparseable as food, return { "error": "unparseable", "raw": "<input>" }
-<<<<<<< HEAD
 - Never guess wildly — if uncertain, set confidence to "low" and explain in notes
-- If the input is a single common food with an explicit quantity/size (e.g. "one large banana", "2 eggs", "1 cup oatmeal"),
-  you should generally be confident and set "confidence" to "high" unless something is genuinely ambiguous.
+- If the input is a single common food with an explicit quantity/size (e.g. "one large banana", "2 eggs", "1 cup oatmeal"), set "confidence" to "high" unless something is genuinely ambiguous
 - Only return { "error": "unparseable", "raw": "<input>" } if the input has absolutely nothing to do with food (e.g. "hello", "weather", "1234"). For vague food inputs like "food", "stuff", "something", return a low confidence result with reasoning explaining the vagueness.
-- alternatives: only populate this field when you can offer genuinely useful specific choices
+- Only populate alternatives when you can offer genuinely useful specific choices
+
 Confidence rules:
 - "high": food and quantity are clear and specific (e.g. "one banana", "two scrambled eggs")
 - "medium": food is clear but quantity is vague or assumed (e.g. "some pasta", "a bowl of rice"), or food type is ambiguous but guessable
@@ -54,8 +50,8 @@ Alternatives rules:
 - For low confidence where quantity is known but food type is ambiguous: still provide 2 to 3 food type alternatives
 - For low confidence where both food and quantity are unknown: return alternatives as an empty array []
 - Never populate alternatives with generic variations that don't directly address the source of uncertainty
-- Only populate alternatives when you can offer genuinely useful specific choices
-- Match alternatives to the actual source of uncertainty — quantity uncertainty gets portion size options, food type uncertainty gets food type options"""
+- Match alternatives to the actual source of uncertainty — quantity uncertainty gets portion size options, food type uncertainty gets food type options
+"""
 
 async def parse_food_input(raw_input: str) -> dict:
     response = await client.chat.completions.create(
