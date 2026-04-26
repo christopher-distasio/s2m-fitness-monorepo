@@ -169,7 +169,7 @@ export default function Home() {
         const msg =
           parsed.confidence === "low"
             ? `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`
-            : `I think this is ${parsed.food}, ${parsed.calories} calories. Did you mean ${alternatives}?`;
+            : `I think this is ${parsed.food}. Did you mean ${alternatives}?`;
         setStatus(msg);
         speak(msg);
         setTextInput("");
@@ -272,7 +272,7 @@ export default function Home() {
           const msg =
             data.parsed.confidence === "low"
               ? `I wasn't sure about that. ${data.parsed.reasoning}. Please be more specific.`
-              : `I think this is ${data.parsed.food}, ${data.parsed.calories} calories. Did you mean ${alternatives}?`;
+              : `I think this is ${data.parsed.food}. Did you mean ${alternatives}?`;
           setStatus(msg);
           speak(msg);
         }

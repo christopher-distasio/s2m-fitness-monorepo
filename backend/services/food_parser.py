@@ -45,8 +45,8 @@ Confidence rules:
 - "low": food is ambiguous, multi-item and hard to estimate, heavily vague, or both food type and quantity are unknown (e.g. "a big plate of stuff", "lunch")
 
 Alternatives rules:
-- For medium confidence (quantity vague, food clear): provide 2 to 3 portion size variations e.g. ["small handful of potato chips (~140 cal)", "medium handful of potato chips (~200 cal)", "large handful of potato chips (~280 cal)"]
-- For medium confidence (food ambiguous but guessable): provide 2 to 3 food type variations e.g. ["tortilla chips (140 cal)", "potato chips (150 cal)", "pita chips (130 cal)"]
+- For medium confidence (quantity vague, food clear): provide 2 to 3 portion size variations e.g. ["small handful of potato chips", "medium handful of potato chips", "large handful of potato chips"]
+- For medium confidence (food ambiguous but guessable): provide 2 to 3 food type variations e.g. ["tortilla chips", "potato chips", "pita chips"]
 - For low confidence where the food is known but quantity is vague: still provide 2 to 3 portion size alternatives
 - For low confidence where quantity is known but food type is ambiguous: still provide 2 to 3 food type alternatives
 - For low confidence where both food and quantity are unknown: return alternatives as an empty array []
