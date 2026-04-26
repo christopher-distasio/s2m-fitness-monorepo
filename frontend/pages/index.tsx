@@ -106,6 +106,8 @@ export default function Home() {
     setCalorieGoal(data.calorie_goal);
   }, []);
 
+  const streamRef = useRef<MediaStream | null>(null);
+
   useEffect(() => {
     if (!userId) return;
     fetchLogs();
@@ -163,14 +165,12 @@ export default function Home() {
         await confirmLog(uid, textInput);
       } else {
         setPendingParse({ parsed, raw_input: textInput, uid });
-        const explanation = parsed.reasoning || parsed.notes;
         const alternatives = parsed.alternatives?.join(", or ") ?? "";
         const msg =
           parsed.confidence === "low"
             ? `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`
             : `I think this is ${parsed.food}, ${parsed.calories} calories. Did you mean ${alternatives}?`;
         setStatus(msg);
-        console.log(msg)
         speak(msg);
         setTextInput("");
       }
@@ -223,6 +223,8 @@ export default function Home() {
     chunksRef.current = [];
     recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
     recorder.onstop = async () => {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
       const blob = new Blob(chunksRef.current, { type: "audio/webm" });
       const formData = new FormData();
       formData.append("user_id", uid);
@@ -236,7 +238,6 @@ export default function Home() {
         });
         const data = await res.json();
 
-        
         if (data.error) {
           const err =
             "I couldn't understand that. Please try saying something more specific.";
@@ -268,10 +269,11 @@ export default function Home() {
             uid,
           });
           const alternatives = data.parsed.alternatives?.join(", or ") ?? "";
-          const msg = data.parsed.confidence === "low"
-            ? `I wasn't sure about that. ${data.parsed.reasoning}. Please be more specific.`
-            : `I think this is ${data.parsed.food}, ${data.parsed.calories} calories. Did you mean ${alternatives}?`;          
-            setStatus(msg);
+          const msg =
+            data.parsed.confidence === "low"
+              ? `I wasn't sure about that. ${data.parsed.reasoning}. Please be more specific.`
+              : `I think this is ${data.parsed.food}, ${data.parsed.calories} calories. Did you mean ${alternatives}?`;
+          setStatus(msg);
           speak(msg);
         }
       } catch {
@@ -292,6 +294,7 @@ export default function Home() {
         setRecording(false);
       }
     }, 8000);
+    streamRef.current = stream;
   }
 
   function stopRecording() {
