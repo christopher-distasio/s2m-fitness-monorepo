@@ -67,14 +67,12 @@ def build_response(food_log: FoodLog, parsed: dict, transcription: Optional[str]
 
 
 @router.post("/food/parse")
-async def parse_food(request: FoodLogRequest):
+async def parse_food(request: ParseRequest):
     """
     Parse-only endpoint used by the frontend to decide whether to auto-log
     (high confidence) or ask the user to confirm (medium/low confidence).
     """
     parsed = await parse_food_input(request.raw_input)
-    if "error" in parsed:
-        raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
     return parsed
 
 

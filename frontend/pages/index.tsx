@@ -157,9 +157,17 @@ export default function Home() {
       const res = await fetch(`${API_BASE}/food/parse`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: uid, raw_input: textInput }),
+        body: JSON.stringify({ raw_input: textInput }),
       });
       const parsed = await res.json();
+
+      if (parsed.error) {
+        const err =
+          "I couldn't understand that. Please try saying something more specific.";
+        setStatus(err);
+        speak(err);
+        return;
+      }
 
       if (parsed.confidence === "high") {
         await confirmLog(uid, textInput);
