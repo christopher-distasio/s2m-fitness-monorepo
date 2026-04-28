@@ -7,9 +7,8 @@ load_dotenv()
 
 MONGODB_URL = os.getenv("MONGODB_URL")
 
-client = AsyncIOMotorClient(MONGODB_URL)
-db = client["speak2me-fitness"]
-
+client = None
+db = None
 
 async def test_mongo_connection():
     try:
@@ -20,8 +19,10 @@ async def test_mongo_connection():
         print(f"Failed to connect to MongoDB: {e}")
         return False
 
-
 async def init_db():
+    global client, db
+    client = AsyncIOMotorClient(MONGODB_URL)
+    db = client["speak2me-fitness"]
     from backend.models import Correction, FoodLog, UserProfile
     await init_beanie(database=db, document_models=[FoodLog, UserProfile, Correction])
 

@@ -6,12 +6,10 @@ from backend.database import test_mongo_connection, init_db, close_mongo_connect
 
 
 async def lifespan(app: FastAPI):
-    
+    await init_db()
     if not await test_mongo_connection():
         raise RuntimeError("Could not connect to MongoDB")
-    await init_db()
     yield
-
     await close_mongo_connection()
 
 app = FastAPI(lifespan=lifespan)
