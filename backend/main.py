@@ -23,6 +23,7 @@ app.add_middleware(
         "https://speak2mefitness.com",
         "https://www.speaktomefitness.com",
         "https://speaktomefitness.com",
+        "https://s2m-fitness-monorepo.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
