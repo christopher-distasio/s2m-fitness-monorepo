@@ -27,6 +27,7 @@ class UserProfile(Document):
     first_name: str = ""
     last_name: str = ""
     screen_name: str = ""
+    voice: str = "alloy"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Settings:

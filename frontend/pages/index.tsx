@@ -35,13 +35,6 @@ interface ParsedResult {
   notes?: string;
 }
 
-function speak(text: string) {
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 0.95;
-  window.speechSynthesis.speak(utterance);
-}
-
 export default function Home() {
   const [textInput, setTextInput] = useState("");
   const [logs, setLogs] = useState<FoodLog[]>([]);
@@ -70,6 +63,8 @@ export default function Home() {
     raw_input: string;
     uid: string;
   } | null>(null);
+  const [selectedVoice, setSelectedVoice] = useState("alloy");
+  const [mounted, setMounted] = useState(false);
 
   const router = useRouter();
 
@@ -143,6 +138,24 @@ export default function Home() {
     });
     return () => subscription.unsubscribe();
   }, [router]);
+
+  useEffect(() => setMounted(true), []);
+
+  async function speak(text: string) {
+    try {
+      const res = await fetch(`${API_BASE}/food/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voice: selectedVoice }),
+      });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.play();
+    } catch {
+      // silent fail — TTS is enhancement, not critical
+    }
+  }
 
   async function submitText() {
     const {
@@ -499,6 +512,26 @@ export default function Home() {
                 </button>
               </div>
             </fieldset>
+            {mounted && (
+              <fieldset className="border-t border-white/20 pt-4 mt-4">
+                <legend className="text-sm font-medium text-blue-200 mb-2">
+                  Voice preference
+                </legend>
+                <select
+                  value={selectedVoice}
+                  onChange={(e) => setSelectedVoice(e.target.value)}
+                  className="px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white"
+                >
+                  {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map(
+                    (v) => (
+                      <option key={v} value={v} className="text-black">
+                        {v}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </fieldset>
+            )}
           </section>
 
           {/* Log by text */}

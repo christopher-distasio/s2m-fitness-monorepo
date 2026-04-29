@@ -8,10 +8,11 @@ from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
 from backend.services.nutrition_service import parse_nutrition
+from backend.services.tts_service import generate_speech
+from fastapi.responses import Response
 
 
 router = APIRouter()
-
 
 class FoodLogRequest(BaseModel):
     user_id: str
@@ -30,6 +31,10 @@ class CorrectionRequest(BaseModel):
 
 class ParseRequest(BaseModel):
     raw_input: str
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "alloy"
 
     
 def build_food_log(user_id: str, raw_input: str, parsed: dict, food_name: Optional[str] = None) -> FoodLog:
@@ -129,6 +134,11 @@ async def log_food_voice(
     food_log = build_food_log(user_id, raw_input, parsed)
     await food_log.insert()
     return build_response(food_log, parsed, transcription=raw_input)
+
+@router.post("/food/tts")
+async def text_to_speech(request: TTSRequest):
+    audio = await generate_speech(request.text, request.voice)
+    return Response(content=audio, media_type="audio/mpeg")
 
 @router.get("/food/{user_id}/today")
 async def get_today_food(user_id: str):
@@ -243,8 +253,6 @@ async def get_weekly_summary(user_id: str):
         days[day]["fat"] += log.fat or 0
         days[day]["entries"] += 1
 
-
-
     return {
         "days": sorted(days.values(), key=lambda x: x["date"]),
         "totals": {
@@ -262,7 +270,6 @@ async def test_confidence(transcript: str):
     return result
 
 @router.post("/corrections")
-
 async def save_correction(request: CorrectionRequest):
     correction = Correction(**request.model_dump())
     await correction.insert()

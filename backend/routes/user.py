@@ -12,6 +12,7 @@ class UpdateProfile(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     screen_name: Optional[str] = None
+    voice: Optional[str] = None
 
 
 @router.get("/user/{user_id}/profile")
