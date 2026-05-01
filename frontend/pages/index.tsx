@@ -102,6 +102,7 @@ export default function Home() {
   }, []);
 
   const streamRef = useRef<MediaStream | null>(null);
+  
 
   useEffect(() => {
     if (!userId) return;
@@ -367,6 +368,8 @@ export default function Home() {
     });
   }, [router, userId]);
 
+  if (!mounted) return null;
+
   return (
     <div className="min-h-screen bg-blue-700">
       <a
@@ -400,7 +403,6 @@ export default function Home() {
             }
           </div>
         </header>
-
         <main id="main-content">
           {/* Daily Summary Card */}
           <section
