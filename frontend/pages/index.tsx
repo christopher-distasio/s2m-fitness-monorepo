@@ -421,7 +421,6 @@ export default function Home() {
                   ? "bg-white text-blue-700"
                   : "text-white/60 hover:text-white"
               }`}
-              aria-pressed={mode === "see"}
             >
               See
             </button>
@@ -432,7 +431,6 @@ export default function Home() {
                   ? "bg-white text-blue-700"
                   : "text-white/60 hover:text-white"
               }`}
-              aria-pressed={mode === "speak"}
             >
               Speak
             </button>
@@ -441,7 +439,6 @@ export default function Home() {
             onClick={() => setMuted(!muted)}
             className="p-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
             aria-label={muted ? "Unmute audio" : "Mute audio"}
-            aria-pressed={muted}
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               {muted ? (
@@ -534,7 +531,8 @@ export default function Home() {
               </svg>
             </button>
           </div>
-        </header>{" "}
+        </header>
+
         <main id="main-content">
           {mode === "speak" ? (
             <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -616,7 +614,8 @@ export default function Home() {
               )}
             </div>
           ) : (
-            <main id="main-content">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="flex flex-col gap-6">
               {/* Daily Summary Card */}
               <section
                 aria-labelledby="summary-heading"
@@ -742,6 +741,7 @@ export default function Home() {
                     <select
                       value={selectedVoice}
                       onChange={(e) => setSelectedVoice(e.target.value)}
+                      aria-label="Voice preference"
                       className="px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white"
                     >
                       {[
@@ -930,7 +930,8 @@ export default function Home() {
                   </p>
                 )}
               </div>
-
+              </div>
+              <div className="flex flex-col gap-6">
               {/* Food log table */}
               <section aria-labelledby="logs-heading">
                 <h2
@@ -1085,10 +1086,12 @@ export default function Home() {
                   </div>
                 )}
               </section>
-            </main>
+              </div>
+            </div>
           )}
+
         </main>
-      </div>
+
       <nav
         aria-label="Main navigation"
         className="fixed bottom-0 left-0 right-0 bg-blue-800 border-t border-white/20 flex justify-around items-center py-2 sm:hidden"
@@ -1192,6 +1195,8 @@ export default function Home() {
           <span className="text-xs">Profile</span>
         </button>
       </nav>
+      </div>
     </div>
+ 
   );
 }
