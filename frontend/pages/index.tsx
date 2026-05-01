@@ -381,7 +381,7 @@ export default function Home() {
         Skip to main content
       </a>
 
-      <div className="max-w-5xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+      <div className="max-w-5xl mx-auto px-4 py-6 sm:px-6 lg:px-8 pb-16 sm:pb-0">
         {/* Header */}
         <header className="flex items-center justify-between gap-3 mb-8">
           <div className="bg-black/25 border border-white/20 rounded-lg px-2 py-1.5 flex items-center gap-1.5">
@@ -1089,6 +1089,109 @@ export default function Home() {
           )}
         </main>
       </div>
+      <nav
+        aria-label="Main navigation"
+        className="fixed bottom-0 left-0 right-0 bg-blue-800 border-t border-white/20 flex justify-around items-center py-2 sm:hidden"
+      >
+        <button
+          aria-label="Home"
+          className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M3 12L12 3L21 12V21H15V15H9V21H3V12Z"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              fill="none"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="text-xs">Home</span>
+        </button>
+        <button
+          aria-label="Progress"
+          className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <polyline
+              points="22 12 18 12 15 21 9 3 6 12 2 12"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="text-xs">Progress</span>
+        </button>
+        <button
+          aria-label="History"
+          className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <rect
+              x="3"
+              y="4"
+              width="18"
+              height="18"
+              rx="2"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              fill="none"
+            />
+            <line
+              x1="3"
+              y1="9"
+              x2="21"
+              y2="9"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            />
+            <line
+              x1="8"
+              y1="2"
+              x2="8"
+              y2="6"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+            <line
+              x1="16"
+              y1="2"
+              x2="16"
+              y2="6"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+          </svg>
+          <span className="text-xs">History</span>
+        </button>
+        <button
+          aria-label="Profile"
+          className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <circle
+              cx="12"
+              cy="8"
+              r="4"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              fill="none"
+            />
+            <path
+              d="M4 20C4 17 7.6 15 12 15C16.4 15 20 17 20 20"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              fill="none"
+              strokeLinecap="round"
+            />
+          </svg>
+          <span className="text-xs">Profile</span>
+        </button>
+      </nav>
     </div>
   );
 }
