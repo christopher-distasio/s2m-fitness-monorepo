@@ -102,8 +102,8 @@ export default function Home() {
   }, []);
 
   const [mode, setMode] = useState<"see" | "speak">("see");
-
   const streamRef = useRef<MediaStream | null>(null);
+  const [muted, setMuted] = useState(false);
 
   useEffect(() => {
     if (!userId) return;
@@ -144,6 +144,7 @@ export default function Home() {
   useEffect(() => setMounted(true), []);
 
   async function speak(text: string) {
+    if (muted) return;
     try {
       const res = await fetch(`${API_BASE}/food/tts`, {
         method: "POST",
@@ -436,6 +437,62 @@ export default function Home() {
               Speak
             </button>
           </div>
+          <button
+            onClick={() => setMuted(!muted)}
+            className="p-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+            aria-label={muted ? "Unmute audio" : "Mute audio"}
+            aria-pressed={muted}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              {muted ? (
+                <>
+                  <path
+                    d="M3 6H1v4h2l4 3V3L3 6z"
+                    fill="rgba(255,255,255,0.4)"
+                  />
+                  <line
+                    x1="10"
+                    y1="6"
+                    x2="14"
+                    y2="10"
+                    stroke="rgba(255,255,255,0.4)"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                  <line
+                    x1="14"
+                    y1="6"
+                    x2="10"
+                    y2="10"
+                    stroke="rgba(255,255,255,0.4)"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </>
+              ) : (
+                <>
+                  <path
+                    d="M3 6H1v4h2l4 3V3L3 6z"
+                    fill="rgba(255,255,255,0.8)"
+                  />
+                  <path
+                    d="M11 5.5 Q13 8 11 10.5"
+                    stroke="rgba(255,255,255,0.8)"
+                    strokeWidth="1.4"
+                    fill="none"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M13 3.5 Q16 8 13 12.5"
+                    stroke="rgba(255,255,255,0.5)"
+                    strokeWidth="1.4"
+                    fill="none"
+                    strokeLinecap="round"
+                  />
+                </>
+              )}
+            </svg>
+          </button>
           <div className="flex items-center gap-3">
             <button
               onClick={async () => {
