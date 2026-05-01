@@ -101,8 +101,9 @@ export default function Home() {
     setCalorieGoal(data.calorie_goal);
   }, []);
 
+  const [mode, setMode] = useState<"see" | "speak">("see");
+
   const streamRef = useRef<MediaStream | null>(null);
-  
 
   useEffect(() => {
     if (!userId) return;
@@ -381,28 +382,102 @@ export default function Home() {
 
       <div className="max-w-5xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
         {/* Header */}
-        <header className="flex flex-wrap items-center justify-between gap-3 mb-8">
-          <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-            Speak2Me Fitness
-          </h1>
-          <div className="flex gap-3 items-center">
-            {
-              <div className="flex gap-3 items-center">
-                <button
-                  onClick={async () => {
-                    if (!userId) return;
-                    await supabase.auth.signOut();
-                    router.push("/login");
-                  }}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-semibold rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                  aria-label="Sign out"
-                >
-                  Sign out
-                </button>
-              </div>
-            }
+        <header className="flex items-center justify-between gap-3 mb-8">
+          <div className="bg-black/25 border border-white/20 rounded-lg px-2 py-1.5 flex items-center gap-1.5">
+            <span className="text-white font-semibold text-sm tracking-wide">
+              S2M
+            </span>
+            <svg width="22" height="16" viewBox="0 0 22 16" fill="none">
+              <path
+                d="M7 2 Q10 8 7 14"
+                stroke="rgba(255,255,255,0.55)"
+                strokeWidth="1.4"
+                fill="none"
+                strokeLinecap="round"
+              />
+              <path
+                d="M11 0 Q15 8 11 16"
+                stroke="rgba(255,255,255,0.35)"
+                strokeWidth="1.4"
+                fill="none"
+                strokeLinecap="round"
+              />
+              <path
+                d="M15 0 Q20 8 15 16"
+                stroke="rgba(255,255,255,0.18)"
+                strokeWidth="1.4"
+                fill="none"
+                strokeLinecap="round"
+              />
+            </svg>
           </div>
-        </header>
+
+          <div className="flex bg-black/25 rounded-full p-0.5">
+            <button
+              onClick={() => setMode("see")}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                mode === "see"
+                  ? "bg-white text-blue-700"
+                  : "text-white/60 hover:text-white"
+              }`}
+              aria-pressed={mode === "see"}
+            >
+              See
+            </button>
+            <button
+              onClick={() => setMode("speak")}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                mode === "speak"
+                  ? "bg-white text-blue-700"
+                  : "text-white/60 hover:text-white"
+              }`}
+              aria-pressed={mode === "speak"}
+            >
+              Speak
+            </button>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={async () => {
+                if (!userId) return;
+                await supabase.auth.signOut();
+                router.push("/login");
+              }}
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+              aria-label="Sign out"
+            >
+              Sign out
+            </button>
+            <button
+              className="p-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+              aria-label="Open menu"
+            >
+              <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
+                <rect
+                  y="0"
+                  width="16"
+                  height="1.5"
+                  rx="0.75"
+                  fill="rgba(255,255,255,0.8)"
+                />
+                <rect
+                  y="5"
+                  width="16"
+                  height="1.5"
+                  rx="0.75"
+                  fill="rgba(255,255,255,0.8)"
+                />
+                <rect
+                  y="10"
+                  width="16"
+                  height="1.5"
+                  rx="0.75"
+                  fill="rgba(255,255,255,0.8)"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>{" "}
         <main id="main-content">
           {/* Daily Summary Card */}
           <section
