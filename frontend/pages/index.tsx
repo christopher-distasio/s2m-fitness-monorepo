@@ -105,6 +105,12 @@ export default function Home() {
   const streamRef = useRef<MediaStream | null>(null);
   const [muted, setMuted] = useState(false);
 
+  const [showNutrients, setShowNutrients] = useState({
+    protein: false,
+    carbs: false,
+    fat: false,
+  });
+
   useEffect(() => {
     if (!userId) return;
     fetchLogs();
@@ -382,7 +388,7 @@ export default function Home() {
       </a>
 
       <div className="max-w-5xl mx-auto px-4 py-6 sm:px-6 lg:px-8 pb-16 sm:pb-0">
-        {/* Header */}
+        {/* Header — S2M logo, See/Speak mode toggle, mute, sign out, hamburger */}{" "}
         <header className="flex items-center justify-between gap-3 mb-8">
           <div className="bg-black/25 border border-white/20 rounded-lg px-2 py-1.5 flex items-center gap-1.5">
             <span className="text-white font-semibold text-sm tracking-wide">
@@ -435,6 +441,7 @@ export default function Home() {
               Speak
             </button>
           </div>
+          {/* Mute — suppresses TTS output, does not affect recording */}
           <button
             onClick={() => setMuted(!muted)}
             className="p-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
@@ -497,8 +504,7 @@ export default function Home() {
                 await supabase.auth.signOut();
                 router.push("/login");
               }}
-              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-              aria-label="Sign out"
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-[10px] sm:text-xs font-semibold rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-white transition-colors"              aria-label="Sign out"
             >
               Sign out
             </button>
@@ -532,8 +538,8 @@ export default function Home() {
             </button>
           </div>
         </header>
-
         <main id="main-content">
+          {/* See/Speak mode — controls full content area swap */}
           {mode === "speak" ? (
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <button
@@ -616,587 +622,625 @@ export default function Home() {
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="flex flex-col gap-6">
-              {/* Daily Summary Card */}
-              <section
-                aria-labelledby="summary-heading"
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6 mb-6"
-              >
-                <h2
-                  id="summary-heading"
-                  className="text-lg font-semibold text-white mb-3"
-                >
-                  Today&apos;s Summary
-                </h2>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-                  <div className="bg-white/10 rounded-lg p-3 text-center">
-                    <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
-                      Calories
-                    </p>
-                    <p
-                      className="text-xl font-bold text-white"
-                      aria-label={`${summary.calories} of ${calorieGoal} calories`}
-                    >
-                      {summary.calories}
-                      <span className="text-sm font-normal text-blue-200">
-                        /{calorieGoal}
-                      </span>
-                    </p>
-                  </div>
-                  <div className="bg-white/10 rounded-lg p-3 text-center">
-                    <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
-                      Protein
-                    </p>
-                    <p className="text-xl font-bold text-white">
-                      {Number(summary.protein).toFixed(1)}
-                      <span className="text-sm font-normal text-blue-200">
-                        g
-                      </span>
-                    </p>
-                  </div>
-                  <div className="bg-white/10 rounded-lg p-3 text-center">
-                    <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
-                      Carbs
-                    </p>
-                    <p className="text-xl font-bold text-white">
-                      {Number(summary.carbs).toFixed(1)}
-                      <span className="text-sm font-normal text-blue-200">
-                        g
-                      </span>
-                    </p>
-                  </div>
-                  <div className="bg-white/10 rounded-lg p-3 text-center">
-                    <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
-                      Fat
-                    </p>
-                    <p className="text-xl font-bold text-white">
-                      {Number(summary.fat).toFixed(1)}
-                      <span className="text-sm font-normal text-blue-200">
-                        g
-                      </span>
-                    </p>
-                  </div>
-                </div>
-
-                {/* Calorie progress bar */}
-                <div className="mb-4">
-                  <label htmlFor="calorie-progress" className="sr-only">
-                    Calorie progress: {caloriePercent}% of daily goal
-                  </label>
-                  <progress
-                    id="calorie-progress"
-                    value={summary.calories}
-                    max={calorieGoal}
-                    className="w-full h-3 rounded-full overflow-hidden appearance-none [&::-webkit-progress-bar]:bg-white/20 [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:transition-all [&::-webkit-progress-value]:duration-500"
-                    style={{
-                      accentColor:
-                        caloriePercent >= 100
-                          ? "#f87171"
-                          : caloriePercent >= 75
-                            ? "#facc15"
-                            : "#4ade80",
-                    }}
-                  />
-                  <p className="text-xs text-blue-200 mt-1">
-                    {caloriePercent}% of daily goal &middot;{" "}
-                    {summary.entry_count}{" "}
-                    {summary.entry_count === 1 ? "entry" : "entries"}
-                  </p>
-                </div>
-
-                {/* Calorie goal setter */}
-                <fieldset className="border-t border-white/20 pt-4">
-                  <legend className="text-sm font-medium text-blue-200 mb-2">
-                    Update calorie goal
-                  </legend>
-                  <div className="flex flex-wrap gap-2">
-                    <label htmlFor="calorie-goal-input" className="sr-only">
-                      New calorie goal
-                    </label>
-                    <input
-                      id="calorie-goal-input"
-                      type="number"
-                      value={goalInput}
-                      onChange={(e) => setGoalInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && saveGoal()}
-                      placeholder={`Current: ${calorieGoal} cal`}
-                      min={0}
-                      className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
-                    />
-                    <button
-                      type="button"
-                      onClick={saveGoal}
-                      className="px-4 py-2 bg-white text-blue-700 font-semibold rounded-lg text-sm hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
-                      aria-label="Save new calorie goal"
-                    >
-                      Save goal
-                    </button>
-                  </div>
-                </fieldset>
-                {mounted && (
-                  <fieldset className="border-t border-white/20 pt-4 mt-4">
-                    <legend className="text-sm font-medium text-blue-200 mb-2">
-                      Voice preference
-                    </legend>
-                    <select
-                      value={selectedVoice}
-                      onChange={(e) => setSelectedVoice(e.target.value)}
-                      aria-label="Voice preference"
-                      className="px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white"
-                    >
-                      {[
-                        "alloy",
-                        "echo",
-                        "fable",
-                        "onyx",
-                        "nova",
-                        "shimmer",
-                      ].map((v) => (
-                        <option key={v} value={v} className="text-black">
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                  </fieldset>
-                )}
-              </section>
-
-              {/* Log by text */}
-              <section
-                aria-labelledby="text-log-heading"
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6 mb-6"
-              >
-                <h2
-                  id="text-log-heading"
-                  className="text-lg font-semibold text-white mb-3"
-                >
-                  Log by text
-                </h2>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <label htmlFor="food-text-input" className="sr-only">
-                    Describe what you ate
-                  </label>
-                  <input
-                    id="food-text-input"
-                    ref={textInputRef}
-                    type="text"
-                    value={textInput}
-                    onChange={(e) => setTextInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && submitText()}
-                    placeholder="Describe what you ate. e.g. two eggs and a coffee"
-                    autoComplete="off"
-                    className="flex-1 px-3 py-2.5 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-base focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
-                    aria-label="Describe what you ate"
-                  />
-                  <button
-                    onClick={submitText}
-                    disabled={loading}
-                    className="px-5 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-red-400 disabled:cursor-not-allowed text-white font-semibold rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
-                    aria-label={
-                      loading ? "Logging food, please wait" : "Log food"
-                    }
-                  >
-                    {loading ? "Logging..." : "Log food"}
-                  </button>
-                </div>
-              </section>
-
-              {pendingParse && (
+                {/* Daily Summary Card — calories always visible, nutrients opt-in via toggles */}{" "}
                 <section
-                  aria-labelledby="confidence-heading"
-                  aria-live="polite"
-                  className={`border rounded-xl p-4 sm:p-6 mb-6 ${
-                    pendingParse.parsed.confidence === "low"
-                      ? "bg-red-900/30 border-red-400/40"
-                      : "bg-yellow-900/30 border-yellow-400/40"
-                  }`}
+                  aria-labelledby="summary-heading"
+                  className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6 mb-6"
                 >
                   <h2
-                    id="confidence-heading"
-                    className="text-lg font-semibold text-white mb-1"
+                    id="summary-heading"
+                    className="text-lg font-semibold text-white mb-3"
                   >
-                    {pendingParse.parsed.confidence === "low"
-                      ? "Unsure"
-                      : "Less Sure"}
+                    Today&apos;s Summary
                   </h2>
 
-                  <p className="text-white text-sm mb-1">
-                    <strong>{pendingParse.parsed.food}</strong> —{" "}
-                    {pendingParse.parsed.calories} cal
-                  </p>
+                  <div className="flex gap-3 mb-3">
+                    {/* Calories card — fixed width */}
+                    <div className="bg-white/10 rounded-lg p-3 text-center min-w-[100px]">
+                      <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
+                        Calories
+                      </p>
+                      <p
+                        className="text-2xl font-bold text-white"
+                        aria-label={`${summary.calories} of ${calorieGoal} calories`}
+                      >
+                        {summary.calories}
+                        <span className="text-sm font-normal text-blue-200">
+                          /{calorieGoal}
+                        </span>
+                      </p>
+                    </div>
 
-                  {pendingParse.parsed.reasoning && (
-                    <p className="text-blue-200 text-sm mb-3">
-                      {pendingParse.parsed.reasoning}
-                    </p>
-                  )}
-
-                  {pendingParse.parsed.alternatives &&
-                    pendingParse.parsed.alternatives.length > 0 && (
-                      <div className="mb-4">
-                        <p className="text-xs text-blue-200 uppercase tracking-wide font-medium mb-2">
-                          Did you mean?
-                        </p>
-                        <div className="flex flex-col gap-2">
-                          {pendingParse.parsed.alternatives.map((alt, i) => (
+                    {/* Right side — toggles and selected nutrient cards */}
+                    <div className="flex flex-col gap-2 flex-1">
+                      {/* Toggle buttons — fixed equal size */}
+                      <div className="flex gap-2">
+                        {(["protein", "carbs", "fat"] as const).map((key) => {
+                          const pressed = showNutrients[key];
+                          return (
                             <button
-                              key={i}
-                              onClick={() => {
-                                const updated = {
-                                  ...pendingParse,
-                                  raw_input: alt,
-                                };
-                                setPendingParse(updated);
-                                confirmLog(pendingParse.uid, alt);
-                              }}
-                              className="text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                              aria-label={`Log ${alt} instead`}
+                              key={key}
+                              onClick={() =>
+                                setShowNutrients((prev) => ({
+                                  ...prev,
+                                  [key]: !prev[key],
+                                }))
+                              }
+                              className={`w-16 h-8 rounded-full text-xs font-medium border transition-colors focus:outline-none focus:ring-2 focus:ring-white flex-shrink-0 ${
+                                pressed
+                                  ? "bg-white/25 border-white/50 text-white"
+                                  : "bg-white/10 border-white/20 text-white/60 hover:text-white"
+                              }`}
+                              aria-pressed={pressed}
                             >
-                              {alt}
+                              {pressed ? "− " : "+ "}
+                              {key.charAt(0).toUpperCase() + key.slice(1)}
                             </button>
-                          ))}
-                        </div>
+                          );
+                        })}
                       </div>
-                    )}
 
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() =>
-                        confirmLog(pendingParse.uid, pendingParse.raw_input)
-                      }
-                      className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                      aria-label={`Confirm and log ${pendingParse.parsed.food}`}
-                    >
-                      Yes, log it
-                    </button>
-                    <button
-                      onClick={() => {
-                        setPendingParse(null);
-                        setStatus("");
-                        textInputRef.current?.focus();
+                      {/* Selected nutrient cards */}
+                      {Object.values(showNutrients).some(Boolean) && (
+                        <div className="flex gap-2">
+                          {showNutrients.protein && (
+                            <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
+                              <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
+                                Protein
+                              </p>
+                              <p className="text-base font-bold text-white">
+                                {Number(summary.protein).toFixed(1)}
+                                <span className="text-xs font-normal text-blue-200">
+                                  g
+                                </span>
+                              </p>
+                            </div>
+                          )}
+                          {showNutrients.carbs && (
+                            <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
+                              <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
+                                Carbs
+                              </p>
+                              <p className="text-base font-bold text-white">
+                                {Number(summary.carbs).toFixed(1)}
+                                <span className="text-xs font-normal text-blue-200">
+                                  g
+                                </span>
+                              </p>
+                            </div>
+                          )}
+                          {showNutrients.fat && (
+                            <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
+                              <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
+                                Fat
+                              </p>
+                              <p className="text-base font-bold text-white">
+                                {Number(summary.fat).toFixed(1)}
+                                <span className="text-xs font-normal text-blue-200">
+                                  g
+                                </span>
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Calorie progress bar */}
+                  <div className="mb-4">
+                    <label htmlFor="calorie-progress" className="sr-only">
+                      Calorie progress: {caloriePercent}% of daily goal
+                    </label>
+                    <progress
+                      id="calorie-progress"
+                      value={summary.calories}
+                      max={calorieGoal}
+                      className="w-full h-3 rounded-full overflow-hidden appearance-none [&::-webkit-progress-bar]:bg-white/20 [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:transition-all [&::-webkit-progress-value]:duration-500"
+                      style={{
+                        accentColor:
+                          caloriePercent >= 100
+                            ? "#f87171"
+                            : caloriePercent >= 75
+                              ? "#facc15"
+                              : "#4ade80",
                       }}
-                      className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                      aria-label="Cancel and re-enter food"
+                    />
+                    <p className="text-xs text-blue-200 mt-1">
+                      {caloriePercent}% of daily goal &middot;{" "}
+                      {summary.entry_count}{" "}
+                      {summary.entry_count === 1 ? "entry" : "entries"}
+                    </p>
+                  </div>
+
+                  {/* Calorie goal setter */}
+                  <fieldset className="border-t border-white/20 pt-4">
+                    <legend className="text-sm font-medium text-blue-200 mb-2">
+                      Update calorie goal
+                    </legend>
+                    <div className="flex flex-wrap gap-2">
+                      <label htmlFor="calorie-goal-input" className="sr-only">
+                        New calorie goal
+                      </label>
+                      <input
+                        id="calorie-goal-input"
+                        type="number"
+                        value={goalInput}
+                        onChange={(e) => setGoalInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && saveGoal()}
+                        placeholder={`Current: ${calorieGoal} cal`}
+                        min={0}
+                        className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
+                      />
+                      <button
+                        type="button"
+                        onClick={saveGoal}
+                        className="px-4 py-2 bg-white text-blue-700 font-semibold rounded-lg text-sm hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
+                        aria-label="Save new calorie goal"
+                      >
+                        Save goal
+                      </button>
+                    </div>
+                  </fieldset>
+                  {mounted && (
+                    <fieldset className="border-t border-white/20 pt-4 mt-4">
+                      <legend className="text-sm font-medium text-blue-200 mb-2">
+                        Voice preference
+                      </legend>
+                      <select
+                        value={selectedVoice}
+                        onChange={(e) => setSelectedVoice(e.target.value)}
+                        aria-label="Voice preference"
+                        className="px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white"
+                      >
+                        {[
+                          "alloy",
+                          "echo",
+                          "fable",
+                          "onyx",
+                          "nova",
+                          "shimmer",
+                        ].map((v) => (
+                          <option key={v} value={v} className="text-black">
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </fieldset>
+                  )}
+                </section>
+                {/* Log by text */}
+                <section
+                  aria-labelledby="text-log-heading"
+                  className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6 mb-6"
+                >
+                  <h2
+                    id="text-log-heading"
+                    className="text-lg font-semibold text-white mb-3"
+                  >
+                    Log by text
+                  </h2>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <label htmlFor="food-text-input" className="sr-only">
+                      Describe what you ate
+                    </label>
+                    <input
+                      id="food-text-input"
+                      ref={textInputRef}
+                      type="text"
+                      value={textInput}
+                      onChange={(e) => setTextInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && submitText()}
+                      placeholder="Describe what you ate. e.g. two eggs and a coffee"
+                      autoComplete="off"
+                      className="flex-1 px-3 py-2.5 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-base focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
+                      aria-label="Describe what you ate"
+                    />
+                    <button
+                      onClick={submitText}
+                      disabled={loading}
+                      className="px-5 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-red-400 disabled:cursor-not-allowed text-white font-semibold rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
+                      aria-label={
+                        loading ? "Logging food, please wait" : "Log food"
+                      }
                     >
-                      Let me re-enter
+                      {loading ? "Logging..." : "Log food"}
                     </button>
                   </div>
                 </section>
-              )}
-
-              {/* Log by voice */}
-              <section
-                aria-labelledby="voice-log-heading"
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6 mb-6"
-              >
-                <h2
-                  id="voice-log-heading"
-                  className="text-lg font-semibold text-white mb-3"
-                >
-                  Log by voice
-                </h2>
-                <button
-                  onClick={recording ? stopRecording : startRecording}
-                  disabled={loading}
-                  aria-label={
-                    recording
-                      ? "Stop voice recording"
-                      : "Start voice recording to log food"
-                  }
-                  className={`flex items-center gap-2 px-5 py-3 rounded-lg font-semibold text-white text-sm focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors disabled:cursor-not-allowed ${
-                    recording
-                      ? "bg-red-600 hover:bg-red-700 disabled:bg-red-500"
-                      : "bg-gray-700 hover:bg-gray-800 disabled:bg-gray-500"
-                  }`}
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`w-3 h-3 rounded-full ${recording ? "bg-white animate-pulse" : "bg-gray-400"}`}
-                  />
-                  {recording ? "Stop recording" : "Start recording"}
-                </button>
-              </section>
-
-              {/* Status live region */}
-              <div
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-                className="mb-6"
-              >
-                {status && (
-                  <p className="px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white text-sm">
-                    {status}
-                  </p>
-                )}
-              </div>
-              </div>
-              <div className="flex flex-col gap-6">
-              {/* Food log table */}
-              <section aria-labelledby="logs-heading">
-                <h2
-                  id="logs-heading"
-                  className="text-lg font-semibold text-white mb-3"
-                >
-                  Today&apos;s logs
-                </h2>
-
-                {logs.length === 0 ? (
-                  <p className="text-blue-200 text-sm">No logs yet today.</p>
-                ) : (
-                  <div className="overflow-x-auto rounded-xl border border-white/20">
-                    <table
-                      className="w-full text-sm text-left"
-                      aria-label="Today's food log entries"
+                {pendingParse && (
+                  <section
+                    aria-labelledby="confidence-heading"
+                    aria-live="polite"
+                    className={`border rounded-xl p-4 sm:p-6 mb-6 ${
+                      pendingParse.parsed.confidence === "low"
+                        ? "bg-red-900/30 border-red-400/40"
+                        : "bg-yellow-900/30 border-yellow-400/40"
+                    }`}
+                  >
+                    <h2
+                      id="confidence-heading"
+                      className="text-lg font-semibold text-white mb-1"
                     >
-                      <thead>
-                        <tr className="border-b border-white/20 bg-white/10">
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide"
-                          >
-                            Food
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide"
-                          >
-                            Cal
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide hidden sm:table-cell"
-                          >
-                            Protein
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide hidden sm:table-cell"
-                          >
-                            Carbs
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide hidden sm:table-cell"
-                          >
-                            Fat
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide"
-                          >
-                            <span className="sr-only">Actions</span>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {logs.map((log, index) => (
-                          <tr
-                            key={log._id}
-                            className={`border-b border-white/10 last:border-0 ${index % 2 === 0 ? "bg-white/5" : "bg-transparent"}`}
-                          >
-                            {editingId === log._id ? (
-                              <>
-                                <td colSpan={5} className="px-4 py-3">
-                                  <label
-                                    htmlFor={`edit-input-${log._id}`}
-                                    className="sr-only"
-                                  >
-                                    Edit food entry for {log.food_name}
-                                  </label>
-                                  <input
-                                    id={`edit-input-${log._id}`}
-                                    ref={editInputRef}
-                                    value={editInput}
-                                    onChange={(e) =>
-                                      setEditInput(e.target.value)
-                                    }
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") saveEdit(log._id);
-                                      if (e.key === "Escape")
-                                        setEditingId(null);
-                                    }}
-                                    placeholder="Describe what you ate"
-                                    className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
-                                  />
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex gap-2">
-                                    <button
-                                      onClick={() => saveEdit(log._id)}
-                                      className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
-                                      aria-label={`Save edit for ${log.food_name}`}
-                                    >
-                                      Save
-                                    </button>
-                                    <button
-                                      onClick={() => setEditingId(null)}
-                                      className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
-                                      aria-label="Cancel edit"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                </td>
-                              </>
-                            ) : (
-                              <>
-                                <td className="px-4 py-3 text-white font-medium">
-                                  {log.food_name}
-                                </td>
-                                <td className="px-4 py-3 text-white">
-                                  {log.calories}
-                                </td>
-                                <td className="px-4 py-3 text-white hidden sm:table-cell">
-                                  {log.protein}g
-                                </td>
-                                <td className="px-4 py-3 text-white hidden sm:table-cell">
-                                  {log.carbs}g
-                                </td>
-                                <td className="px-4 py-3 text-white hidden sm:table-cell">
-                                  {log.fat}g
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex gap-2 justify-end">
-                                    <button
-                                      onClick={() => {
-                                        setEditingId(log._id);
-                                        setEditInput(log.raw_input);
-                                      }}
-                                      className="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
-                                      aria-label={`Edit ${log.food_name}`}
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      onClick={() => deleteLog(log._id)}
-                                      className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
-                                      aria-label={`Delete ${log.food_name}`}
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
-                                </td>
-                              </>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      {pendingParse.parsed.confidence === "low"
+                        ? "Unsure"
+                        : "Less Sure"}
+                    </h2>
+
+                    <p className="text-white text-sm mb-1">
+                      <strong>{pendingParse.parsed.food}</strong> —{" "}
+                      {pendingParse.parsed.calories} cal
+                    </p>
+
+                    {pendingParse.parsed.reasoning && (
+                      <p className="text-blue-200 text-sm mb-3">
+                        {pendingParse.parsed.reasoning}
+                      </p>
+                    )}
+
+                    {pendingParse.parsed.alternatives &&
+                      pendingParse.parsed.alternatives.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-xs text-blue-200 uppercase tracking-wide font-medium mb-2">
+                            Did you mean?
+                          </p>
+                          <div className="flex flex-col gap-2">
+                            {pendingParse.parsed.alternatives.map((alt, i) => (
+                              <button
+                                key={i}
+                                onClick={() => {
+                                  const updated = {
+                                    ...pendingParse,
+                                    raw_input: alt,
+                                  };
+                                  setPendingParse(updated);
+                                  confirmLog(pendingParse.uid, alt);
+                                }}
+                                className="text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                                aria-label={`Log ${alt} instead`}
+                              >
+                                {alt}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() =>
+                          confirmLog(pendingParse.uid, pendingParse.raw_input)
+                        }
+                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                        aria-label={`Confirm and log ${pendingParse.parsed.food}`}
+                      >
+                        Yes, log it
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPendingParse(null);
+                          setStatus("");
+                          textInputRef.current?.focus();
+                        }}
+                        className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                        aria-label="Cancel and re-enter food"
+                      >
+                        Let me re-enter
+                      </button>
+                    </div>
+                  </section>
                 )}
-              </section>
+                {/* Log by voice */}
+                <section
+                  aria-labelledby="voice-log-heading"
+                  className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6 mb-6"
+                >
+                  <h2
+                    id="voice-log-heading"
+                    className="text-lg font-semibold text-white mb-3"
+                  >
+                    Log by voice
+                  </h2>
+                  <button
+                    onClick={recording ? stopRecording : startRecording}
+                    disabled={loading}
+                    aria-label={
+                      recording
+                        ? "Stop voice recording"
+                        : "Start voice recording to log food"
+                    }
+                    className={`flex items-center gap-2 px-5 py-3 rounded-lg font-semibold text-white text-sm focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors disabled:cursor-not-allowed ${
+                      recording
+                        ? "bg-red-600 hover:bg-red-700 disabled:bg-red-500"
+                        : "bg-gray-700 hover:bg-gray-800 disabled:bg-gray-500"
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`w-3 h-3 rounded-full ${recording ? "bg-white animate-pulse" : "bg-gray-400"}`}
+                    />
+                    {recording ? "Stop recording" : "Start recording"}
+                  </button>
+                </section>
+                {/* Status live region */}
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  className="mb-6"
+                >
+                  {status && (
+                    <p className="px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white text-sm">
+                      {status}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {/* Right column — today's logs, visible alongside left column on desktop */}
+              <div className="flex flex-col gap-6">
+                {/* Food log table */}
+                <section aria-labelledby="logs-heading">
+                  <h2
+                    id="logs-heading"
+                    className="text-lg font-semibold text-white mb-3"
+                  >
+                    Today&apos;s logs
+                  </h2>
+
+                  {logs.length === 0 ? (
+                    <p className="text-blue-200 text-sm">No logs yet today.</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-white/20">
+                      <table
+                        className="w-full text-sm text-left"
+                        aria-label="Today's food log entries"
+                      >
+                        <thead>
+                          <tr className="border-b border-white/20 bg-white/10">
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide"
+                            >
+                              Food
+                            </th>
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide"
+                            >
+                              Cal
+                            </th>
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide hidden sm:table-cell"
+                            >
+                              Protein
+                            </th>
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide hidden sm:table-cell"
+                            >
+                              Carbs
+                            </th>
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide hidden sm:table-cell"
+                            >
+                              Fat
+                            </th>
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-xs font-semibold text-blue-200 uppercase tracking-wide"
+                            >
+                              <span className="sr-only">Actions</span>
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {logs.map((log, index) => (
+                            <tr
+                              key={log._id}
+                              className={`border-b border-white/10 last:border-0 ${index % 2 === 0 ? "bg-white/5" : "bg-transparent"}`}
+                            >
+                              {editingId === log._id ? (
+                                <>
+                                  <td colSpan={5} className="px-4 py-3">
+                                    <label
+                                      htmlFor={`edit-input-${log._id}`}
+                                      className="sr-only"
+                                    >
+                                      Edit food entry for {log.food_name}
+                                    </label>
+                                    <input
+                                      id={`edit-input-${log._id}`}
+                                      ref={editInputRef}
+                                      value={editInput}
+                                      onChange={(e) =>
+                                        setEditInput(e.target.value)
+                                      }
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter")
+                                          saveEdit(log._id);
+                                        if (e.key === "Escape")
+                                          setEditingId(null);
+                                      }}
+                                      placeholder="Describe what you ate"
+                                      className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
+                                    />
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={() => saveEdit(log._id)}
+                                        className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
+                                        aria-label={`Save edit for ${log.food_name}`}
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        onClick={() => setEditingId(null)}
+                                        className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
+                                        aria-label="Cancel edit"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </td>
+                                </>
+                              ) : (
+                                <>
+                                  <td className="px-4 py-3 text-white font-medium">
+                                    {log.food_name}
+                                  </td>
+                                  <td className="px-4 py-3 text-white">
+                                    {log.calories}
+                                  </td>
+                                  <td className="px-4 py-3 text-white hidden sm:table-cell">
+                                    {log.protein}g
+                                  </td>
+                                  <td className="px-4 py-3 text-white hidden sm:table-cell">
+                                    {log.carbs}g
+                                  </td>
+                                  <td className="px-4 py-3 text-white hidden sm:table-cell">
+                                    {log.fat}g
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex gap-2 justify-end">
+                                      <button
+                                        onClick={() => {
+                                          setEditingId(log._id);
+                                          setEditInput(log.raw_input);
+                                        }}
+                                        className="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
+                                        aria-label={`Edit ${log.food_name}`}
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        onClick={() => deleteLog(log._id)}
+                                        className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 transition-colors"
+                                        aria-label={`Delete ${log.food_name}`}
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </td>
+                                </>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
               </div>
             </div>
           )}
-
         </main>
-
-      <nav
-        aria-label="Main navigation"
-        className="fixed bottom-0 left-0 right-0 bg-blue-800 border-t border-white/20 flex justify-around items-center py-2 sm:hidden"
-      >
-        <button
-          aria-label="Home"
-          className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+        {/* Bottom nav — mobile only, hidden sm: and above, labels always visible for accessibility */}
+        <nav
+          aria-label="Main navigation"
+          className="fixed bottom-0 left-0 right-0 bg-blue-800 border-t border-white/20 flex justify-around items-center py-2 sm:hidden"
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M3 12L12 3L21 12V21H15V15H9V21H3V12Z"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              fill="none"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span className="text-xs">Home</span>
-        </button>
-        <button
-          aria-label="Progress"
-          className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <polyline
-              points="22 12 18 12 15 21 9 3 6 12 2 12"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span className="text-xs">Progress</span>
-        </button>
-        <button
-          aria-label="History"
-          className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <rect
-              x="3"
-              y="4"
-              width="18"
-              height="18"
-              rx="2"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              fill="none"
-            />
-            <line
-              x1="3"
-              y1="9"
-              x2="21"
-              y2="9"
-              stroke="currentColor"
-              strokeWidth="1.8"
-            />
-            <line
-              x1="8"
-              y1="2"
-              x2="8"
-              y2="6"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-            />
-            <line
-              x1="16"
-              y1="2"
-              x2="16"
-              y2="6"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-            />
-          </svg>
-          <span className="text-xs">History</span>
-        </button>
-        <button
-          aria-label="Profile"
-          className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <circle
-              cx="12"
-              cy="8"
-              r="4"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              fill="none"
-            />
-            <path
-              d="M4 20C4 17 7.6 15 12 15C16.4 15 20 17 20 20"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              fill="none"
-              strokeLinecap="round"
-            />
-          </svg>
-          <span className="text-xs">Profile</span>
-        </button>
-      </nav>
+          <button
+            aria-label="Home"
+            className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M3 12L12 3L21 12V21H15V15H9V21H3V12Z"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                fill="none"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span className="text-xs">Home</span>
+          </button>
+          <button
+            aria-label="Progress"
+            className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <polyline
+                points="22 12 18 12 15 21 9 3 6 12 2 12"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span className="text-xs">Progress</span>
+          </button>
+          <button
+            aria-label="History"
+            className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <rect
+                x="3"
+                y="4"
+                width="18"
+                height="18"
+                rx="2"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                fill="none"
+              />
+              <line
+                x1="3"
+                y1="9"
+                x2="21"
+                y2="9"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <line
+                x1="8"
+                y1="2"
+                x2="8"
+                y2="6"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+              <line
+                x1="16"
+                y1="2"
+                x2="16"
+                y2="6"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+            <span className="text-xs">History</span>
+          </button>
+          <button
+            aria-label="Profile"
+            className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <circle
+                cx="12"
+                cy="8"
+                r="4"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                fill="none"
+              />
+              <path
+                d="M4 20C4 17 7.6 15 12 15C16.4 15 20 17 20 20"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                fill="none"
+                strokeLinecap="round"
+              />
+            </svg>
+            <span className="text-xs">Profile</span>
+          </button>
+        </nav>
       </div>
     </div>
- 
   );
 }

@@ -61,7 +61,7 @@ export default function Login() {
           onClick={() => router.push("/demo")}
           className="w-full mt-3 py-2 bg-blue-400 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors"
         >
-          Try Demo (A static diplay, no signup required)
+          Try Demo (Currently a static display)
         </button>
       </div>
     </div>
