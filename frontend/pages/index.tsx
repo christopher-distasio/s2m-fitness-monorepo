@@ -523,10 +523,10 @@ export default function Home() {
 
                 <div className="flex gap-3 mb-3">
                   <div className="bg-white/10 rounded-lg p-3 text-center min-w-[100px]">
-                    <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">Calories</p>
+                    <p className="text-xs text-blue-100 uppercase tracking-wide font-medium">Calories</p>
                     <p className="text-2xl font-bold text-white" aria-label={`${summary.calories} of ${calorieGoal} calories`}>
                       {summary.calories}
-                      <span className="text-sm font-normal text-blue-200">/{calorieGoal}</span>
+                      <span className="text-sm font-normal text-blue-100">/{calorieGoal}</span>
                     </p>
                   </div>
 
@@ -536,7 +536,7 @@ export default function Home() {
                         const pressed = showNutrients[key];
                         return (
                           <label key={key} className="flex flex-col items-center gap-1 cursor-pointer">
-                            <span className="text-xs text-blue-200">
+                            <span className="text-xs text-blue-100">
                               {key.charAt(0).toUpperCase() + key.slice(1)}
                             </span>
                             <button
@@ -556,20 +556,20 @@ export default function Home() {
                       <div className="flex gap-2">
                         {showNutrients.protein && (
                           <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">Protein</p>
-                            <p className="text-base font-bold text-white">{Number(summary.protein).toFixed(1)}<span className="text-xs font-normal text-blue-200">g</span></p>
+                            <p className="text-xs text-blue-100 uppercase tracking-wide font-medium">Protein</p>
+                            <p className="text-base font-bold text-white">{Number(summary.protein).toFixed(1)}<span className="text-xs font-normal text-blue-100">g</span></p>
                           </div>
                         )}
                         {showNutrients.carbs && (
                           <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">Carbs</p>
-                            <p className="text-base font-bold text-white">{Number(summary.carbs).toFixed(1)}<span className="text-xs font-normal text-blue-200">g</span></p>
+                            <p className="text-xs text-blue-100 uppercase tracking-wide font-medium">Carbs</p>
+                            <p className="text-base font-bold text-white">{Number(summary.carbs).toFixed(1)}<span className="text-xs font-normal text-blue-100">g</span></p>
                           </div>
                         )}
                         {showNutrients.fat && (
                           <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">Fat</p>
-                            <p className="text-base font-bold text-white">{Number(summary.fat).toFixed(1)}<span className="text-xs font-normal text-blue-200">g</span></p>
+                            <p className="text-xs text-blue-100 uppercase tracking-wide font-medium">Fat</p>
+                            <p className="text-base font-bold text-white">{Number(summary.fat).toFixed(1)}<span className="text-xs font-normal text-blue-100">g</span></p>
                           </div>
                         )}
                       </div>
@@ -590,8 +590,8 @@ export default function Home() {
                     style={{ accentColor: caloriePercent >= 100 ? "#f87171" : caloriePercent >= 75 ? "#facc15" : "#4ade80" }}
                   />
                   <div className="flex items-center justify-between mt-1">
-                    <p className="text-xs text-blue-200">{caloriePercent}% of daily goal</p>
-                    <p className="text-xs text-blue-200">{summary.entry_count} {summary.entry_count === 1 ? "entry" : "entries"}</p>
+                    <p className="text-xs text-blue-100">{caloriePercent}% of daily goal</p>
+                    <p className="text-xs text-blue-100">{summary.entry_count} {summary.entry_count === 1 ? "entry" : "entries"}</p>
                   </div>
                 </div>
 
@@ -601,7 +601,7 @@ export default function Home() {
                     const msg = `Today you've had ${summary.calories} calories. Protein: ${Number(summary.protein).toFixed(1)} grams. Carbs: ${Number(summary.carbs).toFixed(1)} grams. Fat: ${Number(summary.fat).toFixed(1)} grams. You're at ${caloriePercent}% of your daily goal.`;
                     speak(msg);
                   }}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white transition-colors mb-4"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white/20 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white transition-colors mb-4"
                   aria-label="Hear today's nutrition summary"
                 >
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -614,7 +614,7 @@ export default function Home() {
 
                 {/* Settings — collapsible */}
                 <details className="group">
-                  <summary className="cursor-pointer text-xs text-blue-200 hover:text-white transition-colors list-none flex items-center gap-1 select-none">
+                  <summary className="cursor-pointer text-xs text-blue-100 hover:text-white transition-colors list-none flex items-center gap-1 select-none">
                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="transition-transform group-open:rotate-90" aria-hidden="true">
                       <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
@@ -622,7 +622,7 @@ export default function Home() {
                   </summary>
                   <div className="mt-3 flex flex-col gap-4 border-t border-white/20 pt-4">
                     <fieldset>
-                      <legend className="text-sm font-medium text-blue-200 mb-2">Update calorie goal</legend>
+                      <legend className="text-sm font-medium text-blue-100 mb-2">Update calorie goal</legend>
                       <div className="flex flex-wrap gap-2">
                         <label htmlFor="calorie-goal-input" className="sr-only">New calorie goal</label>
                         <input
@@ -633,7 +633,7 @@ export default function Home() {
                           onKeyDown={(e) => e.key === "Enter" && saveGoal()}
                           placeholder={`Current: ${calorieGoal} cal`}
                           min={0}
-                          className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
+                          className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-100 text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
                         />
                         <button
                           type="button"
@@ -648,7 +648,7 @@ export default function Home() {
 
                     {mounted && (
                       <fieldset>
-                        <legend className="text-sm font-medium text-blue-200 mb-2">Voice preference</legend>
+                        <legend className="text-sm font-medium text-blue-100 mb-2">Voice preference</legend>
                         <select
                           value={selectedVoice}
                           onChange={(e) => setSelectedVoice(e.target.value)}
@@ -672,7 +672,7 @@ export default function Home() {
                 </h2>
                 <div className="flex items-center gap-3 sm:items-end sm:gap-4">
                   <div className="flex-shrink-0 flex flex-col items-center gap-1.5">
-                    <span className="text-[10px] sm:text-xs text-blue-200">Speak to me</span>
+                    <span className="text-[10px] sm:text-xs text-blue-100">Speak to me</span>
                     <button
                       onClick={recording ? stopRecording : startRecording}
                       disabled={loading}
@@ -691,7 +691,7 @@ export default function Home() {
                   <div className="w-px h-10 bg-white/20 flex-shrink-0" aria-hidden="true" />
 
                   <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-                    <label htmlFor="food-text-input" className="text-[10px] sm:text-xs text-blue-200">
+                    <label htmlFor="food-text-input" className="text-[10px] sm:text-xs text-blue-100">
                       Type it instead
                     </label>
                     <div className="flex gap-1.5 sm:gap-2">
@@ -704,7 +704,7 @@ export default function Home() {
                         onKeyDown={(e) => e.key === "Enter" && submitText()}
                         placeholder="e.g. two eggs and a coffee"
                         autoComplete="off"
-                        className="flex-1 min-w-0 px-2 py-1.5 sm:px-3 sm:py-2.5 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
+                        className="flex-1 min-w-0 px-2 py-1.5 sm:px-3 sm:py-2.5 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-100 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
                       />
                       <button
                         onClick={submitText}
@@ -733,11 +733,11 @@ export default function Home() {
                     <strong>{pendingParse.parsed.food}</strong> — {pendingParse.parsed.calories} cal
                   </p>
                   {pendingParse.parsed.reasoning && (
-                    <p className="text-blue-200 text-sm mb-3">{pendingParse.parsed.reasoning}</p>
+                    <p className="text-blue-100 text-sm mb-3">{pendingParse.parsed.reasoning}</p>
                   )}
                   {pendingParse.parsed.alternatives && pendingParse.parsed.alternatives.length > 0 && (
                     <div className="mb-4">
-                      <p className="text-xs text-blue-200 uppercase tracking-wide font-medium mb-2">Did you mean?</p>
+                      <p className="text-xs text-blue-100 uppercase tracking-wide font-medium mb-2">Did you mean?</p>
                       <div className="flex flex-col gap-2">
                         {pendingParse.parsed.alternatives.map((alt, i) => (
                           <button
@@ -753,7 +753,7 @@ export default function Home() {
                           </button>
                         ))}
                       </div>
-                      <p className="text-xs text-blue-200 mt-3">
+                      <p className="text-xs text-blue-100 mt-3">
                         If none of these match, type or say what&apos;s needed and press{" "}
                         <span className="font-medium text-white">Log Food</span> or{" "}
                         <span className="font-medium text-white">Speak to me</span>.
@@ -815,7 +815,7 @@ export default function Home() {
                   <div id="logs-table" className="mt-3">
                     {logs.length === 0 ? (
                       <div className="bg-white/10 border border-white/20 rounded-xl p-8 text-center">
-                        <p className="text-blue-200 text-sm">Nothing logged yet today.</p>
+                        <p className="text-blue-100 text-sm">Nothing logged yet today.</p>
                         <p className="text-blue-300/60 text-xs mt-1">Type or speak what you ate to get started.</p>
                       </div>
                     ) : (
@@ -825,11 +825,11 @@ export default function Home() {
                           <table className="w-full min-w-[500px] text-sm text-left" aria-label="Today's food log entries">
                             <thead>
                               <tr className="border-b border-white/20 bg-white/10">
-                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Food</th>
-                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Cal</th>
-                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Protein</th>
-                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Carbs</th>
-                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Fat</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-100 uppercase tracking-wide">Food</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-100 uppercase tracking-wide">Cal</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-100 uppercase tracking-wide">Protein</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-100 uppercase tracking-wide">Carbs</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-100 uppercase tracking-wide">Fat</th>
                                 <th scope="col" className="px-3 py-2"><span className="sr-only">Actions</span></th>
                               </tr>
                             </thead>
@@ -850,7 +850,7 @@ export default function Home() {
                                             if (e.key === "Escape") setEditingId(null);
                                           }}
                                           placeholder="Describe what you ate"
-                                          className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-xs focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
+                                          className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-100 text-xs focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
                                         />
                                       </td>
                                       <td className="px-3 py-2">
@@ -871,7 +871,7 @@ export default function Home() {
                                         <div className="flex gap-2 justify-end">
                                           <button
                                             onClick={() => { setEditingId(log._id); setEditInput(log.raw_input); }}
-                                            className="p-1.5 rounded-lg bg-blue-500/20 hover:bg-blue-500/40 text-blue-200 hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                                            className="p-1.5 rounded-lg bg-blue-500/20 hover:bg-blue-500/40 text-blue-100 hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                                             aria-label={`Edit ${log.food_name}`}
                                           >
                                             <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -907,19 +907,19 @@ export default function Home() {
 
         {/* Bottom nav — mobile only */}
         <nav aria-label="Main navigation" className="fixed bottom-0 left-0 right-0 bg-blue-800 border-t border-white/20 flex justify-around items-center py-2 sm:hidden">
-          <button aria-label="Home" className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors">
+          <button aria-label="Home" className="flex flex-col items-center gap-1 p-2 text-white/80 hover:text-white transition-colors">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
               <path d="M3 12L12 3L21 12V21H15V15H9V21H3V12Z" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinejoin="round" />
             </svg>
             <span className="text-xs">Home</span>
           </button>
-          <button aria-label="Progress" className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors">
+          <button aria-label="Progress" className="flex flex-col items-center gap-1 p-2 text-white/80 hover:text-white transition-colors">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
               <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
             <span className="text-xs">Progress</span>
           </button>
-          <button aria-label="History" className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors">
+          <button aria-label="History" className="flex flex-col items-center gap-1 p-2 text-white/80 hover:text-white transition-colors">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
               <rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.8" fill="none" />
               <line x1="3" y1="9" x2="21" y2="9" stroke="currentColor" strokeWidth="1.8" />
@@ -928,7 +928,7 @@ export default function Home() {
             </svg>
             <span className="text-xs">History</span>
           </button>
-          <button aria-label="Profile" className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors">
+          <button aria-label="Profile" className="flex flex-col items-center gap-1 p-2 text-white/80 hover:text-white transition-colors">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
               <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8" fill="none" />
               <path d="M4 20C4 17 7.6 15 12 15C16.4 15 20 17 20 20" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" />
