@@ -161,12 +161,14 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, voice: selectedVoice }),
       });
+      if (!res.ok) throw new Error("TTS failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audio.play();
     } catch {
-      // silent fail — TTS is enhancement, not critical
+      console.log("using fallback")
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
     }
   }
 
@@ -639,8 +641,9 @@ export default function Home() {
                 </div>
               </div>
               <p className="text-white/60 text-xs mt-4 max-w-xs text-center">
-                ( If I'm not sure what you said, I'll ask you to clarify. Then just press the large "Speak to me" circle again to
-                speak the missing details. )
+                ( If I'm not sure what you said, I'll ask you to clarify. Then
+                just press the large "Speak to me" circle again to speak the
+                missing details. )
               </p>
 
               {status && (
