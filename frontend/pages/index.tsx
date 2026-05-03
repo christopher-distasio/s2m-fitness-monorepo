@@ -48,7 +48,6 @@ export default function Home() {
     fat: 0,
     entry_count: 0,
   });
-
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -66,6 +65,17 @@ export default function Home() {
   const [selectedVoice, setSelectedVoice] = useState("alloy");
   const [mounted, setMounted] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [mode, setMode] = useState<"see" | "speak">("see");
+  const streamRef = useRef<MediaStream | null>(null);
+  const [muted, setMuted] = useState(false);
+  const [showNutrients, setShowNutrients] = useState({
+    protein: false,
+    carbs: false,
+    fat: false,
+  });
+  const [conversationHistory, setConversationHistory] = useState<
+    Array<{ role: "user" | "assistant"; content: string }>
+  >([]);
 
   const router = useRouter();
 
@@ -101,20 +111,6 @@ export default function Home() {
     const data = await res.json();
     setCalorieGoal(data.calorie_goal);
   }, []);
-
-  const [mode, setMode] = useState<"see" | "speak">("see");
-  const streamRef = useRef<MediaStream | null>(null);
-  const [muted, setMuted] = useState(false);
-
-  const [showNutrients, setShowNutrients] = useState({
-    protein: false,
-    carbs: false,
-    fat: false,
-  });
-
-  const [conversationHistory, setConversationHistory] = useState<
-    Array<{ role: "user" | "assistant"; content: string }>
-  >([]);
 
   useEffect(() => {
     if (!userId) return;
@@ -154,6 +150,13 @@ export default function Home() {
 
   useEffect(() => setMounted(true), []);
 
+  useEffect(() => {
+    if (!userId) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) router.push("/login");
+    });
+  }, [router, userId]);
+
   async function speak(text: string) {
     if (muted) return;
     try {
@@ -168,13 +171,11 @@ export default function Home() {
       const audio = new Audio(url);
       audio.play();
     } catch {
-      console.log("using fallback");
       window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
     }
   }
 
   async function submitText() {
-    // console.log(conversationHistory)
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -206,7 +207,6 @@ export default function Home() {
         const resolvedInput = `${parsed.serving_size} ${parsed.food}`;
         await confirmLog(uid, resolvedInput);
       } else {
-        // Add this exchange to conversation history
         setConversationHistory((prev) => [
           ...prev,
           { role: "user", content: textInput },
@@ -277,13 +277,10 @@ export default function Home() {
       const formData = new FormData();
       formData.append("user_id", uid);
       formData.append("audio", blob, "recording.webm");
+      formData.append("conversation_history", JSON.stringify(conversationHistory));
       setLoading(true);
       setStatus("Transcribing...");
       try {
-        formData.append(
-          "conversation_history",
-          JSON.stringify(conversationHistory),
-        );
         const res = await fetch(`${API_BASE}/food/voice`, {
           method: "POST",
           body: formData,
@@ -291,8 +288,7 @@ export default function Home() {
         const data = await res.json();
 
         if (data.error) {
-          const err =
-            "I couldn't understand that. Please try saying something more specific.";
+          const err = "I couldn't understand that. Please try saying something more specific.";
           setStatus(err);
           speak(err);
           return;
@@ -308,18 +304,12 @@ export default function Home() {
 
         if (data.parsed.confidence === "high") {
           const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
-          setStatus(
-            `Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`,
-          );
+          setStatus(`Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`);
           speak(msg);
           await fetchLogs(uid);
           await fetchSummary(uid);
         } else {
-          setPendingParse({
-            parsed: data.parsed,
-            raw_input: data.transcription,
-            uid,
-          });
+          setPendingParse({ parsed: data.parsed, raw_input: data.transcription, uid });
           setConversationHistory((prev) => [
             ...prev,
             { role: "user", content: data.transcription },
@@ -388,22 +378,15 @@ export default function Home() {
     speak(msg);
     setTextInput("");
     setPendingParse(null);
-    // Clear history — conversation is resolved
     setConversationHistory([]);
     fetchLogs(uid);
     fetchSummary(uid);
   }
+
   const caloriePercent = Math.min(
     100,
     Math.round((summary.calories / calorieGoal) * 100),
   );
-
-  useEffect(() => {
-    if (!userId) return;
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) router.push("/login");
-    });
-  }, [router, userId]);
 
   if (!mounted) return null;
 
@@ -417,35 +400,13 @@ export default function Home() {
       </a>
 
       <div className="max-w-5xl mx-auto px-4 py-6 sm:px-6 lg:px-8 pb-24 sm:pb-8">
-        {" "}
-        {/* Header */}
         <header className="flex items-center justify-between gap-3 mb-8">
           <div className="bg-black/25 border border-white/20 rounded-lg px-2 py-1.5 flex items-center gap-1.5">
-            <span className="text-white font-semibold text-sm tracking-wide">
-              S2M
-            </span>
+            <span className="text-white font-semibold text-sm tracking-wide">S2M</span>
             <svg width="22" height="16" viewBox="0 0 22 16" fill="none">
-              <path
-                d="M7 2 Q10 8 7 14"
-                stroke="rgba(255,255,255,0.55)"
-                strokeWidth="1.4"
-                fill="none"
-                strokeLinecap="round"
-              />
-              <path
-                d="M11 0 Q15 8 11 16"
-                stroke="rgba(255,255,255,0.35)"
-                strokeWidth="1.4"
-                fill="none"
-                strokeLinecap="round"
-              />
-              <path
-                d="M15 0 Q20 8 15 16"
-                stroke="rgba(255,255,255,0.18)"
-                strokeWidth="1.4"
-                fill="none"
-                strokeLinecap="round"
-              />
+              <path d="M7 2 Q10 8 7 14" stroke="rgba(255,255,255,0.55)" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+              <path d="M11 0 Q15 8 11 16" stroke="rgba(255,255,255,0.35)" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+              <path d="M15 0 Q20 8 15 16" stroke="rgba(255,255,255,0.18)" strokeWidth="1.4" fill="none" strokeLinecap="round" />
             </svg>
           </div>
 
@@ -472,49 +433,15 @@ export default function Home() {
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               {muted ? (
                 <>
-                  <path
-                    d="M3 6H1v4h2l4 3V3L3 6z"
-                    fill="rgba(255,255,255,0.4)"
-                  />
-                  <line
-                    x1="10"
-                    y1="6"
-                    x2="14"
-                    y2="10"
-                    stroke="rgba(255,255,255,0.4)"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                  <line
-                    x1="14"
-                    y1="6"
-                    x2="10"
-                    y2="10"
-                    stroke="rgba(255,255,255,0.4)"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
+                  <path d="M3 6H1v4h2l4 3V3L3 6z" fill="rgba(255,255,255,0.4)" />
+                  <line x1="10" y1="6" x2="14" y2="10" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" strokeLinecap="round" />
+                  <line x1="14" y1="6" x2="10" y2="10" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" strokeLinecap="round" />
                 </>
               ) : (
                 <>
-                  <path
-                    d="M3 6H1v4h2l4 3V3L3 6z"
-                    fill="rgba(255,255,255,0.8)"
-                  />
-                  <path
-                    d="M11 5.5 Q13 8 11 10.5"
-                    stroke="rgba(255,255,255,0.8)"
-                    strokeWidth="1.4"
-                    fill="none"
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M13 3.5 Q16 8 13 12.5"
-                    stroke="rgba(255,255,255,0.5)"
-                    strokeWidth="1.4"
-                    fill="none"
-                    strokeLinecap="round"
-                  />
+                  <path d="M3 6H1v4h2l4 3V3L3 6z" fill="rgba(255,255,255,0.8)" />
+                  <path d="M11 5.5 Q13 8 11 10.5" stroke="rgba(255,255,255,0.8)" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+                  <path d="M13 3.5 Q16 8 13 12.5" stroke="rgba(255,255,255,0.5)" strokeWidth="1.4" fill="none" strokeLinecap="round" />
                 </>
               )}
             </svg>
@@ -537,31 +464,14 @@ export default function Home() {
               aria-label="Open menu"
             >
               <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
-                <rect
-                  y="0"
-                  width="16"
-                  height="1.5"
-                  rx="0.75"
-                  fill="rgba(255,255,255,0.8)"
-                />
-                <rect
-                  y="5"
-                  width="16"
-                  height="1.5"
-                  rx="0.75"
-                  fill="rgba(255,255,255,0.8)"
-                />
-                <rect
-                  y="10"
-                  width="16"
-                  height="1.5"
-                  rx="0.75"
-                  fill="rgba(255,255,255,0.8)"
-                />
+                <rect y="0" width="16" height="1.5" rx="0.75" fill="rgba(255,255,255,0.8)" />
+                <rect y="5" width="16" height="1.5" rx="0.75" fill="rgba(255,255,255,0.8)" />
+                <rect y="10" width="16" height="1.5" rx="0.75" fill="rgba(255,255,255,0.8)" />
               </svg>
             </button>
           </div>
         </header>
+
         <main id="main-content">
           {mode === "speak" ? (
             <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -572,67 +482,24 @@ export default function Home() {
                 className={`w-44 h-44 rounded-full font-semibold text-white text-sm flex flex-col items-center justify-center gap-3 focus:outline-none focus:ring-4 focus:ring-white transition-colors ${recording ? "bg-green-700" : "bg-green-600 hover:bg-green-700"}`}
               >
                 <svg width="48" height="42" viewBox="0 0 64 56" fill="none">
-                  <path
-                    d="M10 10 Q10 3 16 3 Q26 3 29 14 Q32 25 29 38 Q26 49 16 49 Q10 49 10 42 L10 36 Q15 39 20 36 Q27 33 27 22 Q27 11 20 8 Q15 6 13 10 Z"
-                    stroke="white"
-                    strokeWidth="2"
-                    fill="none"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M13 25 Q11 29 13 33"
-                    stroke="white"
-                    strokeWidth="1.8"
-                    fill="none"
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M36 12 Q44 28 36 44"
-                    stroke="white"
-                    strokeWidth="2"
-                    fill="none"
-                    strokeLinecap="round"
-                    opacity="0.85"
-                  />
-                  <path
-                    d="M43 7 Q54 28 43 49"
-                    stroke="white"
-                    strokeWidth="2"
-                    fill="none"
-                    strokeLinecap="round"
-                    opacity="0.55"
-                  />
-                  <path
-                    d="M50 3 Q64 28 50 53"
-                    stroke="white"
-                    strokeWidth="2"
-                    fill="none"
-                    strokeLinecap="round"
-                    opacity="0.28"
-                  />
+                  <path d="M10 10 Q10 3 16 3 Q26 3 29 14 Q32 25 29 38 Q26 49 16 49 Q10 49 10 42 L10 36 Q15 39 20 36 Q27 33 27 22 Q27 11 20 8 Q15 6 13 10 Z" stroke="white" strokeWidth="2" fill="none" strokeLinejoin="round" />
+                  <path d="M13 25 Q11 29 13 33" stroke="white" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+                  <path d="M36 12 Q44 28 36 44" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.85" />
+                  <path d="M43 7 Q54 28 43 49" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.55" />
+                  <path d="M50 3 Q64 28 50 53" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.28" />
                 </svg>
                 <span>{recording ? "Listening..." : "Speak to me"}</span>
               </button>
 
               <p className="text-white/60 text-xs mt-4 max-w-xs text-center">
-                If I'm not sure what you said, I'll ask you to clarify — just
-                click on the circle and speak the missing detail.
+                If I'm not sure what you said, I'll ask you to clarify — just click "Speak to me" again and then speak the missing detail.
               </p>
 
               <div className="mt-8 max-w-xs">
                 <p className="text-white/40 text-xs mb-3">Try saying:</p>
                 <div className="flex flex-wrap justify-center gap-2">
-                  {[
-                    "I had two eggs",
-                    "How many calories today?",
-                    "What did I eat?",
-                    "Delete my last entry",
-                    "How's my progress?",
-                  ].map((prompt) => (
-                    <span
-                      key={prompt}
-                      className="bg-white/10 border border-white/15 text-white/60 px-3 py-1.5 rounded-full text-xs"
-                    >
+                  {["I had two eggs", "How many calories today?", "What did I eat?", "Delete my last entry", "How's my progress?"].map((prompt) => (
+                    <span key={prompt} className="bg-white/10 border border-white/15 text-white/60 px-3 py-1.5 rounded-full text-xs">
                       &ldquo;{prompt}&rdquo;
                     </span>
                   ))}
@@ -646,32 +513,20 @@ export default function Home() {
               )}
             </div>
           ) : (
-            <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-3">
+
               {/* Today's Summary Card */}
-              <section
-                aria-labelledby="summary-heading"
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6"
-              >
-                <h2
-                  id="summary-heading"
-                  className="text-lg font-semibold text-white mb-3"
-                >
+              <section aria-labelledby="summary-heading" className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6">
+                <h2 id="summary-heading" className="text-lg font-semibold text-white mb-3">
                   Today&apos;s Summary
                 </h2>
 
                 <div className="flex gap-3 mb-3">
                   <div className="bg-white/10 rounded-lg p-3 text-center min-w-[100px]">
-                    <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
-                      Calories
-                    </p>
-                    <p
-                      className="text-2xl font-bold text-white"
-                      aria-label={`${summary.calories} of ${calorieGoal} calories`}
-                    >
+                    <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">Calories</p>
+                    <p className="text-2xl font-bold text-white" aria-label={`${summary.calories} of ${calorieGoal} calories`}>
                       {summary.calories}
-                      <span className="text-sm font-normal text-blue-200">
-                        /{calorieGoal}
-                      </span>
+                      <span className="text-sm font-normal text-blue-200">/{calorieGoal}</span>
                     </p>
                   </div>
 
@@ -680,77 +535,41 @@ export default function Home() {
                       {(["protein", "carbs", "fat"] as const).map((key) => {
                         const pressed = showNutrients[key];
                         return (
-                          <label
-                            key={key}
-                            className="flex flex-col items-center gap-1 cursor-pointer"
-                          >
+                          <label key={key} className="flex flex-col items-center gap-1 cursor-pointer">
                             <span className="text-xs text-blue-200">
                               {key.charAt(0).toUpperCase() + key.slice(1)}
                             </span>
                             <button
                               role="switch"
                               aria-checked={pressed}
-                              onClick={() =>
-                                setShowNutrients((prev) => ({
-                                  ...prev,
-                                  [key]: !prev[key],
-                                }))
-                              }
-                              className={`relative w-10 h-5 rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-white ${
-                                pressed
-                                  ? "bg-green-500 border-green-400"
-                                  : "bg-white/10 border-white/20"
-                              }`}
+                              onClick={() => setShowNutrients((prev) => ({ ...prev, [key]: !prev[key] }))}
+                              className={`relative w-10 h-5 rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-white ${pressed ? "bg-green-500 border-green-400" : "bg-white/10 border-white/20"}`}
                             >
-                              <span
-                                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
-                                  pressed ? "translate-x-5" : "translate-x-0"
-                                }`}
-                              />
+                              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${pressed ? "translate-x-5" : "translate-x-0"}`} />
                             </button>
                           </label>
                         );
                       })}
-                    </div>{" "}
+                    </div>
+
                     {Object.values(showNutrients).some(Boolean) && (
                       <div className="flex gap-2">
                         {showNutrients.protein && (
                           <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
-                              Protein
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.protein).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-200">
-                                g
-                              </span>
-                            </p>
+                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">Protein</p>
+                            <p className="text-base font-bold text-white">{Number(summary.protein).toFixed(1)}<span className="text-xs font-normal text-blue-200">g</span></p>
                           </div>
                         )}
                         {showNutrients.carbs && (
                           <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
-                              Carbs
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.carbs).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-200">
-                                g
-                              </span>
-                            </p>
+                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">Carbs</p>
+                            <p className="text-base font-bold text-white">{Number(summary.carbs).toFixed(1)}<span className="text-xs font-normal text-blue-200">g</span></p>
                           </div>
                         )}
                         {showNutrients.fat && (
                           <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">
-                              Fat
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.fat).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-200">
-                                g
-                              </span>
-                            </p>
+                            <p className="text-xs text-blue-200 uppercase tracking-wide font-medium">Fat</p>
+                            <p className="text-base font-bold text-white">{Number(summary.fat).toFixed(1)}<span className="text-xs font-normal text-blue-200">g</span></p>
                           </div>
                         )}
                       </div>
@@ -768,23 +587,11 @@ export default function Home() {
                     value={summary.calories}
                     max={calorieGoal}
                     className="w-full h-3 rounded-full overflow-hidden appearance-none [&::-webkit-progress-bar]:bg-white/20 [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:transition-all [&::-webkit-progress-value]:duration-500"
-                    style={{
-                      accentColor:
-                        caloriePercent >= 100
-                          ? "#f87171"
-                          : caloriePercent >= 75
-                            ? "#facc15"
-                            : "#4ade80",
-                    }}
+                    style={{ accentColor: caloriePercent >= 100 ? "#f87171" : caloriePercent >= 75 ? "#facc15" : "#4ade80" }}
                   />
                   <div className="flex items-center justify-between mt-1">
-                    <p className="text-xs text-blue-200">
-                      {caloriePercent}% of daily goal
-                    </p>
-                    <p className="text-xs text-blue-200">
-                      {summary.entry_count}{" "}
-                      {summary.entry_count === 1 ? "entry" : "entries"}
-                    </p>
+                    <p className="text-xs text-blue-200">{caloriePercent}% of daily goal</p>
+                    <p className="text-xs text-blue-200">{summary.entry_count} {summary.entry_count === 1 ? "entry" : "entries"}</p>
                   </div>
                 </div>
 
@@ -797,31 +604,10 @@ export default function Home() {
                   className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white transition-colors mb-4"
                   aria-label="Hear today's nutrition summary"
                 >
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M3 6H1v4h2l4 3V3L3 6z"
-                      fill="rgba(255,255,255,0.8)"
-                    />
-                    <path
-                      d="M11 5.5 Q13 8 11 10.5"
-                      stroke="rgba(255,255,255,0.8)"
-                      strokeWidth="1.4"
-                      fill="none"
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M13 3.5 Q16 8 13 12.5"
-                      stroke="rgba(255,255,255,0.5)"
-                      strokeWidth="1.4"
-                      fill="none"
-                      strokeLinecap="round"
-                    />
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M3 6H1v4h2l4 3V3L3 6z" fill="rgba(255,255,255,0.8)" />
+                    <path d="M11 5.5 Q13 8 11 10.5" stroke="rgba(255,255,255,0.8)" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+                    <path d="M13 3.5 Q16 8 13 12.5" stroke="rgba(255,255,255,0.5)" strokeWidth="1.4" fill="none" strokeLinecap="round" />
                   </svg>
                   Hear today&apos;s summary
                 </button>
@@ -829,34 +615,16 @@ export default function Home() {
                 {/* Settings — collapsible */}
                 <details className="group">
                   <summary className="cursor-pointer text-xs text-blue-200 hover:text-white transition-colors list-none flex items-center gap-1 select-none">
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      className="transition-transform group-open:rotate-90"
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M4 2l4 4-4 4"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="transition-transform group-open:rotate-90" aria-hidden="true">
+                      <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                     Settings
                   </summary>
-
                   <div className="mt-3 flex flex-col gap-4 border-t border-white/20 pt-4">
                     <fieldset>
-                      <legend className="text-sm font-medium text-blue-200 mb-2">
-                        Update calorie goal
-                      </legend>
+                      <legend className="text-sm font-medium text-blue-200 mb-2">Update calorie goal</legend>
                       <div className="flex flex-wrap gap-2">
-                        <label htmlFor="calorie-goal-input" className="sr-only">
-                          New calorie goal
-                        </label>
+                        <label htmlFor="calorie-goal-input" className="sr-only">New calorie goal</label>
                         <input
                           id="calorie-goal-input"
                           type="number"
@@ -880,26 +648,15 @@ export default function Home() {
 
                     {mounted && (
                       <fieldset>
-                        <legend className="text-sm font-medium text-blue-200 mb-2">
-                          Voice preference
-                        </legend>
+                        <legend className="text-sm font-medium text-blue-200 mb-2">Voice preference</legend>
                         <select
                           value={selectedVoice}
                           onChange={(e) => setSelectedVoice(e.target.value)}
                           aria-label="Voice preference"
                           className="px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white"
                         >
-                          {[
-                            "alloy",
-                            "echo",
-                            "fable",
-                            "onyx",
-                            "nova",
-                            "shimmer",
-                          ].map((v) => (
-                            <option key={v} value={v} className="text-black">
-                              {v}
-                            </option>
+                          {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
+                            <option key={v} value={v} className="text-black">{v}</option>
                           ))}
                         </select>
                       </fieldset>
@@ -907,86 +664,34 @@ export default function Home() {
                   </div>
                 </details>
               </section>
-              {/* Log input row — voice + text side by side */}
-              <section
-                aria-labelledby="log-input-heading"
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-7"
-              >
-                <h2
-                  id="log-input-heading"
-                  className="text-lg font-semibold text-white mb-4"
-                >
+
+              {/* Log Food section */}
+              <section aria-labelledby="log-input-heading" className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-7">
+                <h2 id="log-input-heading" className="text-lg font-semibold text-white mb-4">
                   Log Food
                 </h2>
                 <div className="flex items-center gap-3 sm:items-end sm:gap-4">
                   <div className="flex-shrink-0 flex flex-col items-center gap-1.5">
-                    <span className="text-[10px] sm:text-xs text-blue-200">
-                      Speak to me
-                    </span>
+                    <span className="text-[10px] sm:text-xs text-blue-200">Speak to me</span>
                     <button
                       onClick={recording ? stopRecording : startRecording}
                       disabled={loading}
-                      aria-label={
-                        recording
-                          ? "Stop voice recording"
-                          : "Start voice recording to log food"
-                      }
-                      className={`w-10 h-10 rounded-full flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-white transition-colors disabled:cursor-not-allowed ${
-                        recording
-                          ? "bg-amber-500 hover:bg-amber-600"
-                          : "bg-green-600 hover:bg-green-700"
-                      }`}
+                      aria-label={recording ? "Stop voice recording" : "Start voice recording to log food"}
+                      className={`w-10 h-10 rounded-full flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-white transition-colors disabled:cursor-not-allowed ${recording ? "bg-amber-500 hover:bg-amber-600" : "bg-green-600 hover:bg-green-700"}`}
                     >
-                      <svg
-                        width="16"
-                        height="14"
-                        viewBox="0 0 64 56"
-                        fill="none"
-                      >
-                        <path
-                          d="M10 10 Q10 3 16 3 Q26 3 29 14 Q32 25 29 38 Q26 49 16 49 Q10 49 10 42 L10 36 Q15 39 20 36 Q27 33 27 22 Q27 11 20 8 Q15 6 13 10 Z"
-                          stroke="white"
-                          strokeWidth="2"
-                          fill="none"
-                          strokeLinejoin="round"
-                        />
-                        <path
-                          d="M13 25 Q11 29 13 33"
-                          stroke="white"
-                          strokeWidth="1.8"
-                          fill="none"
-                          strokeLinecap="round"
-                        />
-                        <path
-                          d="M36 12 Q44 28 36 44"
-                          stroke="white"
-                          strokeWidth="2"
-                          fill="none"
-                          strokeLinecap="round"
-                          opacity="0.85"
-                        />
-                        <path
-                          d="M43 7 Q54 28 43 49"
-                          stroke="white"
-                          strokeWidth="2"
-                          fill="none"
-                          strokeLinecap="round"
-                          opacity="0.55"
-                        />
+                      <svg width="16" height="14" viewBox="0 0 64 56" fill="none">
+                        <path d="M10 10 Q10 3 16 3 Q26 3 29 14 Q32 25 29 38 Q26 49 16 49 Q10 49 10 42 L10 36 Q15 39 20 36 Q27 33 27 22 Q27 11 20 8 Q15 6 13 10 Z" stroke="white" strokeWidth="2" fill="none" strokeLinejoin="round" />
+                        <path d="M13 25 Q11 29 13 33" stroke="white" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+                        <path d="M36 12 Q44 28 36 44" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.85" />
+                        <path d="M43 7 Q54 28 43 49" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.55" />
                       </svg>
                     </button>
                   </div>
 
-                  <div
-                    className="w-px h-10 bg-white/20 flex-shrink-0"
-                    aria-hidden="true"
-                  />
+                  <div className="w-px h-10 bg-white/20 flex-shrink-0" aria-hidden="true" />
 
                   <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-                    <label
-                      htmlFor="food-text-input"
-                      className="text-[10px] sm:text-xs text-blue-200"
-                    >
+                    <label htmlFor="food-text-input" className="text-[10px] sm:text-xs text-blue-200">
                       Type it instead
                     </label>
                     <div className="flex gap-1.5 sm:gap-2">
@@ -997,7 +702,7 @@ export default function Home() {
                         value={textInput}
                         onChange={(e) => setTextInput(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && submitText()}
-                        placeholder="e.g. two eggs"
+                        placeholder="e.g. two eggs and a coffee"
                         autoComplete="off"
                         className="flex-1 min-w-0 px-2 py-1.5 sm:px-3 sm:py-2.5 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
                       />
@@ -1005,16 +710,15 @@ export default function Home() {
                         onClick={submitText}
                         disabled={loading}
                         className="px-2.5 py-1.5 sm:px-4 sm:py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-green-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors flex-shrink-0"
-                        aria-label={
-                          loading ? "Logging food, please wait" : "Log food"
-                        }
+                        aria-label={loading ? "Logging food, please wait" : "Log food"}
                       >
                         {loading ? "..." : "Log food"}
                       </button>
                     </div>
                   </div>
                 </div>
-              </section>{" "}
+              </section>
+
               {/* Pending parse / clarification */}
               {pendingParse && (
                 <section
@@ -1022,66 +726,43 @@ export default function Home() {
                   aria-live="polite"
                   className={`border rounded-xl p-4 sm:p-6 ${pendingParse.parsed.confidence === "low" ? "bg-red-900/30 border-red-400/40" : "bg-yellow-900/30 border-yellow-400/40"}`}
                 >
-                  <h2
-                    id="confidence-heading"
-                    className="text-lg font-semibold text-white mb-1"
-                  >
-                    {pendingParse.parsed.confidence === "low"
-                      ? "Unsure"
-                      : "Less Sure"}
+                  <h2 id="confidence-heading" className="text-lg font-semibold text-white mb-1">
+                    {pendingParse.parsed.confidence === "low" ? "Unsure" : "Less Sure"}
                   </h2>
                   <p className="text-white text-sm mb-1">
-                    <strong>{pendingParse.parsed.food}</strong> —{" "}
-                    {pendingParse.parsed.calories} cal
+                    <strong>{pendingParse.parsed.food}</strong> — {pendingParse.parsed.calories} cal
                   </p>
                   {pendingParse.parsed.reasoning && (
-                    <p className="text-blue-200 text-sm mb-3">
-                      {pendingParse.parsed.reasoning}
-                    </p>
+                    <p className="text-blue-200 text-sm mb-3">{pendingParse.parsed.reasoning}</p>
                   )}
-                  {pendingParse.parsed.alternatives &&
-                    pendingParse.parsed.alternatives.length > 0 && (
-                      <div className="mb-4">
-                        <p className="text-xs text-blue-200 uppercase tracking-wide font-medium mb-2">
-                          Did you mean?
-                        </p>
-                        <div className="flex flex-col gap-2">
-                          {pendingParse.parsed.alternatives.map((alt, i) => (
-                            <button
-                              key={i}
-                              onClick={() => {
-                                setPendingParse({
-                                  ...pendingParse,
-                                  raw_input: alt,
-                                });
-                                confirmLog(pendingParse.uid, alt);
-                              }}
-                              className="text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                              aria-label={`Log ${alt} instead`}
-                            >
-                              {alt}
-                            </button>
-                          ))}
-                        </div>
-                        <p className="text-xs text-blue-200 mt-3">
-                          If none of these match, type or say what&apos;s needed
-                          and press{" "}
-                          <span className="font-medium text-white">
-                            Log Food
-                          </span>{" "}
-                          or{" "}
-                          <span className="font-medium text-white">
-                            Start recording
-                          </span>
-                          .
-                        </p>
+                  {pendingParse.parsed.alternatives && pendingParse.parsed.alternatives.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-xs text-blue-200 uppercase tracking-wide font-medium mb-2">Did you mean?</p>
+                      <div className="flex flex-col gap-2">
+                        {pendingParse.parsed.alternatives.map((alt, i) => (
+                          <button
+                            key={i}
+                            onClick={() => {
+                              setPendingParse({ ...pendingParse, raw_input: alt });
+                              confirmLog(pendingParse.uid, alt);
+                            }}
+                            className="text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                            aria-label={`Log ${alt} instead`}
+                          >
+                            {alt}
+                          </button>
+                        ))}
                       </div>
-                    )}
+                      <p className="text-xs text-blue-200 mt-3">
+                        If none of these match, type or say what&apos;s needed and press{" "}
+                        <span className="font-medium text-white">Log Food</span> or{" "}
+                        <span className="font-medium text-white">Speak to me</span>.
+                      </p>
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     <button
-                      onClick={() =>
-                        confirmLog(pendingParse.uid, pendingParse.raw_input)
-                      }
+                      onClick={() => confirmLog(pendingParse.uid, pendingParse.raw_input)}
                       className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                       aria-label={`Confirm and log ${pendingParse.parsed.food}`}
                     >
@@ -1102,6 +783,7 @@ export default function Home() {
                   </div>
                 </section>
               )}
+
               {/* Status live region */}
               {status && (
                 <div role="status" aria-live="polite" aria-atomic="true">
@@ -1110,6 +792,7 @@ export default function Home() {
                   </p>
                 </div>
               )}
+
               {/* Today's logs — toggled */}
               <section aria-labelledby="logs-heading">
                 <button
@@ -1118,24 +801,13 @@ export default function Home() {
                   aria-expanded={showLogs}
                   aria-controls="logs-table"
                 >
-                  <span id="logs-heading">
-                    Today&apos;s logs ({summary.entry_count})
-                  </span>
+                  <span id="logs-heading">Today&apos;s logs ({summary.entry_count})</span>
                   <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 12 12"
-                    fill="none"
+                    width="12" height="12" viewBox="0 0 12 12" fill="none"
                     className={`transition-transform ${showLogs ? "rotate-180" : ""}`}
                     aria-hidden="true"
                   >
-                    <path
-                      d="M2 4l4 4 4-4"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
+                    <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </button>
 
@@ -1143,87 +815,39 @@ export default function Home() {
                   <div id="logs-table" className="mt-3">
                     {logs.length === 0 ? (
                       <div className="bg-white/10 border border-white/20 rounded-xl p-8 text-center">
-                        <p className="text-blue-200 text-sm">
-                          Nothing logged yet today.
-                        </p>
-                        <p className="text-blue-300/60 text-xs mt-1">
-                          Type or speak what you ate to get started.
-                        </p>
+                        <p className="text-blue-200 text-sm">Nothing logged yet today.</p>
+                        <p className="text-blue-300/60 text-xs mt-1">Type or speak what you ate to get started.</p>
                       </div>
                     ) : (
                       <>
-                        <p className="text-xs text-blue-300/60 mb-1 sm:hidden">
-                          Scroll right to see more →
-                        </p>
+                        <p className="text-xs text-blue-300/60 mb-1 sm:hidden">Scroll right to see more →</p>
                         <div className="overflow-x-auto rounded-xl border border-white/20">
-                          <table
-                            className="w-full min-w-[500px] text-sm text-left"
-                            aria-label="Today's food log entries"
-                          >
+                          <table className="w-full min-w-[500px] text-sm text-left" aria-label="Today's food log entries">
                             <thead>
                               <tr className="border-b border-white/20 bg-white/10">
-                                <th
-                                  scope="col"
-                                  className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide"
-                                >
-                                  Food
-                                </th>
-                                <th
-                                  scope="col"
-                                  className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide"
-                                >
-                                  Cal
-                                </th>
-                                <th
-                                  scope="col"
-                                  className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide"
-                                >
-                                  Protein
-                                </th>
-                                <th
-                                  scope="col"
-                                  className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide"
-                                >
-                                  Carbs
-                                </th>
-                                <th
-                                  scope="col"
-                                  className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide"
-                                >
-                                  Fat
-                                </th>
-                                <th scope="col" className="px-3 py-2">
-                                  <span className="sr-only">Actions</span>
-                                </th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Food</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Cal</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Protein</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Carbs</th>
+                                <th scope="col" className="px-3 py-2 text-[10px] font-semibold text-blue-200 uppercase tracking-wide">Fat</th>
+                                <th scope="col" className="px-3 py-2"><span className="sr-only">Actions</span></th>
                               </tr>
                             </thead>
                             <tbody>
                               {logs.map((log, index) => (
-                                <tr
-                                  key={log._id}
-                                  className={`border-b border-white/10 last:border-0 ${index % 2 === 0 ? "bg-white/5" : "bg-transparent"}`}
-                                >
+                                <tr key={log._id} className={`border-b border-white/10 last:border-0 ${index % 2 === 0 ? "bg-white/5" : "bg-transparent"}`}>
                                   {editingId === log._id ? (
                                     <>
                                       <td colSpan={5} className="px-3 py-2">
-                                        <label
-                                          htmlFor={`edit-input-${log._id}`}
-                                          className="sr-only"
-                                        >
-                                          Edit food entry for {log.food_name}
-                                        </label>
+                                        <label htmlFor={`edit-input-${log._id}`} className="sr-only">Edit food entry for {log.food_name}</label>
                                         <input
                                           id={`edit-input-${log._id}`}
                                           ref={editInputRef}
                                           value={editInput}
-                                          onChange={(e) =>
-                                            setEditInput(e.target.value)
-                                          }
+                                          onChange={(e) => setEditInput(e.target.value)}
                                           onKeyDown={(e) => {
-                                            if (e.key === "Enter")
-                                              saveEdit(log._id);
-                                            if (e.key === "Escape")
-                                              setEditingId(null);
+                                            if (e.key === "Enter") saveEdit(log._id);
+                                            if (e.key === "Escape") setEditingId(null);
                                           }}
                                           placeholder="Describe what you ate"
                                           className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-blue-300 text-xs focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
@@ -1231,64 +855,27 @@ export default function Home() {
                                       </td>
                                       <td className="px-3 py-2">
                                         <div className="flex gap-2">
-                                          <button
-                                            onClick={() => saveEdit(log._id)}
-                                            className="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                                            aria-label={`Save edit for ${log.food_name}`}
-                                          >
-                                            Save
-                                          </button>
-                                          <button
-                                            onClick={() => setEditingId(null)}
-                                            className="px-2 py-1 bg-gray-600 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                                            aria-label="Cancel edit"
-                                          >
-                                            Cancel
-                                          </button>
+                                          <button onClick={() => saveEdit(log._id)} className="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors" aria-label={`Save edit for ${log.food_name}`}>Save</button>
+                                          <button onClick={() => setEditingId(null)} className="px-2 py-1 bg-gray-600 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors" aria-label="Cancel edit">Cancel</button>
                                         </div>
                                       </td>
                                     </>
                                   ) : (
                                     <>
-                                      <td className="px-3 py-2 text-white text-xs font-medium">
-                                        {log.food_name}
-                                      </td>
-                                      <td className="px-3 py-2 text-white text-xs">
-                                        {log.calories}
-                                      </td>
-                                      <td className="px-3 py-2 text-white text-xs">
-                                        {log.protein}g
-                                      </td>
-                                      <td className="px-3 py-2 text-white text-xs">
-                                        {log.carbs}g
-                                      </td>
-                                      <td className="px-3 py-2 text-white text-xs">
-                                        {log.fat}g
-                                      </td>
+                                      <td className="px-3 py-2 text-white text-xs font-medium">{log.food_name}</td>
+                                      <td className="px-3 py-2 text-white text-xs">{log.calories}</td>
+                                      <td className="px-3 py-2 text-white text-xs">{log.protein}g</td>
+                                      <td className="px-3 py-2 text-white text-xs">{log.carbs}g</td>
+                                      <td className="px-3 py-2 text-white text-xs">{log.fat}g</td>
                                       <td className="px-3 py-2">
                                         <div className="flex gap-2 justify-end">
                                           <button
-                                            onClick={() => {
-                                              setEditingId(log._id);
-                                              setEditInput(log.raw_input);
-                                            }}
+                                            onClick={() => { setEditingId(log._id); setEditInput(log.raw_input); }}
                                             className="p-1.5 rounded-lg bg-blue-500/20 hover:bg-blue-500/40 text-blue-200 hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                                             aria-label={`Edit ${log.food_name}`}
                                           >
-                                            <svg
-                                              width="12"
-                                              height="12"
-                                              viewBox="0 0 14 14"
-                                              fill="none"
-                                              aria-hidden="true"
-                                            >
-                                              <path
-                                                d="M9.5 1.5l3 3L4 13H1v-3L9.5 1.5z"
-                                                stroke="currentColor"
-                                                strokeWidth="1.4"
-                                                fill="none"
-                                                strokeLinejoin="round"
-                                              />
+                                            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                                              <path d="M9.5 1.5l3 3L4 13H1v-3L9.5 1.5z" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinejoin="round" />
                                             </svg>
                                           </button>
                                           <button
@@ -1296,20 +883,8 @@ export default function Home() {
                                             className="p-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/40 text-red-300 hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                                             aria-label={`Delete ${log.food_name}`}
                                           >
-                                            <svg
-                                              width="12"
-                                              height="12"
-                                              viewBox="0 0 14 14"
-                                              fill="none"
-                                              aria-hidden="true"
-                                            >
-                                              <path
-                                                d="M2 3.5h10M5 3.5V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5v1M5.5 6v4M8.5 6v4M3 3.5l.7 7.5a.5.5 0 00.5.5h5.6a.5.5 0 00.5-.5L11 3.5"
-                                                stroke="currentColor"
-                                                strokeWidth="1.4"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              />
+                                            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                                              <path d="M2 3.5h10M5 3.5V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5v1M5.5 6v4M8.5 6v4M3 3.5l.7 7.5a.5.5 0 00.5.5h5.6a.5.5 0 00.5-.5L11 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                                             </svg>
                                           </button>
                                         </div>
@@ -1319,7 +894,7 @@ export default function Home() {
                                 </tr>
                               ))}
                             </tbody>
-                          </table>{" "}
+                          </table>
                         </div>
                       </>
                     )}
@@ -1329,106 +904,34 @@ export default function Home() {
             </div>
           )}
         </main>
+
         {/* Bottom nav — mobile only */}
-        <nav
-          aria-label="Main navigation"
-          className="fixed bottom-0 left-0 right-0 bg-blue-800 border-t border-white/20 flex justify-around items-center py-2 sm:hidden"
-        >
-          <button
-            aria-label="Home"
-            className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
-          >
+        <nav aria-label="Main navigation" className="fixed bottom-0 left-0 right-0 bg-blue-800 border-t border-white/20 flex justify-around items-center py-2 sm:hidden">
+          <button aria-label="Home" className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M3 12L12 3L21 12V21H15V15H9V21H3V12Z"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                fill="none"
-                strokeLinejoin="round"
-              />
+              <path d="M3 12L12 3L21 12V21H15V15H9V21H3V12Z" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinejoin="round" />
             </svg>
             <span className="text-xs">Home</span>
           </button>
-          <button
-            aria-label="Progress"
-            className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
-          >
+          <button aria-label="Progress" className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <polyline
-                points="22 12 18 12 15 21 9 3 6 12 2 12"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
             <span className="text-xs">Progress</span>
           </button>
-          <button
-            aria-label="History"
-            className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
-          >
+          <button aria-label="History" className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <rect
-                x="3"
-                y="4"
-                width="18"
-                height="18"
-                rx="2"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                fill="none"
-              />
-              <line
-                x1="3"
-                y1="9"
-                x2="21"
-                y2="9"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              />
-              <line
-                x1="8"
-                y1="2"
-                x2="8"
-                y2="6"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-              />
-              <line
-                x1="16"
-                y1="2"
-                x2="16"
-                y2="6"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-              />
+              <rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.8" fill="none" />
+              <line x1="3" y1="9" x2="21" y2="9" stroke="currentColor" strokeWidth="1.8" />
+              <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              <line x1="16" y1="2" x2="16" y2="6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
             <span className="text-xs">History</span>
           </button>
-          <button
-            aria-label="Profile"
-            className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors"
-          >
+          <button aria-label="Profile" className="flex flex-col items-center gap-1 p-2 text-white/60 hover:text-white transition-colors">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <circle
-                cx="12"
-                cy="8"
-                r="4"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                fill="none"
-              />
-              <path
-                d="M4 20C4 17 7.6 15 12 15C16.4 15 20 17 20 20"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                fill="none"
-                strokeLinecap="round"
-              />
+              <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8" fill="none" />
+              <path d="M4 20C4 17 7.6 15 12 15C16.4 15 20 17 20 20" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" />
             </svg>
             <span className="text-xs">Profile</span>
           </button>

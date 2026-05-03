@@ -10,14 +10,16 @@ from backend.services.intent_classifier import classify_intent
 from backend.services.nutrition_service import parse_nutrition
 from backend.services.tts_service import generate_speech
 from fastapi.responses import Response
-
+import json
 
 router = APIRouter()
+
 
 class FoodLogRequest(BaseModel):
     user_id: str
     raw_input: str
     food_name: Optional[str] = None
+
 
 class CorrectionRequest(BaseModel):
     user_id: str
@@ -29,15 +31,20 @@ class CorrectionRequest(BaseModel):
     corrected_calories: Optional[float] = None
     correction_type: Optional[str] = None
 
+
 class ParseRequest(BaseModel):
     raw_input: str
+    conversation_history: list[dict] = []
+
 
 class TTSRequest(BaseModel):
     text: str
     voice: str = "alloy"
 
-    
-def build_food_log(user_id: str, raw_input: str, parsed: dict, food_name: Optional[str] = None) -> FoodLog:
+
+def build_food_log(
+    user_id: str, raw_input: str, parsed: dict, food_name: Optional[str] = None
+) -> FoodLog:
     macros = parsed.get("macronutrients", {})
     return FoodLog(
         user_id=user_id,
@@ -53,7 +60,10 @@ def build_food_log(user_id: str, raw_input: str, parsed: dict, food_name: Option
         alternatives=parsed.get("alternatives"),
     )
 
-def build_response(food_log: FoodLog, parsed: dict, transcription: Optional[str] = None) -> dict:
+
+def build_response(
+    food_log: FoodLog, parsed: dict, transcription: Optional[str] = None
+) -> dict:
     response = {
         "message": "Food logged successfully",
         "id": str(food_log.id),
@@ -64,7 +74,7 @@ def build_response(food_log: FoodLog, parsed: dict, transcription: Optional[str]
             "notes": parsed.get("notes"),
             "reasoning": parsed.get("reasoning"),
             "alternatives": parsed.get("alternatives"),
-        }
+        },
     }
     if transcription:
         response["transcription"] = transcription
@@ -77,7 +87,7 @@ async def parse_food(request: ParseRequest):
     Parse-only endpoint used by the frontend to decide whether to auto-log
     (high confidence) or ask the user to confirm (medium/low confidence).
     """
-    parsed = await parse_food_input(request.raw_input)
+    parsed = await parse_food_input(request.raw_input, request.conversation_history)
     return parsed
 
 
@@ -86,17 +96,23 @@ async def log_food(request: FoodLogRequest):
     parsed = await parse_food_input(request.raw_input)
 
     if "error" in parsed:
-        raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
+        raise HTTPException(
+            status_code=422, detail=f"Could not parse food input: {parsed}"
+        )
 
-    food_log = build_food_log(request.user_id, request.raw_input, parsed, request.food_name)
+    food_log = build_food_log(
+        request.user_id, request.raw_input, parsed, request.food_name
+    )
     await food_log.insert()
 
     return build_response(food_log, parsed)
+
 
 @router.post("/food/voice")
 async def log_food_voice(
     user_id: str = Form(...),
     audio: UploadFile = File(...),
+    conversation_history: str = Form(default="[]"),
 ):
     audio_bytes = await audio.read()
     raw_input = await transcribe_audio(audio_bytes, audio.filename)
@@ -104,7 +120,11 @@ async def log_food_voice(
     intent = await classify_intent(raw_input)
 
     if intent["intent"] == "delete_last":
-        last = await FoodLog.find(FoodLog.user_id == user_id).sort(-FoodLog.logged_at).first_or_none()
+        last = (
+            await FoodLog.find(FoodLog.user_id == user_id)
+            .sort(-FoodLog.logged_at)
+            .first_or_none()
+        )
         if last:
             await last.delete()
             return {"message": "Last entry deleted", "transcription": raw_input}
@@ -112,44 +132,57 @@ async def log_food_voice(
 
     if intent["intent"] == "calories_today":
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        logs = await FoodLog.find(FoodLog.user_id == user_id, FoodLog.logged_at >= start).to_list()
+        logs = await FoodLog.find(
+            FoodLog.user_id == user_id, FoodLog.logged_at >= start
+        ).to_list()
         total = sum(log.calories or 0 for log in logs)
-        return {"message": f"You have logged {total} calories today", "transcription": raw_input}
+        return {
+            "message": f"You have logged {total} calories today",
+            "transcription": raw_input,
+        }
 
     if intent["intent"] == "read_today":
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        logs = await FoodLog.find(FoodLog.user_id == user_id, FoodLog.logged_at >= start).to_list()
+        logs = await FoodLog.find(
+            FoodLog.user_id == user_id, FoodLog.logged_at >= start
+        ).to_list()
         names = ", ".join(log.food_name for log in logs) or "nothing yet"
         return {"message": f"Today you ate: {names}", "transcription": raw_input}
 
     # default — treat as food log
-    parsed = await parse_food_input(raw_input)
+    history = json.loads(conversation_history)
+    parsed = await parse_food_input(raw_input, history)
     if "error" in parsed:
-        raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
+        raise HTTPException(
+            status_code=422, detail=f"Could not parse food input: {parsed}"
+        )
 
     food_log = build_food_log(user_id, raw_input, parsed)
     await food_log.insert()
     return build_response(food_log, parsed, transcription=raw_input)
+
 
 @router.post("/food/tts")
 async def text_to_speech(request: TTSRequest):
     audio = await generate_speech(request.text, request.voice)
     return Response(content=audio, media_type="audio/mpeg")
 
+
 @router.get("/food/{user_id}/today")
 async def get_today_food(user_id: str):
     now = datetime.now(timezone.utc)
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    
+
     logs = await FoodLog.find(
-        FoodLog.user_id == user_id,
-        FoodLog.logged_at >= start_of_day
+        FoodLog.user_id == user_id, FoodLog.logged_at >= start_of_day
     ).to_list()
-    
+
     return logs
 
 
@@ -159,8 +192,7 @@ async def get_daily_summary(user_id: str):
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     logs = await FoodLog.find(
-        FoodLog.user_id == user_id,
-        FoodLog.logged_at >= start_of_day
+        FoodLog.user_id == user_id, FoodLog.logged_at >= start_of_day
     ).to_list()
 
     return {
@@ -170,7 +202,7 @@ async def get_daily_summary(user_id: str):
         "fat": sum(log.fat or 0 for log in logs),
         "entry_count": len(logs),
     }
-    
+
 
 @router.get("/food/{user_id}")
 async def get_food_logs(user_id: str):
@@ -195,7 +227,9 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
 
     parsed = await parse_food_input(request.raw_input)
     if "error" in parsed:
-        raise HTTPException(status_code=422, detail=f"Could not parse food input: {parsed}")
+        raise HTTPException(
+            status_code=422, detail=f"Could not parse food input: {parsed}"
+        )
 
     food_changed = food_log.food_name.lower() != parsed["food"].lower()
     quantity_changed = food_log.quantity != parsed.get("serving_size")
@@ -232,21 +266,30 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     await food_log.save()
     return build_response(food_log, parsed)
 
+
 @router.get("/food/{user_id}/weekly")
 async def get_weekly_summary(user_id: str):
     now = datetime.now(timezone.utc)
-    start_of_week = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+    start_of_week = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+        days=6
+    )
 
     logs = await FoodLog.find(
-        FoodLog.user_id == user_id,
-        FoodLog.logged_at >= start_of_week
+        FoodLog.user_id == user_id, FoodLog.logged_at >= start_of_week
     ).to_list()
 
     days = {}
     for log in logs:
         day = log.logged_at.strftime("%Y-%m-%d")
         if day not in days:
-            days[day] = {"date": day, "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "entries": 0}
+            days[day] = {
+                "date": day,
+                "calories": 0,
+                "protein": 0,
+                "carbs": 0,
+                "fat": 0,
+                "entries": 0,
+            }
         days[day]["calories"] += log.calories or 0
         days[day]["protein"] += log.protein or 0
         days[day]["carbs"] += log.carbs or 0
@@ -260,14 +303,16 @@ async def get_weekly_summary(user_id: str):
             "protein": sum(log.protein or 0 for log in logs),
             "carbs": sum(log.carbs or 0 for log in logs),
             "fat": sum(log.fat or 0 for log in logs),
-        }
+        },
     }
+
 
 @router.post("/test-confidence")
 async def test_confidence(transcript: str):
     """Test confidence parsing with a sample transcript."""
     result = await parse_nutrition(transcript)
     return result
+
 
 @router.post("/corrections")
 async def save_correction(request: CorrectionRequest):
