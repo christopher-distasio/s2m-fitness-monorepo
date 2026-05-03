@@ -43,21 +43,43 @@ Alternatives rules:
 - For low confidence where the food is known but quantity is vague: still provide 2 to 3 portion size alternatives
 - For low confidence where both food and quantity are unknown: return alternatives as an empty array []
 - Match alternatives to the actual source of uncertainty
+
+Clarification flow:
+If conversation_history is provided, the user is responding to a previous ambiguous parse.
+"A small bowl", "medium portion", "just a little" etc. are quantity clarifications — NOT standalone food descriptions.
+Combine the previous food from history with the new quantity/detail to produce a complete parse.
+Example: history has "pasta", user says "a small bowl" → parse as "a small bowl of pasta".
+NEVER return unparseable for a clarification response.
 """
 
-async def parse_food_input(raw_input: str) -> dict:
-    # Step 1 — GPT identifies the food and confidence
+async def parse_food_input(raw_input: str, conversation_history: list = []) -> dict:
+    # If this is a clarification, combine with previous food
+    if conversation_history:
+        try:
+            last_assistant = next(
+                m for m in reversed(conversation_history) if m["role"] == "assistant"
+            )
+            prev = json.loads(last_assistant["content"])
+            food = prev.get("food")
+            if food:
+                raw_input = f"{raw_input} of {food}"
+        except Exception:
+            pass
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(conversation_history)
+    messages.append({"role": "user", "content": raw_input})    
+    print("MESSAGES SENT TO GPT:", json.dumps(messages, indent=2))
     response = await client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": raw_input}
-        ],
+        messages=messages,
         temperature=0.2,
         max_tokens=400,
     )
 
     content = response.choices[0].message.content.strip()
+
+    print("GPT response:", content)
 
     try:
         parsed = json.loads(content)
@@ -79,7 +101,6 @@ async def parse_food_input(raw_input: str) -> dict:
             "carbohydrates": nutrition["carbs"],
             "protein": nutrition["protein"],
             "fats": nutrition["fat"],
-            "sugar": None,  # Edamam basic tier doesn't return sugar separately
         }
         parsed["data_source"] = "edamam"
     else:

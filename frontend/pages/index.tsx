@@ -111,6 +111,10 @@ export default function Home() {
     fat: false,
   });
 
+  const [conversationHistory, setConversationHistory] = useState<
+    Array<{ role: "user" | "assistant"; content: string }>
+  >([]);
+
   useEffect(() => {
     if (!userId) return;
     fetchLogs();
@@ -167,6 +171,7 @@ export default function Home() {
   }
 
   async function submitText() {
+    // console.log(conversationHistory)
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -179,7 +184,10 @@ export default function Home() {
       const res = await fetch(`${API_BASE}/food/parse`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ raw_input: textInput }),
+        body: JSON.stringify({
+          raw_input: textInput,
+          conversation_history: conversationHistory,
+        }),
       });
       const parsed = await res.json();
 
@@ -192,8 +200,15 @@ export default function Home() {
       }
 
       if (parsed.confidence === "high") {
-        await confirmLog(uid, textInput);
+        const resolvedInput = `${parsed.serving_size} ${parsed.food}`;
+        await confirmLog(uid, resolvedInput);
       } else {
+        // Add this exchange to conversation history
+        setConversationHistory((prev) => [
+          ...prev,
+          { role: "user", content: textInput },
+          { role: "assistant", content: JSON.stringify(parsed) },
+        ]);
         setPendingParse({ parsed, raw_input: textInput, uid });
         const alternatives = parsed.alternatives?.join(", or ") ?? "";
         const msg =
@@ -262,6 +277,7 @@ export default function Home() {
       setLoading(true);
       setStatus("Transcribing...");
       try {
+        formData.append("conversation_history", JSON.stringify(conversationHistory));
         const res = await fetch(`${API_BASE}/food/voice`, {
           method: "POST",
           body: formData,
@@ -298,6 +314,11 @@ export default function Home() {
             raw_input: data.transcription,
             uid,
           });
+          setConversationHistory((prev) => [
+            ...prev,
+            { role: "user", content: data.transcription },
+            { role: "assistant", content: JSON.stringify(data.parsed) },
+          ]);
           const alternatives = data.parsed.alternatives?.join(", or ") ?? "";
           const msg =
             data.parsed.confidence === "low"
@@ -361,6 +382,8 @@ export default function Home() {
     speak(msg);
     setTextInput("");
     setPendingParse(null);
+    // Clear history — conversation is resolved
+    setConversationHistory([]);
     fetchLogs(uid);
     fetchSummary(uid);
   }
@@ -504,7 +527,8 @@ export default function Home() {
                 await supabase.auth.signOut();
                 router.push("/login");
               }}
-              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-[10px] sm:text-xs font-semibold rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-white transition-colors"              aria-label="Sign out"
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-[10px] sm:text-xs font-semibold rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+              aria-label="Sign out"
             >
               Sign out
             </button>
@@ -919,6 +943,7 @@ export default function Home() {
                         onClick={() => {
                           setPendingParse(null);
                           setStatus("");
+                          setConversationHistory([]);
                           textInputRef.current?.focus();
                         }}
                         className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
