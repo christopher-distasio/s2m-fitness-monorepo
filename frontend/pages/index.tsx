@@ -277,7 +277,10 @@ export default function Home() {
       setLoading(true);
       setStatus("Transcribing...");
       try {
-        formData.append("conversation_history", JSON.stringify(conversationHistory));
+        formData.append(
+          "conversation_history",
+          JSON.stringify(conversationHistory),
+        );
         const res = await fetch(`${API_BASE}/food/voice`, {
           method: "POST",
           body: formData,
@@ -616,7 +619,6 @@ export default function Home() {
                 </svg>
                 <span>{recording ? "Listening..." : "Speak to me"}</span>
               </button>
-
               <div className="mt-8 max-w-xs">
                 <p className="text-white/40 text-xs mb-3">Try saying:</p>
                 <div className="flex flex-wrap justify-center gap-2">
@@ -636,6 +638,10 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+              <p className="text-white/60 text-xs mt-4 max-w-xs text-center">
+                ( If I'm not sure what you said, I'll ask you to clarify. Then just press the large "Speak to me" circle again to
+                speak the missing details. )
+              </p>
 
               {status && (
                 <p className="mt-6 px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white text-sm max-w-sm">
@@ -926,6 +932,19 @@ export default function Home() {
                               </button>
                             ))}
                           </div>
+                          <p className="text-xs text-blue-200 mt-3">
+                            If none of these options match, type or say what's
+                            needed (e.g. "large bowl") in "Log by text" then
+                            press{" "}
+                            <span className="font-medium text-white">
+                              Log Food
+                            </span>{" "}
+                            , or press{" "}
+                            <span className="font-medium text-white">
+                              Log by voice
+                            </span>
+                            .
+                          </p>{" "}
                         </div>
                       )}
 
