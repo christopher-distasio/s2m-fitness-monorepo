@@ -470,6 +470,7 @@ export default function Home() {
 
           <div className="flex items-center gap-3">
             <button
+              type="button"
               onClick={async () => {
                 if (!userId) return;
                 await supabase.auth.signOut();
@@ -496,7 +497,7 @@ export default function Home() {
 
         <main id="main-content">
           {mode === "speak" ? (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
+            <section aria-label="Log food by voice" className="flex flex-col items-center justify-center py-20 text-center">
               <button
                 type="button"
                 onClick={recording ? stopRecording : startRecording}
@@ -531,11 +532,13 @@ export default function Home() {
               </div>
 
               {status && (
-                <p className="mt-6 px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white text-sm max-w-sm">
-                  {status}
-                </p>
+                <div role="status" aria-live="polite" aria-atomic="true" className="mt-6 max-w-sm">
+                  <p className="px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white text-sm">
+                    {status}
+                  </p>
+                </div>
               )}
-            </div>
+            </section>
           ) : (
             <div className="flex flex-col gap-3">
 
@@ -623,6 +626,7 @@ export default function Home() {
 
                 {/* Hear Today's Summary button */}
                 <button
+                  type="button"
                   onClick={() => {
                     const msg = `Today you've had ${summary.calories} calories. Protein: ${Number(summary.protein).toFixed(1)} grams. Carbs: ${Number(summary.carbs).toFixed(1)} grams. Fat: ${Number(summary.fat).toFixed(1)} grams. You're at ${caloriePercent}% of your daily goal.`;
                     speak(msg);
@@ -674,11 +678,11 @@ export default function Home() {
 
                     {mounted && (
                       <fieldset>
-                        <legend className="text-sm font-medium text-white mb-2">Voice preference</legend>
+                        <legend id="voice-preference-legend" className="text-sm font-medium text-white mb-2">Voice preference</legend>
                         <select
                           value={selectedVoice}
                           onChange={(e) => setSelectedVoice(e.target.value)}
-                          aria-label="Voice preference"
+                          aria-labelledby="voice-preference-legend"
                           className="px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white"
                         >
                           {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
@@ -735,10 +739,12 @@ export default function Home() {
                         className="flex-1 min-w-0 px-2 py-1.5 sm:px-3 sm:py-2.5 rounded-lg bg-white/60 border border-white/30 text-blue-900 placeholder-blue-900 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
                       />
                       <button
+                        type="button"
                         onClick={submitText}
                         disabled={loading}
                         className="px-2.5 py-1.5 sm:px-4 sm:py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-green-800 disabled:cursor-not-allowed text-white font-semibold rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors flex-shrink-0"
                         aria-label={loading ? "Logging food, please wait" : "Log food"}
+                        aria-busy={loading}
                       >
                         {loading ? "..." : "Log food"}
                       </button>
@@ -772,6 +778,7 @@ export default function Home() {
                         {pendingParse.parsed.alternatives.map((alt, i) => (
                           <button
                             key={i}
+                            type="button"
                             onClick={() => {
                               setPendingParse({ ...pendingParse, raw_input: alt });
                               confirmLog(pendingParse.uid, alt);
@@ -792,6 +799,7 @@ export default function Home() {
                   )}
                   <div className="flex flex-wrap gap-2">
                     <button
+                      type="button"
                       onClick={() => confirmLog(pendingParse.uid, pendingParse.raw_input)}
                       className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                       aria-label={`Confirm and log ${pendingParse.parsed.food}`}
@@ -799,6 +807,7 @@ export default function Home() {
                       Yes, log it
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         setPendingParse(null);
                         setStatus("");
@@ -826,10 +835,12 @@ export default function Home() {
               {/* Today's logs — toggled */}
               <section aria-labelledby="logs-heading">
                 <button
+                  type="button"
                   onClick={() => setShowLogs((prev) => !prev)}
                   className="w-full flex items-center justify-between px-4 py-3 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                   aria-expanded={showLogs ? "true" : "false"}
                   aria-controls="logs-table"
+                  id="logs-disclosure-button"
                 >
                   <span id="logs-heading">Today&apos;s logs ({summary.entry_count})</span>
                   <svg
@@ -885,8 +896,8 @@ export default function Home() {
                                       </td>
                                       <td className="px-3 py-2">
                                         <div className="flex gap-2">
-                                          <button onClick={() => saveEdit(log._id)} className="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors" aria-label={`Save edit for ${log.food_name}`}>Save</button>
-                                          <button onClick={() => setEditingId(null)} className="px-2 py-1 bg-gray-600 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors" aria-label="Cancel edit">Cancel</button>
+                                          <button type="button" onClick={() => saveEdit(log._id)} className="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors" aria-label={`Save edit for ${log.food_name}`}>Save</button>
+                                          <button type="button" onClick={() => setEditingId(null)} className="px-2 py-1 bg-gray-600 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors" aria-label="Cancel edit">Cancel</button>
                                         </div>
                                       </td>
                                     </>
@@ -900,6 +911,7 @@ export default function Home() {
                                       <td className="px-3 py-2">
                                         <div className="flex gap-2 justify-end">
                                           <button
+                                            type="button"
                                             onClick={() => { setEditingId(log._id); setEditInput(log.raw_input); }}
                                             className="p-1.5 rounded-lg bg-blue-500/20 hover:bg-blue-500/40 text-white hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                                             aria-label={`Edit ${log.food_name}`}
@@ -909,6 +921,7 @@ export default function Home() {
                                             </svg>
                                           </button>
                                           <button
+                                            type="button"
                                             onClick={() => deleteLog(log._id)}
                                             className="p-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/40 text-red-300 hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                                             aria-label={`Delete ${log.food_name}`}
