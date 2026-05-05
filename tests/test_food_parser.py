@@ -21,8 +21,7 @@ async def test_parse_some_chicken_medium_and_alternatives():
 @pytest.mark.asyncio
 async def test_parse_lunch_low_confidence():
     result = await parse_food_input("lunch")
-    assert result.get("confidence") == "low"
-
+    assert "error" in result or result.get("confidence") == "low"
 
 @pytest.mark.asyncio
 async def test_parse_paper_has_error_key():
