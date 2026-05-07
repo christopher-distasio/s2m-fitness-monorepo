@@ -44,7 +44,7 @@ export default function Login() {
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder:text-white/70 mb-4 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
+            className="w-full px-3 py-2 rounded-lg bg-blue-950 border border-blue-800 text-white placeholder:text-blue-200 mb-4 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
           />
           <label htmlFor="login-password" className="block text-sm font-semibold text-white mb-1">
             Password
@@ -57,7 +57,7 @@ export default function Login() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder:text-white/70 mb-3 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
+            className="w-full px-3 py-2 rounded-lg bg-blue-950 border border-blue-800 text-white placeholder:text-blue-200 mb-3 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
           />
           {error && (
             <p role="alert" className="text-red-200 text-sm mb-3 font-medium">

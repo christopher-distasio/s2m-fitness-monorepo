@@ -583,6 +583,7 @@ export default function Home() {
         </header>
 
         <main id="main-content">
+          <h1 className="sr-only">S2M — Log Your Food</h1>
           {mode === "speak" ? (
             <section
               aria-label="Log food by voice"
@@ -698,8 +699,8 @@ export default function Home() {
                 </h2>
 
                 <div className="flex gap-3 mb-3">
-                  <div className="bg-white/10 rounded-lg p-3 text-center min-w-[100px]">
-                    <p className="text-xs text-white uppercase tracking-wide font-medium">
+                  <div className="rounded-lg bg-blue-950 border border-blue-800/80 p-3 text-center min-w-[100px]">
+                    <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
                       Calories
                     </p>
                     <p
@@ -707,7 +708,7 @@ export default function Home() {
                       aria-label={`${summary.calories} of ${calorieGoal} calories`}
                     >
                       {summary.calories}
-                      <span className="text-sm font-normal text-white">
+                      <span className="text-sm font-normal text-blue-100">
                         /{calorieGoal}
                       </span>
                     </p>
@@ -751,39 +752,39 @@ export default function Home() {
                     {Object.values(showNutrients).some(Boolean) && (
                       <div className="flex gap-2">
                         {showNutrients.protein && (
-                          <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-white uppercase tracking-wide font-medium">
+                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
+                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
                               Protein
                             </p>
                             <p className="text-base font-bold text-white">
                               {Number(summary.protein).toFixed(1)}
-                              <span className="text-xs font-normal text-white">
+                              <span className="text-xs font-normal text-blue-100">
                                 g
                               </span>
                             </p>
                           </div>
                         )}
                         {showNutrients.carbs && (
-                          <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-white uppercase tracking-wide font-medium">
+                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
+                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
                               Carbs
                             </p>
                             <p className="text-base font-bold text-white">
                               {Number(summary.carbs).toFixed(1)}
-                              <span className="text-xs font-normal text-white">
+                              <span className="text-xs font-normal text-blue-100">
                                 g
                               </span>
                             </p>
                           </div>
                         )}
                         {showNutrients.fat && (
-                          <div className="bg-white/10 rounded-lg p-2 text-center flex-1">
-                            <p className="text-xs text-white uppercase tracking-wide font-medium">
+                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
+                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
                               Fat
                             </p>
                             <p className="text-base font-bold text-white">
                               {Number(summary.fat).toFixed(1)}
-                              <span className="text-xs font-normal text-white">
+                              <span className="text-xs font-normal text-blue-100">
                                 g
                               </span>
                             </p>
