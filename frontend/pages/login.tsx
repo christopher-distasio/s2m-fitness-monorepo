@@ -10,6 +10,18 @@ export default function Login() {
   const [error, setError] = useState("");
   const router = useRouter();
 
+  async function handleGuestLogin() {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: process.env.NEXT_PUBLIC_GUEST_EMAIL!,
+      password: process.env.NEXT_PUBLIC_GUEST_PASSWORD!,
+    });
+    if (error) {
+      setError(error.message);
+    } else {
+      router.push("/");
+    }
+  }
+
   async function handleSubmit() {
     const { error } = isRegister
       ? await supabase.auth.signUp({ email, password })
@@ -34,7 +46,10 @@ export default function Login() {
           <h1 className="text-2xl font-bold text-white mb-6">
             {isRegister ? "Create account" : "Sign in"}
           </h1>
-          <label htmlFor="login-email" className="block text-sm font-semibold text-white mb-1">
+          <label
+            htmlFor="login-email"
+            className="block text-sm font-semibold text-white mb-1"
+          >
             Email
           </label>
           <input
@@ -46,7 +61,10 @@ export default function Login() {
             onChange={(e) => setEmail(e.target.value)}
             className="w-full px-3 py-2 rounded-lg bg-blue-950 border border-blue-800 text-white placeholder:text-blue-200 mb-4 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
           />
-          <label htmlFor="login-password" className="block text-sm font-semibold text-white mb-1">
+          <label
+            htmlFor="login-password"
+            className="block text-sm font-semibold text-white mb-1"
+          >
             Password
           </label>
           <input
@@ -82,11 +100,11 @@ export default function Login() {
           </button>
           <button
             type="button"
-            onClick={() => router.push("/demo")}
+            onClick={handleGuestLogin}
             className="w-full mt-3 py-2.5 bg-blue-900 text-white text-sm font-semibold rounded-lg hover:bg-blue-950 border border-blue-950 transition-colors focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700"
           >
-            Try Demo (Currently a static display)
-          </button>
+            Try Demo
+          </button>{" "}
         </div>
       </main>
     </>

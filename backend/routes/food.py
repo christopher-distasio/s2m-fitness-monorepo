@@ -210,6 +210,12 @@ async def get_food_logs(user_id: str):
     return logs
 
 
+@router.delete("/food/{user_id}/all")
+async def delete_all_food_logs(user_id: str):
+    await FoodLog.find(FoodLog.user_id == user_id).delete()
+    return {"message": "All logs deleted"}
+
+
 @router.delete("/food/{log_id}")
 async def delete_food_log(log_id: str):
     food_log = await FoodLog.get(log_id)

@@ -111,10 +111,19 @@ export default function Home() {
     } = await supabase.auth.getSession();
     if (!session) return;
     const uid = session.user.id;
+    setUserId(uid);
     const res = await fetch(`${API_BASE}/user/${uid}/profile`);
     const data = await res.json();
     setCalorieGoal(data.calorie_goal);
   }, []);
+
+  const GUEST_USER_ID = "c0daaa18-4a82-4022-be8e-e21224683f88";
+  const isGuest = userId === GUEST_USER_ID;
+
+  const caloriePercent = Math.min(
+    100,
+    Math.round((summary.calories / calorieGoal) * 100),
+  );
 
   useEffect(() => {
     if (!userId) return;
@@ -306,9 +315,9 @@ export default function Home() {
         }
 
         if (data.parsed.confidence === "high") {
-          const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
+          const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
           setStatus(
-            `Heard: "${data.transcription}" — ${data.parsed.food}, ${data.parsed.calories} cal`,
+            `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories)} cal`,
           );
           speak(msg);
           await fetchLogs(uid);
@@ -382,7 +391,7 @@ export default function Home() {
       body: JSON.stringify({ user_id: uid, raw_input }),
     });
     const data = await res.json();
-    const msg = `Logged ${data.parsed.food}, ${data.parsed.calories} calories`;
+    const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
     setStatus(msg);
     speak(msg);
     setTextInput("");
@@ -392,10 +401,17 @@ export default function Home() {
     fetchSummary(uid);
   }
 
-  const caloriePercent = Math.min(
-    100,
-    Math.round((summary.calories / calorieGoal) * 100),
-  );
+  async function clearDemoData() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
+    if (!confirm("Clear all demo data?")) return;
+    const uid = session.user.id;
+    await fetch(`${API_BASE}/food/${uid}/all`, { method: "DELETE" });
+    await fetchLogs(uid);
+    await fetchSummary(uid);
+  }
 
   if (!mounted) return null;
 
@@ -707,7 +723,7 @@ export default function Home() {
                       className="text-2xl font-bold text-white"
                       aria-label={`${summary.calories} of ${calorieGoal} calories`}
                     >
-                      {summary.calories}
+                      {Math.round(summary.calories)}
                       <span className="text-sm font-normal text-blue-100">
                         /{calorieGoal}
                       </span>
@@ -802,7 +818,7 @@ export default function Home() {
                   </label>
                   <progress
                     id="calorie-progress"
-                    value={summary.calories}
+                    value={Math.round(summary.calories)}
                     max={calorieGoal}
                     className="w-full h-3 rounded-full overflow-hidden appearance-none [&::-webkit-progress-bar]:bg-white/20 [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:transition-all [&::-webkit-progress-value]:duration-500"
                     style={{
@@ -1077,7 +1093,7 @@ export default function Home() {
                   </h2>
                   <p className="text-white text-sm mb-1">
                     <strong>{pendingParse.parsed.food}</strong> —{" "}
-                    {pendingParse.parsed.calories} cal
+                    {Math.round(pendingParse.parsed.calories)} cal{" "}
                   </p>
                   {pendingParse.parsed.reasoning && (
                     <p className="text-white text-sm mb-3">
@@ -1190,6 +1206,17 @@ export default function Home() {
                     />
                   </svg>
                 </button>
+
+                {isGuest && (
+                  <button
+                    type="button"
+                    onClick={clearDemoData}
+                    className="w-full mt-2 py-2 bg-red-500/20 hover:bg-red-500/40 border border-red-400/30 text-red-200 text-xs font-medium rounded-xl transition-colors focus:outline-none focus:ring-2 focus:ring-white"
+                    aria-label="Clear all demo data"
+                  >
+                    Clear demo data
+                  </button>
+                )}
 
                 {showLogs && (
                   <div id="logs-table" className="mt-3">
