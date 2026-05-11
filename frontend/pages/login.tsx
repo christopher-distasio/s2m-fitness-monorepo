@@ -42,7 +42,7 @@ export default function Login() {
         <title>{title}</title>
       </Head>
       <main className="min-h-screen bg-blue-700 flex items-center justify-center px-4">
-        <div className="bg-white/15 border border-white/25 rounded-xl p-8 w-full max-w-sm shadow-lg backdrop-blur-sm">
+        <div className="bg-white/20 border border-white/25 rounded-xl p-8 w-full max-w-sm shadow-lg">
           <h1 className="text-2xl font-bold text-white mb-6">
             {isRegister ? "Create account" : "Sign in"}
           </h1>

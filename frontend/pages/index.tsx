@@ -705,7 +705,7 @@ export default function Home() {
               {/* Today's Summary Card */}
               <section
                 aria-labelledby="summary-heading"
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-6"
+                className="bg-white/15 border border-white/20 rounded-xl p-4 sm:p-6"
               >
                 <h2
                   id="summary-heading"
@@ -967,7 +967,7 @@ export default function Home() {
               {/* Log Food section */}
               <section
                 aria-labelledby="log-input-heading"
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 sm:p-7"
+                className="bg-white/15 border border-white/20 rounded-xl p-4 sm:p-7"
               >
                 <h2
                   id="log-input-heading"
