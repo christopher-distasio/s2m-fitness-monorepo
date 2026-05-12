@@ -269,14 +269,24 @@ export default function Home() {
   }
 
   async function startRecording() {
+    // Unlock audio context for Safari
+    const AudioContext =
+      window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContext) {
+      const ctx = new AudioContext();
+      ctx.resume();
+    }
     const {
       data: { session },
     } = await supabase.auth.getSession();
     if (!session) return;
     const uid = session.user.id;
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-    const recorder = new MediaRecorder(stream, { mimeType });    chunksRef.current = [];
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm")
+      ? "audio/webm"
+      : "audio/mp4";
+    const recorder = new MediaRecorder(stream, { mimeType });
+    chunksRef.current = [];
     recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
     recorder.onstop = async () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
