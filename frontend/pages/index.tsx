@@ -230,6 +230,7 @@ export default function Home() {
         speak(msg);
         setTextInput("");
       }
+      setConversationHistory([]);
     } catch {
       const err = "Error logging food.";
       setStatus(err);
@@ -333,6 +334,7 @@ export default function Home() {
           speak(msg);
           await fetchLogs(uid);
           await fetchSummary(uid);
+          setConversationHistory([]);
         } else {
           setPendingParse({
             parsed: data.parsed,
