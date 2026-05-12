@@ -31,6 +31,7 @@ Rules:
 - Never guess wildly — if uncertain, set confidence to "low" and explain in notes
 - If the input is a single common food with an explicit quantity/size, set "confidence" to "high" unless something is genuinely ambiguous
 - Only return { "error": "unparseable", "raw": "<input>" } if the input has absolutely nothing to do with food
+- Serving_size should be quantity only (e.g. '2', '1 cup'), not include the food name
 
 Confidence rules:
 - "high": food and quantity are clear and specific (e.g. "one banana", "two scrambled eggs")
