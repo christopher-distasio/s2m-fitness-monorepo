@@ -275,16 +275,17 @@ export default function Home() {
     if (!session) return;
     const uid = session.user.id;
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(stream);
-    chunksRef.current = [];
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+    const recorder = new MediaRecorder(stream, { mimeType });    chunksRef.current = [];
     recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
     recorder.onstop = async () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
-      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      const extension = mimeType === "audio/webm" ? "webm" : "mp4";
       const formData = new FormData();
       formData.append("user_id", uid);
-      formData.append("audio", blob, "recording.webm");
+      formData.append("audio", blob, `recording.${extension}`);
       formData.append(
         "conversation_history",
         JSON.stringify(conversationHistory),
