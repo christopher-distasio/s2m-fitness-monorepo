@@ -6,6 +6,71 @@ import { speak as _speak } from "../lib/speak";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+const VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] as const;
+
+const STORAGE_KEYS = {
+  summaryOnOpen: "speak2me_summary_on_open",
+  autoListen: "speak2me_auto_listen",
+  greetOnOpen: "speak2me_greet",
+} as const;
+
+const GREET_ON_OPEN_MESSAGE =
+  "Welcome back. Say what you ate, ask for your total, or say delete my last entry.";
+
+const HOW_IT_WORKS_TEXT =
+  "In Speak mode, just talk. Say what you ate, ask for your total, or say delete my last entry. I will ask follow-up questions one at a time if I need more detail. In See mode, use the buttons. Switch modes anytime with the toggle at the top.";
+
+function readStoredBoolean(key: string, defaultValue: boolean) {
+  if (typeof window === "undefined") return defaultValue;
+  const stored = localStorage.getItem(key);
+  return stored === null ? defaultValue : stored === "true";
+}
+
+function persistBoolean(key: string, value: boolean) {
+  localStorage.setItem(key, String(value));
+}
+
+type SummarySnapshot = {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+};
+
+function buildTodaysSummaryMessage(s: SummarySnapshot, goal: number) {
+  const pct = Math.min(100, Math.round((s.calories / goal) * 100));
+  return `Today you've had ${s.calories} calories. Protein: ${Number(s.protein).toFixed(1)} grams. Carbs: ${Number(s.carbs).toFixed(1)} grams. Fat: ${Number(s.fat).toFixed(1)} grams. You're at ${pct}% of your daily goal.`;
+}
+
+function MenuSwitch({
+  id,
+  label,
+  checked,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label
+      htmlFor={id}
+      className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 hover:bg-white/5"
+    >
+      <span className="text-xs font-medium text-white/90">{label}</span>
+      <input
+        id={id}
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full border border-white/40 bg-white/20 transition-colors checked:border-blue-300 checked:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-0"
+      />
+    </label>
+  );
+}
+
 interface FoodLog {
   _id: string;
   food_name: string;
@@ -67,10 +132,23 @@ export default function Home() {
     uid: string;
   } | null>(null);
   const [selectedVoice, setSelectedVoice] = useState("alloy");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [howItWorksOpen, setHowItWorksOpen] = useState(false);
+  const [summaryOnOpen, setSummaryOnOpen] = useState(() =>
+    readStoredBoolean(STORAGE_KEYS.summaryOnOpen, false),
+  );
+  const [autoListen, setAutoListen] = useState(() =>
+    readStoredBoolean(STORAGE_KEYS.autoListen, false),
+  );
+  const [greetOnOpen, setGreetOnOpen] = useState(() =>
+    readStoredBoolean(STORAGE_KEYS.greetOnOpen, true),
+  );
   const [mounted, setMounted] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [mode, setMode] = useState<"see" | "speak">("see");
   const streamRef = useRef<MediaStream | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const hasOnOpenSpokenRef = useRef(false);
   const [muted, setMuted] = useState(false);
   const [showNutrients, setShowNutrients] = useState({
     protein: false,
@@ -101,20 +179,22 @@ export default function Home() {
       const res = await fetch(`${API_BASE}/food/${id}/summary`);
       const data = await res.json();
       setSummary(data);
+      return data as typeof summary;
     },
     [userId],
   );
 
-  const fetchProfile = useCallback(async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return;
-    const uid = session.user.id;
-    setUserId(uid);
-    const res = await fetch(`${API_BASE}/user/${uid}/profile`);
+  const fetchProfile = useCallback(async (uid?: string) => {
+    const id =
+      uid ??
+      (
+        await supabase.auth.getSession()
+      ).data.session?.user.id;
+    if (!id) return;
+    const res = await fetch(`${API_BASE}/user/${id}/profile`);
     const data = await res.json();
     setCalorieGoal(data.calorie_goal);
+    return data as { calorie_goal: number };
   }, []);
 
   const GUEST_USER_ID = "c0daaa18-4a82-4022-be8e-e21224683f88";
@@ -125,12 +205,64 @@ export default function Home() {
     Math.round((summary.calories / calorieGoal) * 100),
   );
 
+  const speak = useCallback(
+    (text: string) => _speak(text, { muted, selectedVoice, apiBase: API_BASE }),
+    [muted, selectedVoice],
+  );
+
+  const speakTodaysSummary = useCallback(
+    async (s: SummarySnapshot, goal: number) => {
+      await speak(buildTodaysSummaryMessage(s, goal));
+    },
+    [speak],
+  );
+
   useEffect(() => {
     if (!userId) return;
-    fetchLogs();
-    fetchSummary();
-    fetchProfile();
-  }, [userId, fetchLogs, fetchSummary, fetchProfile]);
+    let cancelled = false;
+    (async () => {
+      await fetchLogs(userId);
+      const [summaryData, profileData] = await Promise.all([
+        fetchSummary(userId),
+        fetchProfile(userId),
+      ]);
+      if (cancelled || hasOnOpenSpokenRef.current || !summaryData) return;
+
+      // See mode: no unsolicited audio on open (foundational principle).
+      if (mode !== "speak") {
+        hasOnOpenSpokenRef.current = true;
+        return;
+      }
+
+      if (!greetOnOpen && !summaryOnOpen) {
+        hasOnOpenSpokenRef.current = true;
+        return;
+      }
+
+      hasOnOpenSpokenRef.current = true;
+      const goal = profileData?.calorie_goal ?? 2000;
+
+      if (greetOnOpen) {
+        await speak(GREET_ON_OPEN_MESSAGE);
+      }
+      if (summaryOnOpen) {
+        await speakTodaysSummary(summaryData, goal);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    userId,
+    mode,
+    fetchLogs,
+    fetchSummary,
+    fetchProfile,
+    greetOnOpen,
+    summaryOnOpen,
+    speak,
+    speakTodaysSummary,
+  ]);
 
   useEffect(() => {
     if (!status) return;
@@ -173,14 +305,46 @@ export default function Home() {
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
+    if (!userId) hasOnOpenSpokenRef.current = false;
+  }, [userId]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(e.target as Node)
+      ) {
+        setMenuOpen(false);
+        setHowItWorksOpen(false);
+      }
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        setHowItWorksOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
     if (!userId) return;
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) router.push("/login");
     });
   }, [router, userId]);
 
-  function speak(text: string) {
-    return _speak(text, { muted, selectedVoice, apiBase: API_BASE });
+  async function signOut() {
+    if (!userId) return;
+    setMenuOpen(false);
+    await supabase.auth.signOut();
+    router.push("/login");
   }
 
   async function submitText() {
@@ -560,23 +724,21 @@ export default function Home() {
             </svg>
           </button>
 
-          <div className="flex items-center gap-3">
+          <div ref={menuRef} className="relative">
             <button
               type="button"
-              onClick={async () => {
-                if (!userId) return;
-                await supabase.auth.signOut();
-                router.push("/login");
+              onClick={() => setMenuOpen((open) => !open)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setMenuOpen((open) => !open);
+                }
               }}
-              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-[10px] sm:text-xs font-semibold rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-              aria-label="Sign out"
-            >
-              Sign out
-            </button>
-            <button
-              type="button"
               className="p-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-              aria-label="Open menu"
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={menuOpen}
+              aria-controls="header-menu"
+              aria-haspopup="true"
             >
               <svg
                 width="16"
@@ -608,6 +770,101 @@ export default function Home() {
                 />
               </svg>
             </button>
+
+            {menuOpen && (
+              <div
+                id="header-menu"
+                role="menu"
+                aria-label="Settings and account"
+                className="absolute right-0 top-full z-50 mt-1 w-[min(100vw-2rem,280px)] rounded-lg border border-white/20 bg-blue-900/95 py-2 shadow-lg backdrop-blur-sm"
+              >
+                <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+                  Voice
+                </p>
+                <div className="border-b border-white/15 px-3 pb-2">
+                  <label
+                    htmlFor="menu-voice-select"
+                    className="mb-1.5 block text-xs font-medium text-white/90"
+                  >
+                    Voice
+                  </label>
+                  {mounted && (
+                    <select
+                      id="menu-voice-select"
+                      value={selectedVoice}
+                      onChange={(e) => setSelectedVoice(e.target.value)}
+                      className="w-full rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white"
+                    >
+                      {VOICES.map((v) => (
+                        <option key={v} value={v} className="text-black">
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <MenuSwitch
+                  id="menu-summary-on-open"
+                  label="Speak daily summary on open"
+                  checked={summaryOnOpen}
+                  onChange={(enabled) => {
+                    setSummaryOnOpen(enabled);
+                    persistBoolean(STORAGE_KEYS.summaryOnOpen, enabled);
+                  }}
+                />
+                <MenuSwitch
+                  id="menu-auto-listen"
+                  label="Auto-listen after speaking, including after login welcome prompt"
+                  checked={autoListen}
+                  onChange={(enabled) => {
+                    setAutoListen(enabled);
+                    persistBoolean(STORAGE_KEYS.autoListen, enabled);
+                  }}
+                />
+                <MenuSwitch
+                  id="menu-greet-on-open"
+                  label="Greet me on open"
+                  checked={greetOnOpen}
+                  onChange={(enabled) => {
+                    setGreetOnOpen(enabled);
+                    persistBoolean(STORAGE_KEYS.greetOnOpen, enabled);
+                  }}
+                />
+
+                <div className="border-b border-white/15">
+                  <button
+                    type="button"
+                    aria-expanded={howItWorksOpen}
+                    aria-controls="how-it-works-panel"
+                    onClick={() => setHowItWorksOpen((open) => !open)}
+                    className="w-full px-3 py-2.5 text-left text-xs font-medium text-white/90 hover:bg-white/5 focus:outline-none focus:bg-white/10"
+                  >
+                    How it works
+                  </button>
+                  {howItWorksOpen && (
+                    <p
+                      id="how-it-works-panel"
+                      className="border-t border-white/10 px-3 py-2.5 text-xs leading-relaxed text-white/80"
+                    >
+                      {HOW_IT_WORKS_TEXT}
+                    </p>
+                  )}
+                </div>
+
+                <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+                  Account
+                </p>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={signOut}
+                  className="w-full px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-white/10 focus:outline-none focus:bg-white/10"
+                >
+                  Log out
+                </button>
+              </div>
+            )}
           </div>
         </header>
 
@@ -857,10 +1114,7 @@ export default function Home() {
                 {/* Hear Today's Summary button */}
                 <button
                   type="button"
-                  onClick={() => {
-                    const msg = `Today you've had ${summary.calories} calories. Protein: ${Number(summary.protein).toFixed(1)} grams. Carbs: ${Number(summary.carbs).toFixed(1)} grams. Fat: ${Number(summary.fat).toFixed(1)} grams. You're at ${caloriePercent}% of your daily goal.`;
-                    speak(msg);
-                  }}
+                  onClick={() => speakTodaysSummary(summary, calorieGoal)}
                   className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 border border-white/20 rounded-lg text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-white transition-colors mb-4"
                   aria-label="Hear today's nutrition summary"
                 >
@@ -943,36 +1197,6 @@ export default function Home() {
                         </button>
                       </div>
                     </fieldset>
-
-                    {mounted && (
-                      <fieldset>
-                        <legend
-                          id="voice-preference-legend"
-                          className="text-sm font-medium text-white mb-2"
-                        >
-                          Voice preference
-                        </legend>
-                        <select
-                          value={selectedVoice}
-                          onChange={(e) => setSelectedVoice(e.target.value)}
-                          aria-labelledby="voice-preference-legend"
-                          className="px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white"
-                        >
-                          {[
-                            "alloy",
-                            "echo",
-                            "fable",
-                            "onyx",
-                            "nova",
-                            "shimmer",
-                          ].map((v) => (
-                            <option key={v} value={v} className="text-black">
-                              {v}
-                            </option>
-                          ))}
-                        </select>
-                      </fieldset>
-                    )}
                   </div>
                 </details>
               </section>
