@@ -53,21 +53,34 @@ function MenuSwitch({
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
+  const labelId = `${id}-label`;
+
   return (
-    <label
-      htmlFor={id}
-      className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 hover:bg-white/5"
-    >
-      <span className="text-xs font-medium text-white/90">{label}</span>
-      <input
+    <div className="flex items-center justify-between gap-3 px-3 py-2.5 hover:bg-white/5">
+      <span id={labelId} className="text-xs font-medium text-white/90">
+        {label}
+      </span>
+      <button
         id={id}
-        type="checkbox"
+        type="button"
         role="switch"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full border border-white/40 bg-white/20 transition-colors checked:border-blue-300 checked:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-0"
-      />
-    </label>
+        aria-checked={checked}
+        aria-labelledby={labelId}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 shrink-0 cursor-pointer rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-0 ${
+          checked
+            ? "border-blue-300 bg-blue-500"
+            : "border-white/40 bg-white/20"
+        }`}
+      >
+        <span
+          aria-hidden="true"
+          className={`absolute top-0.5 size-3.5 rounded-full bg-white shadow transition-transform duration-200 ${
+            checked ? "translate-x-4" : "translate-x-0.5"
+          }`}
+        />
+      </button>
+    </div>
   );
 }
 
