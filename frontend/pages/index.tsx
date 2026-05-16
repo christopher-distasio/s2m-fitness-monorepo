@@ -12,7 +12,10 @@ const STORAGE_KEYS = {
   summaryOnOpen: "speak2me_summary_on_open",
   autoListen: "speak2me_auto_listen",
   greetOnOpen: "speak2me_greet",
+  mode: "speak2me_mode",
 } as const;
+
+type AppMode = "see" | "speak";
 
 const GREET_ON_OPEN_MESSAGE =
   "Welcome back. Say what you ate, ask for your total, or say delete my last entry.";
@@ -28,6 +31,16 @@ function readStoredBoolean(key: string, defaultValue: boolean) {
 
 function persistBoolean(key: string, value: boolean) {
   localStorage.setItem(key, String(value));
+}
+
+function readStoredMode(defaultMode: AppMode = "see"): AppMode {
+  if (typeof window === "undefined") return defaultMode;
+  const stored = localStorage.getItem(STORAGE_KEYS.mode);
+  return stored === "see" || stored === "speak" ? stored : defaultMode;
+}
+
+function persistMode(mode: AppMode) {
+  localStorage.setItem(STORAGE_KEYS.mode, mode);
 }
 
 type SummarySnapshot = {
@@ -147,18 +160,12 @@ export default function Home() {
   const [selectedVoice, setSelectedVoice] = useState("alloy");
   const [menuOpen, setMenuOpen] = useState(false);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
-  const [summaryOnOpen, setSummaryOnOpen] = useState(() =>
-    readStoredBoolean(STORAGE_KEYS.summaryOnOpen, false),
-  );
-  const [autoListen, setAutoListen] = useState(() =>
-    readStoredBoolean(STORAGE_KEYS.autoListen, false),
-  );
-  const [greetOnOpen, setGreetOnOpen] = useState(() =>
-    readStoredBoolean(STORAGE_KEYS.greetOnOpen, true),
-  );
+  const [summaryOnOpen, setSummaryOnOpen] = useState(false);
+  const [autoListen, setAutoListen] = useState(false);
+  const [greetOnOpen, setGreetOnOpen] = useState(true);
   const [mounted, setMounted] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
-  const [mode, setMode] = useState<"see" | "speak">("see");
+  const [mode, setMode] = useState<AppMode>("see");
   const streamRef = useRef<MediaStream | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const hasOnOpenSpokenRef = useRef(false);
@@ -230,8 +237,21 @@ export default function Home() {
     [speak],
   );
 
+  const setModeAndPersist = useCallback((next: AppMode) => {
+    setMode(next);
+    persistMode(next);
+  }, []);
+
   useEffect(() => {
-    if (!userId) return;
+    setSummaryOnOpen(readStoredBoolean(STORAGE_KEYS.summaryOnOpen, false));
+    setAutoListen(readStoredBoolean(STORAGE_KEYS.autoListen, false));
+    setGreetOnOpen(readStoredBoolean(STORAGE_KEYS.greetOnOpen, true));
+    setMode(readStoredMode("see"));
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!userId || !mounted) return;
     let cancelled = false;
     (async () => {
       await fetchLogs(userId);
@@ -267,6 +287,7 @@ export default function Home() {
     };
   }, [
     userId,
+    mounted,
     mode,
     fetchLogs,
     fetchSummary,
@@ -314,8 +335,6 @@ export default function Home() {
     });
     return () => subscription.unsubscribe();
   }, [router]);
-
-  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (!userId) hasOnOpenSpokenRef.current = false;
@@ -657,7 +676,7 @@ export default function Home() {
           <div className="flex bg-black/25 rounded-full p-0.5">
             <button
               type="button"
-              onClick={() => setMode("see")}
+              onClick={() => setModeAndPersist("see")}
               aria-pressed={mode === "see" ? "true" : "false"}
               className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${mode === "see" ? "bg-white text-blue-700" : "text-white/80 hover:text-white"}`}
             >
@@ -665,7 +684,7 @@ export default function Home() {
             </button>
             <button
               type="button"
-              onClick={() => setMode("speak")}
+              onClick={() => setModeAndPersist("speak")}
               aria-pressed={mode === "speak" ? "true" : "false"}
               className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${mode === "speak" ? "bg-white text-blue-700" : "text-white/80 hover:text-white"}`}
             >
@@ -844,6 +863,30 @@ export default function Home() {
                     persistBoolean(STORAGE_KEYS.greetOnOpen, enabled);
                   }}
                 />
+
+                <div className="border-b border-white/15 px-3 py-2">
+                  <label
+                    htmlFor="menu-default-mode"
+                    className="mb-1.5 block text-xs font-medium text-white/90"
+                  >
+                    See/Speak default mode
+                  </label>
+                  <select
+                    id="menu-default-mode"
+                    value={mode}
+                    onChange={(e) =>
+                      setModeAndPersist(e.target.value as AppMode)
+                    }
+                    className="w-full rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white"
+                  >
+                    <option value="see" className="text-black">
+                      See
+                    </option>
+                    <option value="speak" className="text-black">
+                      Speak
+                    </option>
+                  </select>
+                </div>
 
                 <div className="border-b border-white/15">
                   <button
