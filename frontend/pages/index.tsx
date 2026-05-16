@@ -67,7 +67,7 @@ function MenuSwitch({
         aria-checked={checked}
         aria-labelledby={labelId}
         onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 shrink-0 cursor-pointer rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-0 ${
+        className={`relative box-border h-5 w-9 shrink-0 cursor-pointer overflow-hidden rounded-full border p-0.5 transition-colors focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-0 ${
           checked
             ? "border-blue-300 bg-blue-500"
             : "border-white/40 bg-white/20"
@@ -75,8 +75,8 @@ function MenuSwitch({
       >
         <span
           aria-hidden="true"
-          className={`absolute top-0.5 size-3.5 rounded-full bg-white shadow transition-transform duration-200 ${
-            checked ? "translate-x-4" : "translate-x-0.5"
+          className={`absolute top-1/2 size-3 -translate-y-1/2 rounded-full bg-white shadow-sm transition-[left,right] duration-200 ease-in-out ${
+            checked ? "right-0.5 left-auto" : "left-0.5 right-auto"
           }`}
         />
       </button>
