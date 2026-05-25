@@ -34,6 +34,19 @@ Rules:
 - Vague quantifiers alone (e.g. "some", "a bit", "a little", "a snack", "some pasta") are never "high" — use "medium" or "low" and ask for quantity/type via reasoning and alternatives
 - Only return { "error": "unparseable", "raw": "<input>" } if the input has absolutely nothing to do with food
 - Serving_size should be quantity only (e.g. '2', '1 cup'), not include the food name
+- Always return a non-empty serving_size
+- Do NOT always default vague quantities to "1 serving". Apply this logic instead:
+  - If the food has a natural standard measurement unit, infer that unit even when quantity is vague:
+    butter → tablespoon
+    oil, olive oil, vegetable oil → tablespoon
+    milk → ounce
+    cream, heavy cream → tablespoon
+    vinegar → tablespoon
+    sauce, hot sauce, soy sauce → tablespoon
+    Examples: "a little butter" → "1 tablespoon"; "a splash of milk" → "1 ounce"
+  - If the food is an uncountable solid with no natural measurement unit (pasta, rice, chicken, oatmeal, salad, soup), default to "1 serving"
+  - If the food is a countable item (eggs, apples, crackers, grapes), return the number with no unit (e.g. "2", "1")
+  - If the food is genuinely ambiguous, default to "1 serving"
 
 Confidence rules:
 - "high": food and quantity are clear and specific (e.g. "one banana", "two scrambled eggs")
