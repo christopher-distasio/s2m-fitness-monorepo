@@ -159,9 +159,14 @@ async def log_food_voice(
     history = json.loads(conversation_history)
     parsed = await parse_food_input(raw_input, history)
     if "error" in parsed:
-        raise HTTPException(
-            status_code=422, detail=f"Could not parse food input: {parsed}"
-        )
+        return {
+            "error": parsed.get("error", "unparseable"),
+            "raw": parsed.get("raw", raw_input),
+            "transcription": raw_input,
+        }
+
+    if parsed.get("confidence") != "high":
+        return {"transcription": raw_input, "parsed": parsed}
 
     food_log = build_food_log(user_id, raw_input, parsed)
     await food_log.insert()

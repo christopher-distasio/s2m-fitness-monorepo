@@ -1,6 +1,7 @@
 import Head from "next/head";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { supabase } from "../lib/supabaseClient";
 import { speak as _speak } from "../lib/speak";
 
@@ -22,6 +23,11 @@ const GREET_ON_OPEN_MESSAGE =
 
 const HOW_IT_WORKS_TEXT =
   "In Speak mode, just talk. Say what you ate, ask for your total, or say delete my last entry. I will ask follow-up questions one at a time if I need more detail. In See mode, use the buttons. Switch modes anytime with the toggle at the top.";
+
+const RECORDING_TIMEOUT_MS = 8000;
+const MIN_RECORDING_BYTES = 8000;
+const RECORDING_TIMEOUT_MESSAGE =
+  "I didn't hear anything. Please say that again.";
 
 function readStoredBoolean(key: string, defaultValue: boolean) {
   if (typeof window === "undefined") return defaultValue;
@@ -133,6 +139,7 @@ export default function Home() {
   const [logs, setLogs] = useState<FoodLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [autoListening, setAutoListening] = useState(false);
   const [status, setStatus] = useState("");
   const [summary, setSummary] = useState({
     calories: 0,
@@ -169,6 +176,15 @@ export default function Home() {
   const streamRef = useRef<MediaStream | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const hasOnOpenSpokenRef = useRef(false);
+  const pendingParseRef = useRef(pendingParse);
+  const postLoginVoiceSessionRef = useRef(false);
+  const recordingTimedOutRef = useRef(false);
+  const recordingTimeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const startRecordingRef = useRef<
+    (options?: { fromAutoListen?: boolean }) => Promise<void>
+  >(async () => {});
   const [muted, setMuted] = useState(false);
   const [showNutrients, setShowNutrients] = useState({
     protein: false,
@@ -242,6 +258,14 @@ export default function Home() {
     persistMode(next);
   }, []);
 
+  const maybeAutoListen = useCallback(async () => {
+    if (!autoListen || mode !== "speak" || muted || loading || recording) return;
+    const awaitingClarification = pendingParseRef.current !== null;
+    const awaitingPostLogin = postLoginVoiceSessionRef.current;
+    if (!awaitingClarification && !awaitingPostLogin) return;
+    await startRecordingRef.current({ fromAutoListen: true });
+  }, [autoListen, mode, muted, loading, recording]);
+
   useEffect(() => {
     setSummaryOnOpen(readStoredBoolean(STORAGE_KEYS.summaryOnOpen, false));
     setAutoListen(readStoredBoolean(STORAGE_KEYS.autoListen, false));
@@ -281,6 +305,10 @@ export default function Home() {
       if (summaryOnOpen) {
         await speakTodaysSummary(summaryData, goal);
       }
+      if (greetOnOpen || summaryOnOpen) {
+        postLoginVoiceSessionRef.current = true;
+        await maybeAutoListen();
+      }
     })();
     return () => {
       cancelled = true;
@@ -296,7 +324,12 @@ export default function Home() {
     summaryOnOpen,
     speak,
     speakTodaysSummary,
+    maybeAutoListen
   ]);
+
+  useEffect(() => {
+    pendingParseRef.current = pendingParse;
+  }, [pendingParse]);
 
   useEffect(() => {
     if (!status) return;
@@ -375,8 +408,27 @@ export default function Home() {
   async function signOut() {
     if (!userId) return;
     setMenuOpen(false);
+    endPostLoginVoiceSession();
+    clearRecordingTimeout();
     await supabase.auth.signOut();
     router.push("/login");
+  }
+
+  function clearRecordingTimeout() {
+    if (recordingTimeoutIdRef.current) {
+      clearTimeout(recordingTimeoutIdRef.current);
+      recordingTimeoutIdRef.current = null;
+    }
+  }
+
+  function endPostLoginVoiceSession() {
+    postLoginVoiceSessionRef.current = false;
+  }
+
+  async function handleRecordingSilenceTimeout() {
+    setStatus(RECORDING_TIMEOUT_MESSAGE);
+    await speak(RECORDING_TIMEOUT_MESSAGE);
+    await maybeAutoListen();
   }
 
   async function submitText() {
@@ -388,6 +440,7 @@ export default function Home() {
     setLoading(true);
     setStatus("Parsing...");
     const uid = session.user.id;
+    let shouldAutoListen = false;
     try {
       const res = await fetch(`${API_BASE}/food/parse`, {
         method: "POST",
@@ -403,7 +456,7 @@ export default function Home() {
         const err =
           "I couldn't understand that. Please try saying something more specific.";
         setStatus(err);
-        speak(err);
+        await speak(err);
         return;
       }
 
@@ -416,24 +469,28 @@ export default function Home() {
           { role: "user", content: textInput },
           { role: "assistant", content: JSON.stringify(parsed) },
         ]);
-        setPendingParse({ parsed, raw_input: textInput, uid });
+        const pending = { parsed, raw_input: textInput, uid };
+        setPendingParse(pending);
+        pendingParseRef.current = pending;
         const alternatives = parsed.alternatives?.join(", or ") ?? "";
         const msg =
           parsed.confidence === "low"
             ? `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`
             : `I think this is ${parsed.food}. Did you mean ${alternatives}?`;
         setStatus(msg);
-        speak(msg);
+        shouldAutoListen = true;
+        await speak(msg);
         setTextInput("");
       }
       setConversationHistory([]);
     } catch {
       const err = "Error logging food.";
       setStatus(err);
-      speak(err);
+      await speak(err);
     } finally {
-      setLoading(false);
+      flushSync(() => setLoading(false));
     }
+    if (shouldAutoListen) await maybeAutoListen();
   }
 
   async function deleteLog(id: string) {
@@ -465,7 +522,8 @@ export default function Home() {
     fetchSummary(uid);
   }
 
-  async function startRecording() {
+  async function startRecording(options?: { fromAutoListen?: boolean }) {
+    if (recording || loading) return;
     // Unlock audio context for Safari
     const AudioContext =
       window.AudioContext || (window as any).webkitAudioContext;
@@ -476,9 +534,21 @@ export default function Home() {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    if (!session) return;
+    if (!session) {
+      setAutoListening(false);
+      return;
+    }
     const uid = session.user.id;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    setAutoListening(!!options?.fromAutoListen);
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setAutoListening(false);
+      setRecording(false);
+      setStatus("Microphone access is required to listen.");
+      return;
+    }
     const mimeType = MediaRecorder.isTypeSupported("audio/webm")
       ? "audio/webm"
       : "audio/mp4";
@@ -486,10 +556,22 @@ export default function Home() {
     chunksRef.current = [];
     recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
     recorder.onstop = async () => {
+      clearRecordingTimeout();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+      setRecording(false);
+      setAutoListening(false);
+      const timedOut = recordingTimedOutRef.current;
+      recordingTimedOutRef.current = false;
+      const wasAwaitingClarification = pendingParseRef.current !== null;
       const blob = new Blob(chunksRef.current, { type: mimeType });
       const extension = mimeType === "audio/webm" ? "webm" : "mp4";
+
+      if (timedOut && blob.size < MIN_RECORDING_BYTES) {
+        await handleRecordingSilenceTimeout();
+        return;
+      }
+
       const formData = new FormData();
       formData.append("user_id", uid);
       formData.append("audio", blob, `recording.${extension}`);
@@ -499,47 +581,78 @@ export default function Home() {
       );
       setLoading(true);
       setStatus("Transcribing...");
+      let shouldAutoListen = false;
+      let voiceResponseStatus: number | undefined;
+      let voiceResponseBody: unknown;
       try {
         const res = await fetch(`${API_BASE}/food/voice`, {
           method: "POST",
           body: formData,
         });
-        const data = await res.json();
+        voiceResponseStatus = res.status;
+        const responseText = await res.text();
+        try {
+          voiceResponseBody = JSON.parse(responseText);
+        } catch {
+          voiceResponseBody = responseText;
+        }
+        const data = voiceResponseBody as {
+          error?: string;
+          message?: string;
+          transcription?: string;
+          parsed?: ParsedResult;
+        };
+
+        if (!res.ok) {
+          throw new Error(
+            `Voice API ${res.status}: ${responseText.slice(0, 500)}`,
+          );
+        }
 
         if (data.error) {
           const err =
             "I couldn't understand that. Please try saying something more specific.";
           setStatus(err);
-          speak(err);
+          await speak(err);
+          if (wasAwaitingClarification) shouldAutoListen = true;
           return;
         }
 
         if (data.message && !data.parsed) {
           setStatus(data.message);
-          speak(data.message);
+          await speak(data.message);
           fetchLogs(uid);
           await fetchSummary(uid);
           return;
         }
 
+        if (!data.parsed) {
+          throw new Error("Voice API response missing parsed food data");
+        }
+
         if (data.parsed.confidence === "high") {
-          const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
+          const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
           setStatus(
-            `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories)} cal`,
+            `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} cal`,
           );
-          speak(msg);
+          await speak(msg);
           await fetchLogs(uid);
           await fetchSummary(uid);
+          setPendingParse(null);
+          pendingParseRef.current = null;
           setConversationHistory([]);
+          endPostLoginVoiceSession();
         } else {
-          setPendingParse({
+          const pending = {
             parsed: data.parsed,
-            raw_input: data.transcription,
+            raw_input: data.transcription ?? "",
             uid,
-          });
+          };
+          setPendingParse(pending);
+          pendingParseRef.current = pending;
           setConversationHistory((prev) => [
             ...prev,
-            { role: "user", content: data.transcription },
+            { role: "user", content: data.transcription ?? "" },
             { role: "assistant", content: JSON.stringify(data.parsed) },
           ]);
           const alternatives = data.parsed.alternatives?.join(", or ") ?? "";
@@ -548,32 +661,46 @@ export default function Home() {
               ? `I wasn't sure about that. ${data.parsed.reasoning}. Please be more specific.`
               : `I think this is ${data.parsed.food}. Did you mean ${alternatives}?`;
           setStatus(msg);
-          speak(msg);
+          shouldAutoListen = true;
+          await speak(msg);
         }
-      } catch {
-        const err = "Error processing audio. Please try again.";
-        setStatus(err);
-        speak(err);
+      } catch (err) {
+        console.log("[voice] onstop catch", {
+          status: voiceResponseStatus,
+          body: voiceResponseBody,
+          error: err,
+        });
+        const errMsg = "Error processing audio. Please try again.";
+        setStatus(errMsg);
+        await speak(errMsg);
+        if (wasAwaitingClarification) shouldAutoListen = true;
       } finally {
-        setLoading(false);
+        flushSync(() => setLoading(false));
       }
+      if (shouldAutoListen) await maybeAutoListen();
     };
     mediaRecorderRef.current = recorder;
     recorder.start();
     setRecording(true);
     setStatus("Recording...");
-    setTimeout(() => {
+    recordingTimedOutRef.current = false;
+    clearRecordingTimeout();
+    recordingTimeoutIdRef.current = setTimeout(() => {
+      recordingTimedOutRef.current = true;
       if (mediaRecorderRef.current?.state === "recording") {
         mediaRecorderRef.current.stop();
-        setRecording(false);
       }
-    }, 8000);
+    }, RECORDING_TIMEOUT_MS);
     streamRef.current = stream;
   }
+  startRecordingRef.current = startRecording;
 
   function stopRecording() {
+    clearRecordingTimeout();
+    recordingTimedOutRef.current = false;
     mediaRecorderRef.current?.stop();
     setRecording(false);
+    setAutoListening(false);
   }
 
   async function saveGoal() {
@@ -602,9 +729,11 @@ export default function Home() {
     const data = await res.json();
     const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
     setStatus(msg);
-    speak(msg);
+    await speak(msg);
     setTextInput("");
     setPendingParse(null);
+    pendingParseRef.current = null;
+    endPostLoginVoiceSession();
     setConversationHistory([]);
     fetchLogs(uid);
     fetchSummary(uid);
@@ -933,11 +1062,23 @@ export default function Home() {
             >
               <button
                 type="button"
-                onClick={recording ? stopRecording : startRecording}
+                onClick={recording ? stopRecording : () => startRecording()}
                 disabled={loading}
                 aria-pressed={recording ? "true" : "false"}
-                aria-label={recording ? "Stop recording" : "Speak to log food"}
-                className={`w-44 h-44 rounded-full font-semibold text-white text-sm flex flex-col items-center justify-center gap-3 focus:outline-none focus:ring-4 focus:ring-white transition-colors ${recording ? "bg-green-700" : "bg-green-600 hover:bg-green-700"}`}
+                aria-label={
+                  autoListening
+                    ? "Listening ..."
+                    : recording
+                      ? "Stop recording"
+                      : "Speak to log food"
+                }
+                className={`w-44 h-44 rounded-full font-semibold text-white text-sm flex flex-col items-center justify-center gap-3 focus:outline-none focus:ring-4 transition-colors ${
+                  recording
+                    ? autoListening
+                      ? "animate-pulse bg-amber-500 ring-4 ring-amber-200/90 hover:bg-amber-600 focus:ring-amber-100"
+                      : "bg-green-700 focus:ring-white"
+                    : "bg-green-600 hover:bg-green-700 focus:ring-white"
+                }`}
               >
                 <svg
                   width="48"
@@ -985,8 +1126,25 @@ export default function Home() {
                     opacity="0.28"
                   />
                 </svg>
-                <span>{recording ? "Listening..." : "Speak to me"}</span>
+                <span>
+                  {autoListening
+                    ? "Listening ..."
+                    : recording
+                      ? "Listening..."
+                      : "Speak to me"}
+                </span>
               </button>
+
+              {autoListening && (
+                <p
+                  role="status"
+                  aria-live="polite"
+                  className="mt-3 flex items-center justify-center gap-2 text-xs font-medium text-amber-200"
+                >
+                  <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-amber-300" />
+                  Mic open — speak now
+                </p>
+              )}
 
               <p className="text-white/80 text-xs mt-4 max-w-xs text-center">
                 If I'm not sure what you said, I'll ask you to clarify — just
@@ -1275,7 +1433,7 @@ export default function Home() {
                     </span>
                     <button
                       type="button"
-                      onClick={recording ? stopRecording : startRecording}
+                      onClick={recording ? stopRecording : () => startRecording()}
                       disabled={loading}
                       aria-pressed={recording ? "true" : "false"}
                       aria-label={
