@@ -16,6 +16,79 @@ const STORAGE_KEYS = {
   mode: "speak2me_mode",
 } as const;
 
+/** Clears when the tab closes; survives refresh within the same session. */
+const SESSION_GREETED_KEY = "speak2me_greeted_this_session";
+const SESSION_VOICE_SETUP_STARTED = "speak2me_voice_setup_started";
+const SESSION_VOICE_SETUP_COMPLETE = "speak2me_voice_setup_complete";
+const SESSION_VOICE_SETUP_DISMISSED = "speak2me_voice_setup_dismissed";
+
+const CONTINUE_VOICE_MESSAGE =
+  "Welcome didn't finish, but we'll continue with voice.";
+
+function hasGreetedThisSession(): boolean {
+  if (typeof window === "undefined") return false;
+  return sessionStorage.getItem(SESSION_GREETED_KEY) === "1";
+}
+
+function markGreetedThisSession(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(SESSION_GREETED_KEY, "1");
+}
+
+function markVoiceSetupStarted(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(SESSION_VOICE_SETUP_STARTED, "1");
+  sessionStorage.removeItem(SESSION_VOICE_SETUP_COMPLETE);
+  sessionStorage.removeItem(SESSION_VOICE_SETUP_DISMISSED);
+}
+
+function markVoiceSetupComplete(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(SESSION_VOICE_SETUP_COMPLETE, "1");
+}
+
+function isVoiceSetupIncomplete(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    sessionStorage.getItem(SESSION_VOICE_SETUP_STARTED) === "1" &&
+    sessionStorage.getItem(SESSION_VOICE_SETUP_COMPLETE) !== "1"
+  );
+}
+
+function isVoiceSetupRecoveryDismissed(): boolean {
+  if (typeof window === "undefined") return false;
+  return sessionStorage.getItem(SESSION_VOICE_SETUP_DISMISSED) === "1";
+}
+
+function dismissVoiceSetupRecovery(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(SESSION_VOICE_SETUP_DISMISSED, "1");
+}
+
+function clearVoiceSessionKeys(): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.removeItem(SESSION_GREETED_KEY);
+  sessionStorage.removeItem(SESSION_VOICE_SETUP_STARTED);
+  sessionStorage.removeItem(SESSION_VOICE_SETUP_COMPLETE);
+  sessionStorage.removeItem(SESSION_VOICE_SETUP_DISMISSED);
+}
+
+function turnOffVoiceOnOpenPrefs(
+  setters: {
+    setGreetOnOpen: (v: boolean) => void;
+    setSummaryOnOpen: (v: boolean) => void;
+    setAutoListen: (v: boolean) => void;
+  },
+) {
+  setters.setGreetOnOpen(false);
+  setters.setSummaryOnOpen(false);
+  setters.setAutoListen(false);
+  persistBoolean(STORAGE_KEYS.greetOnOpen, false);
+  persistBoolean(STORAGE_KEYS.summaryOnOpen, false);
+  persistBoolean(STORAGE_KEYS.autoListen, false);
+  markVoiceSetupComplete();
+}
+
 type AppMode = "see" | "speak";
 
 const GREET_ON_OPEN_MESSAGE =
@@ -59,6 +132,44 @@ type SummarySnapshot = {
 function buildTodaysSummaryMessage(s: SummarySnapshot, goal: number) {
   const pct = Math.min(100, Math.round((s.calories / goal) * 100));
   return `Today you've had ${s.calories} calories. Protein: ${Number(s.protein).toFixed(1)} grams. Carbs: ${Number(s.carbs).toFixed(1)} grams. Fat: ${Number(s.fat).toFixed(1)} grams. You're at ${pct}% of your daily goal.`;
+}
+
+function VoiceSetupRecoveryPanel({
+  onContinue,
+  onDismiss,
+  continuing,
+}: {
+  onContinue: () => void;
+  onDismiss: () => void;
+  continuing: boolean;
+}) {
+  return (
+    <div
+      role="region"
+      aria-label="Continue voice setup"
+      className="w-full max-w-sm rounded-lg border border-amber-400/40 bg-amber-950/50 px-4 py-3 text-left"
+    >
+      <p className="text-sm text-amber-100 mb-2">Welcome didn&apos;t finish.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onContinue}
+          disabled={continuing}
+          className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-blue-950 text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+        >
+          {continuing ? "Continuing…" : "Continue with voice"}
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          disabled={continuing}
+          className="px-3 py-2 text-amber-100/90 hover:text-white text-sm font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function MenuSwitch({
@@ -194,6 +305,8 @@ export default function Home() {
   const [conversationHistory, setConversationHistory] = useState<
     Array<{ role: "user" | "assistant"; content: string }>
   >([]);
+  const [showVoiceSetupRecovery, setShowVoiceSetupRecovery] = useState(false);
+  const [continuingVoiceSetup, setContinuingVoiceSetup] = useState(false);
 
   const router = useRouter();
 
@@ -256,7 +369,24 @@ export default function Home() {
   const setModeAndPersist = useCallback((next: AppMode) => {
     setMode(next);
     persistMode(next);
+    if (next === "see") {
+      turnOffVoiceOnOpenPrefs({
+        setGreetOnOpen,
+        setSummaryOnOpen,
+        setAutoListen,
+      });
+    }
   }, []);
+
+  const wantsVoiceOnOpen = greetOnOpen || summaryOnOpen;
+
+  const shouldOfferVoiceSetupRecovery = useCallback(() => {
+    return (
+      wantsVoiceOnOpen &&
+      isVoiceSetupIncomplete() &&
+      !isVoiceSetupRecoveryDismissed()
+    );
+  }, [wantsVoiceOnOpen]);
 
   const maybeAutoListen = useCallback(async () => {
     if (!autoListen || mode !== "speak" || muted || loading || recording) return;
@@ -266,11 +396,85 @@ export default function Home() {
     await startRecordingRef.current({ fromAutoListen: true });
   }, [autoListen, mode, muted, loading, recording]);
 
+  const runOpenVoiceSetup = useCallback(
+    async (options?: { isRecovery?: boolean }) => {
+      if (!userId) return;
+      markVoiceSetupStarted();
+      const summaryData =
+        (await fetchSummary(userId)) ?? summary;
+      const profileData = await fetchProfile(userId);
+      const goal = profileData?.calorie_goal ?? calorieGoal;
+
+      if (options?.isRecovery) {
+        await speak(CONTINUE_VOICE_MESSAGE);
+      }
+
+      const greetedThisSession = hasGreetedThisSession();
+      if (greetOnOpen && !greetedThisSession) {
+        markGreetedThisSession();
+        await speak(GREET_ON_OPEN_MESSAGE);
+      }
+      if (summaryOnOpen) {
+        await speakTodaysSummary(summaryData, goal);
+      }
+      if (autoListen && wantsVoiceOnOpen) {
+        postLoginVoiceSessionRef.current = true;
+      }
+      markVoiceSetupComplete();
+      flushSync(() => setLoading(false));
+      await maybeAutoListen();
+    },
+    [
+      userId,
+      summary,
+      calorieGoal,
+      greetOnOpen,
+      summaryOnOpen,
+      autoListen,
+      wantsVoiceOnOpen,
+      fetchSummary,
+      fetchProfile,
+      speak,
+      speakTodaysSummary,
+      maybeAutoListen,
+    ],
+  );
+
+  const continueWithVoice = useCallback(async () => {
+    if (continuingVoiceSetup) return;
+    setContinuingVoiceSetup(true);
+    setShowVoiceSetupRecovery(false);
+    hasOnOpenSpokenRef.current = true;
+    try {
+      flushSync(() => setMode("speak"));
+      persistMode("speak");
+      await runOpenVoiceSetup({ isRecovery: true });
+    } finally {
+      setContinuingVoiceSetup(false);
+    }
+  }, [continuingVoiceSetup, runOpenVoiceSetup]);
+
+  const handleDismissVoiceSetupRecovery = useCallback(() => {
+    dismissVoiceSetupRecovery();
+    setShowVoiceSetupRecovery(false);
+    hasOnOpenSpokenRef.current = true;
+  }, []);
+
   useEffect(() => {
-    setSummaryOnOpen(readStoredBoolean(STORAGE_KEYS.summaryOnOpen, false));
-    setAutoListen(readStoredBoolean(STORAGE_KEYS.autoListen, false));
-    setGreetOnOpen(readStoredBoolean(STORAGE_KEYS.greetOnOpen, true));
-    setMode(readStoredMode("see"));
+    const initialMode = readStoredMode("see");
+    setMode(initialMode);
+    persistMode(initialMode);
+    if (initialMode === "see") {
+      turnOffVoiceOnOpenPrefs({
+        setGreetOnOpen,
+        setSummaryOnOpen,
+        setAutoListen,
+      });
+    } else {
+      setSummaryOnOpen(readStoredBoolean(STORAGE_KEYS.summaryOnOpen, false));
+      setAutoListen(readStoredBoolean(STORAGE_KEYS.autoListen, false));
+      setGreetOnOpen(readStoredBoolean(STORAGE_KEYS.greetOnOpen, true));
+    }
     setMounted(true);
   }, []);
 
@@ -279,11 +483,17 @@ export default function Home() {
     let cancelled = false;
     (async () => {
       await fetchLogs(userId);
-      const [summaryData, profileData] = await Promise.all([
+      const [summaryData] = await Promise.all([
         fetchSummary(userId),
         fetchProfile(userId),
       ]);
       if (cancelled || hasOnOpenSpokenRef.current || !summaryData) return;
+
+      if (shouldOfferVoiceSetupRecovery()) {
+        hasOnOpenSpokenRef.current = true;
+        setShowVoiceSetupRecovery(true);
+        return;
+      }
 
       // See mode: no unsolicited audio on open (foundational principle).
       if (mode !== "speak") {
@@ -291,24 +501,13 @@ export default function Home() {
         return;
       }
 
-      if (!greetOnOpen && !summaryOnOpen) {
+      if (!wantsVoiceOnOpen) {
         hasOnOpenSpokenRef.current = true;
         return;
       }
 
       hasOnOpenSpokenRef.current = true;
-      const goal = profileData?.calorie_goal ?? 2000;
-
-      if (greetOnOpen) {
-        await speak(GREET_ON_OPEN_MESSAGE);
-      }
-      if (summaryOnOpen) {
-        await speakTodaysSummary(summaryData, goal);
-      }
-      if (greetOnOpen || summaryOnOpen) {
-        postLoginVoiceSessionRef.current = true;
-        await maybeAutoListen();
-      }
+      await runOpenVoiceSetup();
     })();
     return () => {
       cancelled = true;
@@ -322,9 +521,9 @@ export default function Home() {
     fetchProfile,
     greetOnOpen,
     summaryOnOpen,
-    speak,
-    speakTodaysSummary,
-    maybeAutoListen
+    wantsVoiceOnOpen,
+    shouldOfferVoiceSetupRecovery,
+    runOpenVoiceSetup,
   ]);
 
   useEffect(() => {
@@ -408,6 +607,7 @@ export default function Home() {
   async function signOut() {
     if (!userId) return;
     setMenuOpen(false);
+    clearVoiceSessionKeys();
     endPostLoginVoiceSession();
     clearRecordingTimeout();
     await supabase.auth.signOut();
@@ -629,6 +829,11 @@ export default function Home() {
         if (!data.parsed) {
           throw new Error("Voice API response missing parsed food data");
         }
+
+        console.log("[voice] onstop response", {
+          confidence: data.parsed.confidence,
+          parsed: data.parsed,
+        });
 
         if (data.parsed.confidence === "high") {
           const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
@@ -942,6 +1147,12 @@ export default function Home() {
                 <p className="px-3 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
                   Voice
                 </p>
+                {mode === "see" && (
+                  <p className="px-3 pb-2 text-[11px] leading-snug text-white/55">
+                    Voice on open runs in Speak mode. See default turns off
+                    greet, summary on open, and auto-listen.
+                  </p>
+                )}
                 <div className="border-b border-white/15 px-3 pb-2">
                   <label
                     htmlFor="menu-voice-select"
@@ -1135,6 +1346,16 @@ export default function Home() {
                 </span>
               </button>
 
+              {showVoiceSetupRecovery && (
+                <div className="mt-5 flex justify-center">
+                  <VoiceSetupRecoveryPanel
+                    onContinue={continueWithVoice}
+                    onDismiss={handleDismissVoiceSetupRecovery}
+                    continuing={continuingVoiceSetup}
+                  />
+                </div>
+              )}
+
               {autoListening && (
                 <p
                   role="status"
@@ -1324,6 +1545,16 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
+
+                {showVoiceSetupRecovery && (
+                  <div className="mb-4">
+                    <VoiceSetupRecoveryPanel
+                      onContinue={continueWithVoice}
+                      onDismiss={handleDismissVoiceSetupRecovery}
+                      continuing={continuingVoiceSetup}
+                    />
+                  </div>
+                )}
 
                 {/* Hear Today's Summary button */}
                 <button

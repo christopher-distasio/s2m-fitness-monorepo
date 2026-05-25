@@ -1,4 +1,5 @@
 import json
+import re
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from backend.services.edamam_service import lookup_food
@@ -30,13 +31,14 @@ Rules:
 - If the input is completely unparseable as food, return { "error": "unparseable", "raw": "<input>" }
 - Never guess wildly — if uncertain, set confidence to "low" and explain in notes
 - If the input is a single common food with an explicit quantity/size, set "confidence" to "high" unless something is genuinely ambiguous
+- Vague quantifiers alone (e.g. "some", "a bit", "a little", "a snack", "some pasta") are never "high" — use "medium" or "low" and ask for quantity/type via reasoning and alternatives
 - Only return { "error": "unparseable", "raw": "<input>" } if the input has absolutely nothing to do with food
 - Serving_size should be quantity only (e.g. '2', '1 cup'), not include the food name
 
 Confidence rules:
 - "high": food and quantity are clear and specific (e.g. "one banana", "two scrambled eggs")
 - "medium": food is clear but quantity is vague or assumed, or food type is ambiguous but guessable
-- "low": food is ambiguous, heavily vague, or both food type and quantity are unknown
+- "low": food is ambiguous, heavily vague, or both food type and quantity are unknown (e.g. "some pasta", "a snack" without type or amount)
 
 Alternatives rules:
 - For medium confidence (quantity vague, food clear): provide 2 to 3 portion size variations e.g. ["small handful of potato chips", "medium handful of potato chips", "large handful of potato chips"]
@@ -52,6 +54,39 @@ Combine the previous food from history with the new quantity/detail to produce a
 Example: history has "pasta", user says "a small bowl" → parse as "a small bowl of pasta".
 NEVER return unparseable for a clarification response.
 """
+
+_VAGUE_QUANTIFIER_RE = re.compile(
+    r"\b(some|a\s+bit|a\s+little|a\s+few|a\s+snack|about|roughly|around)\b",
+    re.IGNORECASE,
+)
+_VAGUE_SERVING_RE = re.compile(
+    r"^(some|a\s+bit|a\s+little|a\s+few|about|roughly|around|1\s+serving)$",
+    re.IGNORECASE,
+)
+
+
+def _apply_confidence_guards(parsed: dict, raw_input: str) -> dict:
+    """Never treat vague quantity-only input as high confidence."""
+    confidence = parsed.get("confidence")
+    serving = (parsed.get("serving_size") or "").strip()
+    if confidence != "high":
+        return parsed
+    if _VAGUE_QUANTIFIER_RE.search(raw_input) or (
+        serving and _VAGUE_SERVING_RE.match(serving)
+    ):
+        parsed["confidence"] = "medium"
+        parsed["reasoning"] = (
+            parsed.get("reasoning") or "Quantity or portion was vague."
+        ).strip()
+        if not parsed.get("alternatives"):
+            food = parsed.get("food") or "food"
+            parsed["alternatives"] = [
+                f"a small portion of {food}",
+                f"a medium portion of {food}",
+                f"a large portion of {food}",
+            ]
+    return parsed
+
 
 async def parse_food_input(raw_input: str, conversation_history: list = []) -> dict:
     # If this is a clarification, combine with previous food
@@ -91,6 +126,8 @@ async def parse_food_input(raw_input: str, conversation_history: list = []) -> d
     if "error" in parsed:
         return parsed
 
+    parsed = _apply_confidence_guards(parsed, raw_input)
+
     # Step 2 — Edamam looks up accurate nutrition data
     food_query = f"{parsed.get('serving_size', '')} {parsed['food']}".strip()
     nutrition = await lookup_food(food_query)
@@ -112,4 +149,4 @@ async def parse_food_input(raw_input: str, conversation_history: list = []) -> d
         parsed["reasoning"] = (parsed.get("reasoning") or "") + " Nutrition data unavailable — estimate only."
         parsed["data_source"] = "gpt_fallback"
 
-    return parsed
+    return _apply_confidence_guards(parsed, raw_input)
