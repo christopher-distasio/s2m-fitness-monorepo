@@ -2,7 +2,7 @@ import json
 import re
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
-from backend.services.edamam_service import lookup_food
+from backend.services.nutrition_service import lookup_food
 
 load_dotenv()
 
@@ -141,21 +141,21 @@ async def parse_food_input(raw_input: str, conversation_history: list = []) -> d
 
     parsed = _apply_confidence_guards(parsed, raw_input)
 
-    # Step 2 — Edamam looks up accurate nutrition data
+    # Step 2 — Current food data source looks up accurate nutrition data
     food_query = f"{parsed.get('serving_size', '')} {parsed['food']}".strip()
     nutrition = await lookup_food(food_query)
 
     if nutrition:
-        # Use Edamam data
+        # Use Current food data source data
         parsed["calories"] = nutrition["calories"]
         parsed["macronutrients"] = {
             "carbohydrates": nutrition["carbs"],
             "protein": nutrition["protein"],
             "fats": nutrition["fat"],
         }
-        parsed["data_source"] = "edamam"
+        parsed["data_source"] = "usda"
     else:
-        # Edamam found nothing — ask GPT to estimate as fallback
+        # Current food data source found nothing — ask GPT to estimate as fallback
         parsed["calories"] = None
         parsed["macronutrients"] = {"carbohydrates": None, "protein": None, "fats": None, "sugar": None}
         parsed["confidence"] = "low"

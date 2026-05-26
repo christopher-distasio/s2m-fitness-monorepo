@@ -1,5 +1,5 @@
 """
-Food parser eval suite — calls the real GPT + Edamam pipeline (no mocks).
+Food parser eval suite — calls the real GPT + Current food data source  pipeline (no mocks).
 
 Run: pytest tests/eval_food_parser.py -v -s
 Use -s to see the score summary printed after the test run.
