@@ -142,7 +142,8 @@ async def parse_food_input(raw_input: str, conversation_history: list = []) -> d
     parsed = _apply_confidence_guards(parsed, raw_input)
 
     # Step 2 — Current food data source looks up accurate nutrition data
-    food_query = f"{parsed.get('serving_size', '')} {parsed['food']}".strip()
+    food_query = parsed['food']    
+    print("calling lookup_food with:", food_query)
     nutrition = await lookup_food(food_query)
 
     if nutrition:
