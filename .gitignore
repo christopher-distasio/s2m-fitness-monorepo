@@ -363,3 +363,9 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python,node,nextjs,visualstudiocode
 
+### USDA FoodData Central source data (large, not for git) ###
+scripts/*.zip
+scripts/FoodData_Central_*/
+scripts/branded_clean.json
+scripts/sr_legacy_clean.json
+

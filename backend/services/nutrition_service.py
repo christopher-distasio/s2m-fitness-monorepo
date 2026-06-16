@@ -1,73 +1,51 @@
 import os
 
-import httpx
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
+from pinecone import Pinecone
 
 load_dotenv()
 
-USDA_API_KEY = os.getenv("USDA_API_KEY")
-USDA_SEARCH_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+INDEX_NAME = "food-index"
+EMBEDDING_MODEL = "text-embedding-3-large"
+SCORE_THRESHOLD = 0.3
 
-
-def _energy_kcal(food_nutrients: list) -> float | None:
-    for nutrient in food_nutrients:
-        if nutrient.get("nutrientName") == "Energy" and nutrient.get("unitName") == "kcal":
-            value = nutrient.get("value")
-            if value is not None:
-                return value
-    return None
-
-
-def _nutrient_value(food_nutrients: list, nutrient_name: str) -> float | None:
-    for nutrient in food_nutrients:
-        if nutrient.get("nutrientName") == nutrient_name:
-            return nutrient.get("value")
-    return None
-
-
-def _map_food_item(item: dict) -> dict | None:
-    food_nutrients = item.get("foodNutrients", [])
-    calories = _energy_kcal(food_nutrients)
-    if calories is None:
-        return None
-
-    return {
-        "food_name": item.get("description"),
-        "calories": calories,
-        "protein": _nutrient_value(food_nutrients, "Protein"),
-        "carbs": _nutrient_value(food_nutrients, "Carbohydrate, by difference"),
-        "fat": _nutrient_value(food_nutrients, "Total lipid (fat)"),
-        "source": "usda",
-    }
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+pc = Pinecone(api_key=PINECONE_API_KEY)
+index = pc.Index(INDEX_NAME)
 
 
 async def lookup_food(query: str) -> dict | None:
-    if not USDA_API_KEY:
+    print("RAG query:", query)
+
+    embedding_response = await openai_client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=query,
+    )
+    query_vector = embedding_response.data[0].embedding
+
+    results = index.query(
+        vector=query_vector,
+        top_k=5,
+        include_metadata=True,
+    )
+
+    matches = results.get("matches", [])
+    if not matches:
         return None
 
-    params = [
-        ("query", query),
-        ("api_key", USDA_API_KEY),
-        ("pageSize", 5),
-        ("dataType", "Branded"),
-        ("dataType", "Foundation"),
-        ("dataType", "SR Legacy"),
-    ]
+    match = matches[0]
+    if match.get("score", 0) < SCORE_THRESHOLD:
+        return None
 
-    print("USDA query:", query)
-    async with httpx.AsyncClient() as http_client:
-        res = await http_client.get(USDA_SEARCH_URL, params=params)
-        if res.status_code != 200:
-            return None
-
-        data = res.json()
-        foods = data.get("foods", [])
-        if not foods:
-            return None
-
-        for item in foods:
-            mapped = _map_food_item(item)
-            if mapped is not None:
-                return mapped
-
-    return None
+    metadata = match.get("metadata", {})
+    return {
+        "food_name": metadata["name"],
+        "calories": metadata["calories"],
+        "protein": metadata["protein"],
+        "carbs": metadata["carbs"],
+        "fat": metadata["fat"],
+        "source": "usda_rag",
+    }

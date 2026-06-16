@@ -21,6 +21,7 @@ motor = "^3.6.0"
 beanie = "^1.27.0"
 openai = "^2.29.0"
 python-multipart = "^0.0.22"
+pinecone = "^9.1.0"
 
 
 [tool.poetry.group.dev.dependencies]
