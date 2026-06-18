@@ -50,9 +50,24 @@ with open(get_file("branded_food.csv"), newline="", encoding="utf-8") as f:
         fdc_id = row["fdc_id"]
         us_fdc_ids.add(fdc_id)
         brand = (row.get("brand_name") or row.get("brand_owner") or "").strip()
+
+        serving_size_unit = (row.get("serving_size_unit") or "").strip().lower()
+        serving_size_raw = (row.get("serving_size") or "").strip()
+        serving_size_g = None
+        if serving_size_raw:
+            try:
+                serving_size = float(serving_size_raw)
+                if serving_size_unit == "g":
+                    serving_size_g = serving_size
+                elif serving_size_unit == "oz":
+                    serving_size_g = serving_size * 28.3495
+            except ValueError:
+                serving_size_g = None
+
         branded_meta[fdc_id] = {
             "brand": brand,
             "modified_date": row.get("modified_date", ""),
+            "serving_size_g": serving_size_g,
         }
 
 print(f"Found {len(us_fdc_ids):,} US branded food IDs")
@@ -80,6 +95,7 @@ with open(get_file("food.csv"), newline="", encoding="utf-8") as f:
             "name": search_name,
             "description": description,
             "modified_date": meta.get("modified_date", ""),
+            "serving_size_g": meta.get("serving_size_g"),
             "calories": None,
             "protein": None,
             "fat": None,

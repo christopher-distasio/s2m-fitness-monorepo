@@ -26,7 +26,7 @@ Return this exact shape:
 
 Rules:
 - Do NOT include calories or macronutrients — those come from the nutrition database
-- Normalize the food name for database lookup (e.g. "two scrambled eggs" -> "scrambled eggs")
+- Normalize the food name for database lookup but PRESERVE brand names. For branded items, include the brand name in the food field (e.g. 'great value light greek yogurt' not just 'greek yogurt', 'chobani nonfat plain yogurt' not just 'yogurt'). Brand names are essential for accurate nutrition lookup.
 - If multiple foods are mentioned, combine them into one descriptive name (e.g. "2 eggs and black coffee")
 - If the input is completely unparseable as food, return { "error": "unparseable", "raw": "<input>" }
 - Never guess wildly — if uncertain, set confidence to "low" and explain in notes
@@ -155,6 +155,24 @@ async def parse_food_input(raw_input: str, conversation_history: list = []) -> d
             "fats": nutrition["fat"],
         }
         parsed["data_source"] = "usda"
+
+        # Scale per-serving nutrition by the parsed quantity (e.g. "2" eggs).
+        quantity_str = parsed.get("serving_size", "1")
+        try:
+            quantity = float(quantity_str)
+        except (TypeError, ValueError):
+            quantity = 1.0
+
+        if quantity > 1:
+            if parsed["calories"] is not None:
+                parsed["calories"] = int(round(parsed["calories"] * quantity))
+            macros = parsed["macronutrients"]
+            for macro_key in ("protein", "carbohydrates", "fats"):
+                if macros.get(macro_key) is not None:
+                    macros[macro_key] = round(macros[macro_key] * quantity, 1)
+
+        parsed["quantity_used"] = quantity
+        print(f"quantity: {quantity}, calories after: {parsed['calories']}")
     else:
         # Current food data source found nothing — ask GPT to estimate as fallback
         parsed["calories"] = None

@@ -76,6 +76,7 @@ for i in range(0, total, BATCH_SIZE):
                 "protein": food["protein"] or 0,
                 "fat": food["fat"] or 0,
                 "carbs": food["carbs"] or 0,
+                "serving_size_g": food.get("serving_size_g") or 100,
                 "source": "usda_sr_legacy",
             }
         })
