@@ -8,7 +8,7 @@ from pinecone import Pinecone
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY").strip()
 USDA_API_KEY = os.getenv("USDA_API_KEY")
 INDEX_NAME = "food-index"
 EMBEDDING_MODEL = "text-embedding-3-large"
