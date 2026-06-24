@@ -46,6 +46,7 @@ Rules:
     Examples: "a little butter" → "1 tablespoon"; "a splash of milk" → "1 ounce"
   - If the food is an uncountable solid with no natural measurement unit (pasta, rice, chicken, oatmeal, salad, soup), default to "1 serving"
   - If the food is a countable item (eggs, apples, crackers, grapes), return the number with no unit (e.g. "2", "1")
+  - When the user says a plural countable food item (e.g. 'two yogurts', 'three cookies', 'two dannon yogurts'), treat each as one individual container/unit. serving_size should be the number (e.g. '2'). Do not interpret plural packaged foods as cups or other measurements.
   - If the food is genuinely ambiguous, default to "1 serving"
 
 Confidence rules:
