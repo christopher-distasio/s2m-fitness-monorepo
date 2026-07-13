@@ -1,10 +1,11 @@
 """
-Process USDA Branded Foods CSV into clean JSON for embedding.
-Filters: US market only, complete nutrition data, deduplicates by name.
-Output: branded_clean.json
+SMALL-BATCH TEST VERSION — limited to 500 US branded foods.
+Run this before the full process_branded.py to sanity-check the schema
+(all 39 nutrient fields, all 17 metadata fields, serving_size_g conversion)
+on a manageable sample before committing write-units to the full ~460k run.
 
 Run from your scripts/ folder:
-    python3 process_branded.py
+    python3 process_branded_test.py
 
 Expects the zip file at: ./FoodData_Central_branded_food_csv_2026-04-30.zip
 Or extracted files in: ./FoodData_Central_branded_food_csv_2026-04-30/
@@ -17,7 +18,8 @@ import zipfile
 
 ZIP_PATH = "./FoodData_Central_branded_food_csv_2026-04-30.zip"
 EXTRACT_DIR = "./FoodData_Central_branded_food_csv_2026-04-30"
-OUTPUT_PATH = "./branded_clean.json"
+OUTPUT_PATH = "./branded_clean_test.json"
+ROW_LIMIT = 500
 
 NUTRIENT_IDS = {
     "1008": "calories",
@@ -90,6 +92,8 @@ with open(get_file("branded_food.csv"), newline="", encoding="utf-8") as f:
         country = row.get("market_country", "").strip()
         if country != "United States":
             continue
+        if len(us_fdc_ids) >= ROW_LIMIT:
+            break
         fdc_id = row["fdc_id"]
         us_fdc_ids.add(fdc_id)
 
@@ -210,6 +214,9 @@ with open(get_file("food.csv"), newline="", encoding="utf-8") as f:
 print(f"Loaded {len(foods):,} US food names")
 
 # Step 3 - Load nutrients
+# NOTE: this still scans the full food_nutrient.csv file (several minutes) —
+# the 500-food limit only reduces what's collected, not how much of this
+# large file needs to be read, since matching rows are scattered throughout.
 print("Step 3: Loading nutrients (this will take several minutes)...")
 nutrient_count = 0
 with open(get_file("food_nutrient.csv"), newline="", encoding="utf-8") as f:
@@ -258,7 +265,7 @@ print(f"Saving to {OUTPUT_PATH}...")
 with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
     json.dump(clean, f)
 
-print(f"\nDone. {len(clean):,} US branded foods saved to {OUTPUT_PATH}")
+print(f"\nDone. {len(clean):,} US branded foods saved to {OUTPUT_PATH} (TEST BATCH — limited to {ROW_LIMIT})")
 print("\nSample foods:")
 for food in clean[:5]:
     print(f"  {food['name']}: {food['calories']} kcal, {food['protein']}g protein, "

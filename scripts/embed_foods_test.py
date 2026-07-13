@@ -1,7 +1,11 @@
 """
-Embed USDA Branded Foods and upsert to Pinecone.
+SMALL-BATCH TEST VERSION — embeds only the 500 foods from branded_clean_test.json.
+Uses the same Pinecone index as production (food-index) — this is safe:
+these records will simply be overwritten when the full embed_foods.py run
+happens later, since they share the same fdc_id-based vector IDs.
+
 Run once from the project root:
-    poetry run python scripts/embed_foods.py
+    poetry run python scripts/embed_foods_test.py
 
 Requires in .env:
     OPENAI_API_KEY=...
@@ -25,7 +29,7 @@ BATCH_SIZE = 100  # OpenAI embedding batch size
 UPSERT_BATCH_SIZE = 100  # Pinecone upsert batch size
 
 # Load clean food data
-DATA_PATH = os.path.join(os.path.dirname(__file__), "branded_clean.json")
+DATA_PATH = os.path.join(os.path.dirname(__file__), "branded_clean_test.json")
 with open(DATA_PATH, "r", encoding="utf-8") as f:
     foods = json.load(f)
 
@@ -152,4 +156,4 @@ for i in range(0, total, BATCH_SIZE):
 print(f"\nDone. Processed: {processed}, Errors: {errors}")
 print(f"Fields truncated for length: {truncated_field_count}")
 print(
-    f"Check your Pinecone dashboard — food-index should have {processed} records.")
+    f"TEST BATCH — check your Pinecone dashboard, food-index should have {processed} new/updated records.")
