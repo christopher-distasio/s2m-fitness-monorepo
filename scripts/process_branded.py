@@ -45,9 +45,9 @@ NUTRIENT_IDS = {
     "1166": "vitamin_b2",
     "1167": "vitamin_b3",
     "1175": "vitamin_b6",
-    "1177": "folate",
-    "1186": "folate_food_mcg",
-    "1190": "folic_acid_mcg",
+    "1177": "folate",              # verified via SR Legacy nutrient.csv: 'Folate, total' (UG)
+    "1186": "folic_acid_mcg",      # verified: 'Folic acid' (UG) — corrected from mislabeled folate_food_mcg
+    "1190": "folate_dfe_mcg",      # verified: 'Folate, DFE' (UG) — corrected from mislabeled folic_acid_mcg
     "1170": "pantothenic_acid",
     "1178": "vitamin_b12",
     "1235": "added_sugars",

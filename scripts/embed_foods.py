@@ -24,17 +24,23 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 BATCH_SIZE = 100  # OpenAI embedding batch size
 UPSERT_BATCH_SIZE = 100  # Pinecone upsert batch size
 
-# Load clean food data
-DATA_PATH = os.path.join(os.path.dirname(__file__), "branded_clean.json")
-with open(DATA_PATH, "r", encoding="utf-8") as f:
-    foods = json.load(f)
+# Resume point — set to the last CONFIRMED successful batch from your log
+# ("Progress: 355200/461022"). Batches before this already succeeded and
+# are safely in Pinecone; starting here avoids re-paying OpenAI and
+# re-spending write units on food already embedded.
+START_OFFSET = 355200
 
-print(f"Loaded {len(foods)} foods")
-
-# Init clients
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(INDEX_NAME)
+# NOTE: everything below that actually LOADS DATA, INITS CLIENTS, or RUNS
+# THE MAIN LOOP is inside `if __name__ == "__main__":` further down. This
+# file is safe to import elsewhere (e.g. patch_missing.py imports the
+# constants/functions above and build_metadata() below) without triggering
+# the full embed run as a side effect — that exact bug is what caused
+# patch_missing.py to accidentally re-run this whole script earlier.
+# Client init happens in __main__ below, not here, so importing this module
+# elsewhere doesn't require API keys to be valid or make any network calls.
+openai_client = None
+pc = None
+index = None
 
 # These MUST match the keys process_branded.py actually writes into branded_clean.json.
 # Kept as an explicit list (not retyped by hand elsewhere) so a rename in one file
@@ -45,7 +51,7 @@ NUTRIENT_FIELDS = [
     "calcium", "iron", "magnesium", "potassium", "zinc",
     "vitamin_a_iu", "vitamin_a_rae_mcg", "vitamin_c", "vitamin_d_mcg", "vitamin_e_mg", "vitamin_k",
     "vitamin_b1", "vitamin_b2", "vitamin_b3", "vitamin_b6",
-    "folate", "folate_food_mcg", "folic_acid_mcg", "pantothenic_acid", "vitamin_b12", "added_sugars",
+    "folate", "folic_acid_mcg", "folate_dfe_mcg", "pantothenic_acid", "vitamin_b12", "added_sugars",
     "monounsaturated_fat", "polyunsaturated_fat", "caffeine",
     "phosphorus", "copper", "manganese", "selenium", "choline",
 ]
@@ -107,49 +113,88 @@ def build_metadata(food: dict) -> dict:
     return metadata
 
 
-total = len(foods)
-processed = 0
-errors = 0
+def main():
+    global openai_client, pc, index
 
-print(f"Starting embedding and upsert of {total} foods...")
-print(f"Batch size: {BATCH_SIZE}")
+    # Data loading and client init happen here, not at module level, so
+    # importing this file (e.g. from patch_missing.py) never triggers them.
+    data_path = os.path.join(os.path.dirname(__file__), "branded_clean.json")
+    with open(data_path, "r", encoding="utf-8") as f:
+        foods = json.load(f)
+    print(f"Loaded {len(foods)} foods")
 
-for i in range(0, total, BATCH_SIZE):
-    batch = foods[i:i + BATCH_SIZE]
-    texts = [food["name"] for food in batch]
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+    index = pc.Index(INDEX_NAME)
 
-    try:
-        embeddings = embed_batch(texts)
-    except Exception as e:
-        print(f"Embedding error at batch {i}: {e}")
-        errors += 1
-        time.sleep(5)
-        continue
+    total = len(foods)
+    processed = START_OFFSET
+    errors = 0
+    skipped_empty_names = 0
 
-    records = []
-    for food, embedding in zip(batch, embeddings):
-        records.append({
-            "id": str(food["fdc_id"]),
-            "values": embedding,
-            "metadata": build_metadata(food),
-        })
+    print(f"Starting embedding and upsert of {total} foods...")
+    print(f"Batch size: {BATCH_SIZE}")
+    print(f"Resuming from offset {START_OFFSET} (skipping already-confirmed batches)")
 
-    try:
-        upsert_batch(records)
-    except Exception as e:
-        print(f"Upsert error at batch {i}: {e}")
-        errors += 1
-        time.sleep(5)
-        continue
+    for i in range(START_OFFSET, total, BATCH_SIZE):
+        batch = foods[i:i + BATCH_SIZE]
 
-    processed += len(batch)
-    pct = round(processed / total * 100)
-    print(f"Progress: {processed}/{total} ({pct}%) — errors: {errors}")
+        # Skip foods with empty names instead of crashing the whole batch —
+        # this is what caused the ~100-food gap earlier tonight.
+        valid_batch = [food for food in batch if (food.get("name") or "").strip()]
+        skipped_this_batch = len(batch) - len(valid_batch)
+        if skipped_this_batch:
+            skipped_empty_names += skipped_this_batch
+            print(f"  Skipping {skipped_this_batch} food(s) with empty names in batch {i}")
+        if not valid_batch:
+            continue
 
-    # Rate limit buffer
-    time.sleep(0.5)
+        texts = [food["name"] for food in valid_batch]
 
-print(f"\nDone. Processed: {processed}, Errors: {errors}")
-print(f"Fields truncated for length: {truncated_field_count}")
-print(
-    f"Check your Pinecone dashboard — food-index should have {processed} records.")
+        try:
+            embeddings = embed_batch(texts)
+        except Exception as e:
+            print(f"Embedding error at batch {i}: {e}")
+            errors += 1
+            time.sleep(5)
+            continue
+
+        records = []
+        for food, embedding in zip(valid_batch, embeddings):
+            records.append({
+                "id": str(food["fdc_id"]),
+                "values": embedding,
+                "metadata": build_metadata(food),
+            })
+
+        try:
+            upsert_batch(records)
+        except Exception as e:
+            error_str = str(e)
+            # Write-unit quota errors mean EVERYTHING will keep failing for the
+            # rest of the billing cycle — stop immediately instead of burning
+            # OpenAI cost on embeddings that can't be written anywhere.
+            if "write unit limit" in error_str.lower() or "429" in error_str:
+                print(f"\nSTOPPED at batch {i}: write-unit quota hit ({error_str})")
+                print(f"Processed {processed} before stopping. Update START_OFFSET to {i} and re-run once quota resets or plan is upgraded.")
+                break
+            print(f"Upsert error at batch {i}: {e}")
+            errors += 1
+            time.sleep(5)
+            continue
+
+        processed += len(valid_batch)
+        pct = round(processed / total * 100)
+        print(f"Progress: {processed}/{total} ({pct}%) — errors: {errors}")
+
+        # Rate limit buffer
+        time.sleep(0.5)
+
+    print(f"\nDone. Processed: {processed}, Errors: {errors}")
+    print(f"Fields truncated for length: {truncated_field_count}")
+    print(f"Skipped (empty name): {skipped_empty_names}")
+    print(f"Check your Pinecone dashboard — food-index should have approximately {processed} records.")
+
+
+if __name__ == "__main__":
+    main()

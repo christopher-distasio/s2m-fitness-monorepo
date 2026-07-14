@@ -1,3 +1,4 @@
+import json
 import os
 
 from dotenv import load_dotenv
@@ -30,6 +31,34 @@ def is_whole_container_serving(household_serving_fulltext: str) -> bool:
     return any(phrase in text for phrase in WHOLE_CONTAINER_PHRASES)
 
 
+def get_serving_size_g(metadata: dict) -> tuple[float, str]:
+    """
+    Returns (serving_size_g, source_label). Handles both dataset shapes:
+    - Branded foods: a single serving_size_g field directly in metadata.
+    - SR Legacy foods: a portions_json field with multiple named portion
+      options, none of which is "the" serving size the way a label declares
+      one — so we pick a default (first available) portion.
+    Falls back to 100 (i.e. return raw per-100g values, unscaled) only if
+    neither is present, so behavior is at least predictable, not silently
+    wrong, for any food this doesn't yet handle.
+    """
+    if metadata.get("serving_size_g"):
+        return metadata["serving_size_g"], "branded_serving_size"
+
+    portions_raw = metadata.get("portions_json")
+    if portions_raw:
+        try:
+            portions = json.loads(portions_raw)
+        except (json.JSONDecodeError, TypeError):
+            portions = []
+        for portion in portions:
+            gram_weight = portion.get("gram_weight")
+            if gram_weight:
+                return gram_weight, "sr_legacy_default_portion"
+
+    return 100, "no_serving_data_fallback"
+
+
 async def lookup_food(query: str) -> dict | None:
     print("RAG query:", query)
 
@@ -58,10 +87,10 @@ async def lookup_food(query: str) -> dict | None:
 
     print(f"Top match: {metadata.get('name')} — score: {match['score']}")
 
-    # Pinecone stores nutrient values per 100g. serving_size_g (captured at
-    # embed time from branded_food.csv) tells us the actual serving size, so
-    # we scale everything to that instead of returning raw per-100g values.
-    serving_size_g = metadata.get("serving_size_g") or 100
+    # Pinecone stores nutrient values per 100g. serving_size_g (branded) or
+    # a default portion's gram_weight (SR Legacy) tells us the actual amount
+    # to scale to, instead of returning raw per-100g values.
+    serving_size_g, serving_source = get_serving_size_g(metadata)
     multiplier = serving_size_g / 100
 
     calories = (metadata.get("calories") or 0) * multiplier
@@ -103,7 +132,7 @@ async def lookup_food(query: str) -> dict | None:
     # except Exception as e:
     #     print(f"USDA lookup failed for fdc_id {fdc_id}: {e}")
 
-    print(f"fdc_id: {fdc_id}, serving_size_g: {serving_size_g}, calories: {calories}")
+    print(f"fdc_id: {fdc_id}, serving_size_g: {serving_size_g} (source: {serving_source}), calories: {calories}")
 
     household_serving_fulltext = metadata.get("household_serving_fulltext", "")
     whole_container = is_whole_container_serving(household_serving_fulltext)
@@ -115,6 +144,7 @@ async def lookup_food(query: str) -> dict | None:
         "carbs": round(carbs, 2),
         "fat": round(fat, 2),
         "serving_size_g": serving_size_g,
+        "serving_source": serving_source,
         "serving_note": "This serving size represents the entire container." if whole_container else None,
         "source": "usda_rag",
     }
