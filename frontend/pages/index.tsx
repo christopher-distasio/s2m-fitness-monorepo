@@ -229,10 +229,38 @@ interface FoodLog {
   alternatives?: string[];
 }
 
+interface FoodCandidate {
+  fdc_id: string;
+  name: string;
+  brand?: string;
+  serving_label?: string;
+  serving_size_g?: number;
+  serving_source?: string;
+  serving_note?: string | null;
+  score?: number;
+  source?: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+}
+
+interface PortionOption {
+  label: string;
+  gram_weight: number;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+}
+
 interface ParsedResult {
   food: string;
   calories: number;
   serving_size?: string;
+  brand?: string | null;
+  serving_label?: string;
+  serving_note?: string | null;
   macronutrients?: {
     carbohydrates: number;
     protein: number;
@@ -242,7 +270,210 @@ interface ParsedResult {
   confidence?: "high" | "medium" | "low";
   reasoning?: string;
   alternatives?: string[];
+  candidates?: FoodCandidate[];
+  portion_options?: PortionOption[];
   notes?: string;
+  resolution?: {
+    status?: "resolved" | "needs_clarification" | "needs_brand_choice";
+    axis?: string | null;
+    reason?: string;
+    question?: string;
+  };
+}
+
+// The upfront brand-vs-generic question. Kept identical for text and voice so
+// the two flows can't drift (same lesson as the spoken-message bug).
+const BRAND_CHOICE_QUESTION =
+  "Are you looking for a specific brand, or a general item?";
+const BRAND_CHOICE_SPEECH = `${BRAND_CHOICE_QUESTION} Just say "brand", or "generic".`;
+
+function isBrandChoice(parsed: ParsedResult): boolean {
+  return parsed.resolution?.status === "needs_brand_choice";
+}
+
+// Trim limits for the clarification list. The visual card can show a bit more
+// since it's scannable at a glance; the spoken voice list is deliberately
+// shorter (a long read-aloud is tiring) but "more" still reveals the full list.
+// The divergence is intentional and lives here in one place — not accidental
+// drift between two independently-built lists (the earlier voice bug).
+const MAX_VISIBLE_CANDIDATES = 3;
+const MAX_VISIBLE_PORTIONS = 4;
+const MAX_VOICE_OPTIONS = 3;
+
+interface ClarifyView {
+  candidates: FoodCandidate[];
+  portions: PortionOption[];
+  visibleCandidates: FoodCandidate[];
+  visiblePortions: PortionOption[];
+  hasMore: boolean;
+}
+
+interface ClarifyOption {
+  key: string;
+  speech: string;
+  pick: {
+    food_name: string;
+    calories: number;
+    protein?: number;
+    carbs?: number;
+    fat?: number;
+    quantity?: string;
+    raw_input: string;
+  };
+}
+
+/**
+ * The grounded candidate foods to offer as "did you mean?" — everything the
+ * retrieval returned except the one already chosen as the primary. This is the
+ * SINGLE source used for BOTH the visual candidate buttons and the spoken
+ * clarification, so the two can never drift apart (the bug where voice dropped
+ * "Bananas, raw" happened because they were built separately).
+ */
+function clarificationCandidates(parsed: ParsedResult): FoodCandidate[] {
+  const chosen = (parsed.food || "").trim().toLowerCase();
+  return (parsed.candidates || []).filter(
+    (c) => (c.name || "").trim().toLowerCase() !== chosen,
+  );
+}
+
+/**
+ * Compute the trimmed clarification view. `expanded` decides whether the full
+ * lists are shown or just the top MAX_VISIBLE_* of each group. This is the ONE
+ * place the trim limits live, so the visual card and the spoken list always
+ * agree on what's shown. `hasMore` is true only when something was trimmed off.
+ */
+function clarifyView(parsed: ParsedResult, expanded: boolean): ClarifyView {
+  const candidates = clarificationCandidates(parsed);
+  const allPortions = parsed.portion_options || [];
+  // A single portion isn't a real choice, so we never offer it.
+  const portions = allPortions.length > 1 ? allPortions : [];
+  const visibleCandidates = expanded
+    ? candidates
+    : candidates.slice(0, MAX_VISIBLE_CANDIDATES);
+  const visiblePortions = expanded
+    ? portions
+    : portions.slice(0, MAX_VISIBLE_PORTIONS);
+  const hasMore =
+    candidates.length > visibleCandidates.length ||
+    portions.length > visiblePortions.length;
+  return { candidates, portions, visibleCandidates, visiblePortions, hasMore };
+}
+
+function speakCandidate(c: FoodCandidate): string {
+  const name = c.brand ? `${c.brand} ${c.name}` : c.name;
+  return c.calories != null
+    ? `${name}, ${Math.round(c.calories)} calories`
+    : name;
+}
+
+/**
+ * The FULL flat, ordered list of selectable options for voice: candidates
+ * first, then portions — the same top-to-bottom order the card renders. Each
+ * option carries the exact logResolved() payload, so a spoken number resolves
+ * identically to a tap. Not trimmed here; callers apply MAX_VOICE_OPTIONS.
+ */
+function allClarifyOptions(
+  parsed: ParsedResult,
+  rawInput: string,
+): ClarifyOption[] {
+  const candidates = clarificationCandidates(parsed);
+  const allPortions = parsed.portion_options || [];
+  const portions = allPortions.length > 1 ? allPortions : [];
+  const foodName = parsed.brand
+    ? `${parsed.brand} ${parsed.food}`
+    : parsed.food;
+  const options: ClarifyOption[] = [];
+  for (const c of candidates) {
+    options.push({
+      key: `c-${c.fdc_id}`,
+      speech: speakCandidate(c),
+      pick: {
+        food_name: c.brand ? `${c.brand} ${c.name}` : c.name,
+        calories: c.calories,
+        protein: c.protein,
+        carbs: c.carbs,
+        fat: c.fat,
+        quantity: c.serving_label,
+        raw_input: rawInput,
+      },
+    });
+  }
+  for (const p of portions) {
+    options.push({
+      key: `p-${p.label}`,
+      speech: `${p.label}, ${Math.round(p.calories)} calories`,
+      pick: {
+        food_name: foodName,
+        calories: p.calories,
+        protein: p.protein,
+        carbs: p.carbs,
+        fat: p.fat,
+        quantity: p.label,
+        raw_input: rawInput,
+      },
+    });
+  }
+  return options;
+}
+
+/**
+ * The options actually offered by voice right now: the top MAX_VOICE_OPTIONS
+ * by default, or the full list once "more" has expanded it. Spoken numbering
+ * and number-selection both use this, so they always agree on what "3" means.
+ */
+function clarifyOptions(
+  parsed: ParsedResult,
+  rawInput: string,
+  expanded: boolean,
+): ClarifyOption[] {
+  const all = allClarifyOptions(parsed, rawInput);
+  return expanded ? all : all.slice(0, MAX_VOICE_OPTIONS);
+}
+
+/**
+ * Spoken clarification for VOICE mode: a short numbered list (top
+ * MAX_VOICE_OPTIONS) so the user can answer "one", "number three", etc. Ends by
+ * offering to hear more only when trimmed-off items actually exist. "more"
+ * expands to the full list.
+ */
+function buildNumberedClarificationSpeech(
+  parsed: ParsedResult,
+  rawInput: string,
+  expanded: boolean,
+): string {
+  const all = allClarifyOptions(parsed, rawInput);
+  if (all.length === 0) {
+    const alt = parsed.alternatives?.join(", or ") ?? "";
+    if (alt) return `I think this is ${parsed.food}. Did you mean ${alt}?`;
+    return `I wasn't sure about that.${
+      parsed.reasoning ? ` ${parsed.reasoning}.` : ""
+    } Please be more specific.`;
+  }
+  const options = expanded ? all : all.slice(0, MAX_VOICE_OPTIONS);
+  const hasMore = all.length > options.length;
+  const numbered = options.map((o, i) => `${i + 1}, ${o.speech}`).join(". ");
+  let msg = `I think this is ${parsed.food}. Did you mean: ${numbered}.`;
+  if (hasMore) msg += " ...or would you like to hear more?";
+  return msg;
+}
+
+/**
+ * Plain (un-numbered) spoken clarification for TEXT mode, trimmed to the same
+ * shared limits as the default visual view. Text mode resolves by tapping a
+ * button, so there's no numbering or voice commands — just a short readout of
+ * the top options. Falls back to free-text alternatives when nothing grounded.
+ */
+function buildDidYouMeanSpeech(parsed: ParsedResult): string {
+  const { visibleCandidates, visiblePortions } = clarifyView(parsed, false);
+  if (visibleCandidates.length > 0) {
+    return visibleCandidates.map(speakCandidate).join(", or ");
+  }
+  if (visiblePortions.length > 0) {
+    return visiblePortions
+      .map((p) => `${p.label}, ${Math.round(p.calories)} calories`)
+      .join(", or ");
+  }
+  return parsed.alternatives?.join(", or ") ?? "";
 }
 
 export default function Home() {
@@ -305,6 +536,16 @@ export default function Home() {
   const [conversationHistory, setConversationHistory] = useState<
     Array<{ role: "user" | "assistant"; content: string }>
   >([]);
+  // Whether the clarification list is expanded past the trimmed default. Drives
+  // BOTH the visual "See more" and the voice "more" command, and is read inside
+  // the recorder's onstop closure (hence the ref) so "repeat"/number-selection
+  // always act on the most recently shown list.
+  const [clarifyExpanded, setClarifyExpanded] = useState(false);
+  const clarifyExpandedRef = useRef(false);
+  const setClarifyExpandedBoth = useCallback((value: boolean) => {
+    clarifyExpandedRef.current = value;
+    setClarifyExpanded(value);
+  }, []);
   const [showVoiceSetupRecovery, setShowVoiceSetupRecovery] = useState(false);
   const [continuingVoiceSetup, setContinuingVoiceSetup] = useState(false);
 
@@ -672,17 +913,17 @@ export default function Home() {
         const pending = { parsed, raw_input: textInput, uid };
         setPendingParse(pending);
         pendingParseRef.current = pending;
-        const alternatives = parsed.alternatives?.join(", or ") ?? "";
-        const msg =
-          parsed.confidence === "low"
+        setClarifyExpandedBoth(false);
+        const msg = isBrandChoice(parsed)
+          ? `I think this is ${parsed.food}. ${BRAND_CHOICE_SPEECH}`
+          : parsed.confidence === "low"
             ? `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`
-            : `I think this is ${parsed.food}. Did you mean ${alternatives}?`;
+            : `I think this is ${parsed.food}. Did you mean ${buildDidYouMeanSpeech(parsed)}?`;
         setStatus(msg);
         shouldAutoListen = true;
         await speak(msg);
         setTextInput("");
       }
-      setConversationHistory([]);
     } catch {
       const err = "Error logging food.";
       setStatus(err);
@@ -801,6 +1042,11 @@ export default function Home() {
           message?: string;
           transcription?: string;
           parsed?: ParsedResult;
+          clarification?: {
+            type: "select" | "repeat" | "more" | "brand_choice";
+            index?: number;
+            value?: "generic" | "brand";
+          };
         };
 
         if (!res.ok) {
@@ -809,65 +1055,136 @@ export default function Home() {
           );
         }
 
-        if (data.error) {
-          const err =
-            "I couldn't understand that. Please try saying something more specific.";
-          setStatus(err);
-          await speak(err);
-          if (wasAwaitingClarification) shouldAutoListen = true;
-          return;
+        // The user is answering an open clarification with a voice command
+        // ("one" / "repeat" / "more") rather than naming a food. The backend
+        // detected this and did NOT parse/log, so we act on the SAME list the
+        // card is currently showing (respecting the expanded state). We set a
+        // flag instead of returning so control still reaches the auto-listen
+        // at the end (which re-arms the mic for the next spoken answer).
+        let handledClarification = false;
+        if (wasAwaitingClarification && data.clarification) {
+          const pending = pendingParseRef.current;
+          if (pending) {
+            handledClarification = true;
+            const expanded = clarifyExpandedRef.current;
+            const cmd = data.clarification;
+            if (cmd.type === "brand_choice" && cmd.value) {
+              // Answered the upfront brand-vs-generic question — re-query the
+              // ORIGINAL food, filtered to that source, then continue.
+              await resolveWithSource(pending.uid, pending.raw_input, cmd.value);
+              // If it produced another clarification, keep listening; if it
+              // logged (high confidence), pendingParse is now null so
+              // maybeAutoListen will simply no-op.
+              shouldAutoListen = true;
+            } else if (cmd.type === "select" && cmd.index != null) {
+              const options = clarifyOptions(
+                pending.parsed,
+                pending.raw_input,
+                expanded,
+              );
+              const chosen = options[cmd.index - 1];
+              if (chosen) {
+                // Same path as tapping the button — no re-parse, terminal log.
+                await logResolved(pending.uid, chosen.pick);
+                return;
+              }
+              const msg = `I only have ${options.length} option${options.length === 1 ? "" : "s"}. ${buildNumberedClarificationSpeech(pending.parsed, pending.raw_input, expanded)}`;
+              setStatus(msg);
+              shouldAutoListen = true;
+              await speak(msg);
+            } else if (cmd.type === "more") {
+              // Expand once; re-render and re-speak reflect the fuller list.
+              setClarifyExpandedBoth(true);
+              const msg = buildNumberedClarificationSpeech(
+                pending.parsed,
+                pending.raw_input,
+                true,
+              );
+              setStatus(msg);
+              shouldAutoListen = true;
+              await speak(msg);
+            } else {
+              // "repeat" — say the currently shown list again, as-is.
+              const msg = buildNumberedClarificationSpeech(
+                pending.parsed,
+                pending.raw_input,
+                expanded,
+              );
+              setStatus(msg);
+              shouldAutoListen = true;
+              await speak(msg);
+            }
+          }
         }
 
-        if (data.message && !data.parsed) {
-          setStatus(data.message);
-          await speak(data.message);
-          fetchLogs(uid);
-          await fetchSummary(uid);
-          return;
-        }
+        if (!handledClarification) {
+          if (data.error) {
+            const err =
+              "I couldn't understand that. Please try saying something more specific.";
+            setStatus(err);
+            await speak(err);
+            if (wasAwaitingClarification) shouldAutoListen = true;
+            return;
+          }
 
-        if (!data.parsed) {
-          throw new Error("Voice API response missing parsed food data");
-        }
+          if (data.message && !data.parsed) {
+            setStatus(data.message);
+            await speak(data.message);
+            fetchLogs(uid);
+            await fetchSummary(uid);
+            return;
+          }
 
-        console.log("[voice] onstop response", {
-          confidence: data.parsed.confidence,
-          parsed: data.parsed,
-        });
+          if (!data.parsed) {
+            throw new Error("Voice API response missing parsed food data");
+          }
 
-        if (data.parsed.confidence === "high") {
-          const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
-          setStatus(
-            `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} cal`,
-          );
-          await speak(msg);
-          await fetchLogs(uid);
-          await fetchSummary(uid);
-          setPendingParse(null);
-          pendingParseRef.current = null;
-          setConversationHistory([]);
-          endPostLoginVoiceSession();
-        } else {
-          const pending = {
+          console.log("[voice] onstop response", {
+            confidence: data.parsed.confidence,
             parsed: data.parsed,
-            raw_input: data.transcription ?? "",
-            uid,
-          };
-          setPendingParse(pending);
-          pendingParseRef.current = pending;
-          setConversationHistory((prev) => [
-            ...prev,
-            { role: "user", content: data.transcription ?? "" },
-            { role: "assistant", content: JSON.stringify(data.parsed) },
-          ]);
-          const alternatives = data.parsed.alternatives?.join(", or ") ?? "";
-          const msg =
-            data.parsed.confidence === "low"
-              ? `I wasn't sure about that. ${data.parsed.reasoning}. Please be more specific.`
-              : `I think this is ${data.parsed.food}. Did you mean ${alternatives}?`;
-          setStatus(msg);
-          shouldAutoListen = true;
-          await speak(msg);
+          });
+
+          if (data.parsed.confidence === "high") {
+            const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
+            setStatus(
+              `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} cal`,
+            );
+            await speak(msg);
+            await fetchLogs(uid);
+            await fetchSummary(uid);
+            setPendingParse(null);
+            pendingParseRef.current = null;
+            setConversationHistory([]);
+            endPostLoginVoiceSession();
+          } else {
+            const pending = {
+              parsed: data.parsed,
+              raw_input: data.transcription ?? "",
+              uid,
+            };
+            setPendingParse(pending);
+            pendingParseRef.current = pending;
+            setClarifyExpandedBoth(false);
+            setConversationHistory((prev) => [
+              ...prev,
+              { role: "user", content: data.transcription ?? "" },
+              { role: "assistant", content: JSON.stringify(data.parsed) },
+            ]);
+            // Brand-vs-generic gate comes first; otherwise a numbered list so
+            // the user can answer "one", "two"… (even at low confidence, as
+            // long as there are grounded options — the builder falls back to a
+            // "be more specific" prompt only when there's genuinely nothing).
+            const msg = isBrandChoice(data.parsed)
+              ? `I think this is ${data.parsed.food}. ${BRAND_CHOICE_SPEECH}`
+              : buildNumberedClarificationSpeech(
+                  data.parsed,
+                  data.transcription ?? "",
+                  false,
+                );
+            setStatus(msg);
+            shouldAutoListen = true;
+            await speak(msg);
+          }
         }
       } catch (err) {
         console.log("[voice] onstop catch", {
@@ -942,6 +1259,391 @@ export default function Home() {
     setConversationHistory([]);
     fetchLogs(uid);
     fetchSummary(uid);
+  }
+
+  async function logResolved(
+    uid: string,
+    pick: {
+      food_name: string;
+      calories: number;
+      protein?: number;
+      carbs?: number;
+      fat?: number;
+      quantity?: string;
+      raw_input: string;
+    },
+  ) {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/food`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: uid,
+          resolved: true,
+          raw_input: pick.raw_input,
+          food_name: pick.food_name,
+          calories: pick.calories,
+          protein: pick.protein,
+          carbs: pick.carbs,
+          fat: pick.fat,
+          quantity: pick.quantity,
+        }),
+      });
+      const data = await res.json();
+      const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
+      setStatus(msg);
+      await speak(msg);
+      setTextInput("");
+      setPendingParse(null);
+      pendingParseRef.current = null;
+      endPostLoginVoiceSession();
+      setConversationHistory([]);
+      await fetchLogs(uid);
+      await fetchSummary(uid);
+    } finally {
+      flushSync(() => setLoading(false));
+    }
+  }
+
+  // Re-run the parse for the ORIGINAL input, now restricted to a single source
+  // (the user's brand-vs-generic answer). Shared by text (button tap) and voice
+  // (spoken "brand"/"generic"), so both flows resolve identically. If the
+  // filtered result is unambiguous it logs directly; otherwise it shows the
+  // now single-source candidate/portion clarification.
+  async function resolveWithSource(
+    uid: string,
+    originalInput: string,
+    source: "generic" | "brand",
+  ) {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/food/parse`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ raw_input: originalInput, source_filter: source }),
+      });
+      const parsed = (await res.json()) as ParsedResult & { error?: string };
+
+      if (parsed.error) {
+        const err = `I couldn't find a ${source === "brand" ? "branded" : "general"} match. Please try again.`;
+        setStatus(err);
+        await speak(err);
+        return;
+      }
+
+      if (parsed.confidence === "high") {
+        await logResolved(uid, {
+          food_name: parsed.brand ? `${parsed.brand} ${parsed.food}` : parsed.food,
+          calories: parsed.calories,
+          protein: parsed.macronutrients?.protein,
+          carbs: parsed.macronutrients?.carbohydrates,
+          fat: parsed.macronutrients?.fats,
+          quantity: parsed.serving_size,
+          raw_input: originalInput,
+        });
+        return;
+      }
+
+      const pending = { parsed, raw_input: originalInput, uid };
+      setPendingParse(pending);
+      pendingParseRef.current = pending;
+      setClarifyExpandedBoth(false);
+      setConversationHistory((prev) => [
+        ...prev,
+        { role: "user", content: source },
+        { role: "assistant", content: JSON.stringify(parsed) },
+      ]);
+      // Voice interactions happen in speak mode → numbered list (with "hear
+      // more?"); text mode taps buttons so it gets a plain readout. Both
+      // builders fall back gracefully when there are no grounded options.
+      const numbered = mode === "speak";
+      const msg = numbered
+        ? buildNumberedClarificationSpeech(parsed, originalInput, false)
+        : `I think this is ${parsed.food}. Did you mean ${buildDidYouMeanSpeech(parsed)}?`;
+      setStatus(msg);
+      await speak(msg);
+    } finally {
+      flushSync(() => setLoading(false));
+    }
+  }
+
+  function dismissPending() {
+    setPendingParse(null);
+    pendingParseRef.current = null;
+    setStatus("");
+    setConversationHistory([]);
+    setClarifyExpandedBoth(false);
+  }
+
+  // The clarification card, rendered in BOTH see and speak mode so the response
+  // (candidates/portions or the brand question) stays on screen and manageable
+  // rather than vanishing with an ephemeral status line. Returns null when
+  // there's nothing pending. One definition = no drift between the two modes.
+  function renderClarificationCard() {
+    if (!pendingParse) return null;
+    const parsed = pendingParse.parsed;
+    const brandChoice = isBrandChoice(parsed);
+    return (
+      <section
+        ref={confidenceSectionRef}
+        tabIndex={-1}
+        aria-labelledby="confidence-heading"
+        aria-live="polite"
+        className={`w-full text-left border rounded-xl p-4 sm:p-6 outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 ${parsed.confidence === "low" ? "bg-red-900/30 border-red-400/40" : "bg-yellow-900/30 border-yellow-400/40"}`}
+      >
+        <div className="flex items-start justify-between gap-3 mb-1">
+          <h2
+            id="confidence-heading"
+            className="text-lg font-semibold text-white"
+          >
+            {parsed.confidence === "low" ? "Unsure" : "Less Sure"}
+          </h2>
+          <button
+            type="button"
+            onClick={dismissPending}
+            className="flex flex-col items-center shrink-0 text-white/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-white rounded px-1.5 py-0.5 -mt-1 -mr-1"
+            aria-label="Dismiss this suggestion"
+          >
+            <span aria-hidden="true" className="text-lg leading-none">
+              ×
+            </span>
+            <span className="text-[10px] leading-tight">Tap to dismiss</span>
+          </button>
+        </div>
+        <p className="text-white text-sm mb-1">
+          <strong>
+            {parsed.brand ? `${parsed.brand} ` : ""}
+            {parsed.food}
+          </strong>
+          {parsed.serving_label ? ` — ${parsed.serving_label}` : ""}{" "}
+          — {Math.round(parsed.calories)} cal
+        </p>
+        {parsed.serving_note && (
+          <p className="text-amber-200 text-xs mb-2">{parsed.serving_note}</p>
+        )}
+        {parsed.reasoning && (
+          <p className="text-white text-sm mb-3">{parsed.reasoning}</p>
+        )}
+        {(() => {
+          // Brand-vs-generic comes first, before any mixed candidate list.
+          if (brandChoice) {
+            return (
+              <div className="mb-4">
+                <p className="text-xs text-white uppercase tracking-wide font-medium mb-2">
+                  Are you looking for a specific brand, or a general item?
+                </p>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      resolveWithSource(
+                        pendingParse.uid,
+                        pendingParse.raw_input,
+                        "generic",
+                      )
+                    }
+                    className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                    aria-label="A general item — say generic"
+                  >
+                    <span className="font-medium">A general item</span>
+                    <span className="shrink-0 text-xs text-white/70">
+                      say &ldquo;generic&rdquo;
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      resolveWithSource(
+                        pendingParse.uid,
+                        pendingParse.raw_input,
+                        "brand",
+                      )
+                    }
+                    className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                    aria-label="A specific brand — say brand"
+                  >
+                    <span className="font-medium">A specific brand</span>
+                    <span className="shrink-0 text-xs text-white/70">
+                      say &ldquo;brand&rdquo;
+                    </span>
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
+          const view = clarifyView(parsed, clarifyExpanded);
+          const hasGrounded =
+            view.candidates.length > 0 || view.portions.length > 0;
+
+          if (hasGrounded) {
+            return (
+              <div className="mb-4 flex flex-col gap-4">
+                {view.visibleCandidates.length > 0 && (
+                  <div>
+                    <p className="text-xs text-white uppercase tracking-wide font-medium mb-2">
+                      Did you mean a different food?
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      {view.visibleCandidates.map((c) => (
+                        <button
+                          key={c.fdc_id}
+                          type="button"
+                          onClick={() =>
+                            logResolved(pendingParse.uid, {
+                              food_name: c.brand
+                                ? `${c.brand} ${c.name}`
+                                : c.name,
+                              calories: c.calories,
+                              protein: c.protein,
+                              carbs: c.carbs,
+                              fat: c.fat,
+                              quantity: c.serving_label,
+                              raw_input: pendingParse.raw_input,
+                            })
+                          }
+                          className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                          aria-label={`Log ${c.brand ? `${c.brand} ` : ""}${c.name}, ${c.serving_label ?? ""}, ${Math.round(c.calories)} calories`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block font-medium truncate">
+                              {c.brand ? `${c.brand} ` : ""}
+                              {c.name}
+                            </span>
+                            {c.serving_label && (
+                              <span className="block text-xs text-white/70">
+                                {c.serving_label}
+                              </span>
+                            )}
+                          </span>
+                          <span className="shrink-0 text-xs font-semibold">
+                            {Math.round(c.calories)} cal
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {view.visiblePortions.length > 0 && (
+                  <div>
+                    <p className="text-xs text-white uppercase tracking-wide font-medium mb-2">
+                      How much? — {parsed.food}
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      {view.visiblePortions.map((p, i) => (
+                        <button
+                          key={`${p.label}-${i}`}
+                          type="button"
+                          onClick={() =>
+                            logResolved(pendingParse.uid, {
+                              food_name: parsed.brand
+                                ? `${parsed.brand} ${parsed.food}`
+                                : parsed.food,
+                              calories: p.calories,
+                              protein: p.protein,
+                              carbs: p.carbs,
+                              fat: p.fat,
+                              quantity: p.label,
+                              raw_input: pendingParse.raw_input,
+                            })
+                          }
+                          className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                          aria-label={`Log ${p.label}, ${Math.round(p.calories)} calories`}
+                        >
+                          <span className="min-w-0 truncate">{p.label}</span>
+                          <span className="shrink-0 text-xs font-semibold">
+                            {Math.round(p.calories)} cal
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(view.hasMore || clarifyExpanded) && (
+                  <button
+                    type="button"
+                    onClick={() => setClarifyExpandedBoth(!clarifyExpanded)}
+                    className="self-start text-xs font-medium text-white underline underline-offset-2 hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-white rounded px-1 py-0.5"
+                    aria-expanded={clarifyExpanded}
+                  >
+                    {clarifyExpanded ? "See fewer" : "See more"}
+                  </button>
+                )}
+
+                <p className="text-xs text-white">
+                  If none of these match, type or say what&apos;s needed and
+                  press{" "}
+                  <span className="font-medium text-white">Log Food</span> or{" "}
+                  <span className="font-medium text-white">Speak to me</span>.
+                </p>
+              </div>
+            );
+          }
+
+          if (parsed.alternatives && parsed.alternatives.length > 0) {
+            return (
+              <div className="mb-4">
+                <p className="text-xs text-white uppercase tracking-wide font-medium mb-2">
+                  Did you mean?
+                </p>
+                <div className="flex flex-col gap-2">
+                  {parsed.alternatives.map((alt, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => {
+                        setPendingParse({ ...pendingParse, raw_input: alt });
+                        confirmLog(pendingParse.uid, alt);
+                      }}
+                      className="text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                      aria-label={`Log ${alt} instead`}
+                    >
+                      {alt}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-white mt-3">
+                  If none of these match, type or say what&apos;s needed and
+                  press{" "}
+                  <span className="font-medium text-white">Log Food</span> or{" "}
+                  <span className="font-medium text-white">Speak to me</span>.
+                </p>
+              </div>
+            );
+          }
+
+          return null;
+        })()}
+        {!brandChoice && (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                confirmLog(pendingParse.uid, pendingParse.raw_input)
+              }
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+              aria-label={`Confirm and log ${parsed.food}`}
+            >
+              Yes, log it
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                dismissPending();
+                textInputRef.current?.focus();
+              }}
+              className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+              aria-label="Cancel and re-enter food"
+            >
+              Let me re-enter
+            </button>
+          </div>
+        )}
+      </section>
+    );
   }
 
   async function clearDemoData() {
@@ -1404,6 +2106,12 @@ export default function Home() {
                   </p>
                 </div>
               )}
+              {/* Same persistent clarification card as text mode */}
+              {pendingParse && (
+                <div className="mt-6 w-full max-w-md">
+                  {renderClarificationCard()}
+                </div>
+              )}
             </section>
           ) : (
             <div className="flex flex-col gap-3">
@@ -1756,98 +2464,8 @@ export default function Home() {
                 </div>
               </section>
 
-              {/* Pending parse / clarification */}
-              {pendingParse && (
-                <section
-                  ref={confidenceSectionRef}
-                  tabIndex={-1}
-                  aria-labelledby="confidence-heading"
-                  aria-live="polite"
-                  className={`border rounded-xl p-4 sm:p-6 outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 ${pendingParse.parsed.confidence === "low" ? "bg-red-900/30 border-red-400/40" : "bg-yellow-900/30 border-yellow-400/40"}`}
-                >
-                  <h2
-                    id="confidence-heading"
-                    className="text-lg font-semibold text-white mb-1"
-                  >
-                    {pendingParse.parsed.confidence === "low"
-                      ? "Unsure"
-                      : "Less Sure"}
-                  </h2>
-                  <p className="text-white text-sm mb-1">
-                    <strong>{pendingParse.parsed.food}</strong> —{" "}
-                    {Math.round(pendingParse.parsed.calories)} cal{" "}
-                  </p>
-                  {pendingParse.parsed.reasoning && (
-                    <p className="text-white text-sm mb-3">
-                      {pendingParse.parsed.reasoning}
-                    </p>
-                  )}
-                  {pendingParse.parsed.alternatives &&
-                    pendingParse.parsed.alternatives.length > 0 && (
-                      <div className="mb-4">
-                        <p className="text-xs text-white uppercase tracking-wide font-medium mb-2">
-                          Did you mean?
-                        </p>
-                        <div className="flex flex-col gap-2">
-                          {pendingParse.parsed.alternatives.map((alt, i) => (
-                            <button
-                              key={i}
-                              type="button"
-                              onClick={() => {
-                                setPendingParse({
-                                  ...pendingParse,
-                                  raw_input: alt,
-                                });
-                                confirmLog(pendingParse.uid, alt);
-                              }}
-                              className="text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                              aria-label={`Log ${alt} instead`}
-                            >
-                              {alt}
-                            </button>
-                          ))}
-                        </div>
-                        <p className="text-xs text-white mt-3">
-                          If none of these match, type or say what&apos;s needed
-                          and press{" "}
-                          <span className="font-medium text-white">
-                            Log Food
-                          </span>{" "}
-                          or{" "}
-                          <span className="font-medium text-white">
-                            Speak to me
-                          </span>
-                          .
-                        </p>
-                      </div>
-                    )}
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        confirmLog(pendingParse.uid, pendingParse.raw_input)
-                      }
-                      className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                      aria-label={`Confirm and log ${pendingParse.parsed.food}`}
-                    >
-                      Yes, log it
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPendingParse(null);
-                        setStatus("");
-                        setConversationHistory([]);
-                        textInputRef.current?.focus();
-                      }}
-                      className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                      aria-label="Cancel and re-enter food"
-                    >
-                      Let me re-enter
-                    </button>
-                  </div>
-                </section>
-              )}
+              {/* Pending parse / clarification (same card also shown in speak mode) */}
+              {renderClarificationCard()}
 
               {/* Status live region */}
               {status && (
