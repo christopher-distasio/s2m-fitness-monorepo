@@ -7,6 +7,11 @@ from backend.services.transcriber import transcribe_audio
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
+from backend.services.clarification import (
+    parse_clarification_command,
+    parse_brand_choice,
+    clarification_state,
+)
 from backend.services.tts_service import generate_speech
 from fastapi.responses import Response
 import json
@@ -18,6 +23,15 @@ class FoodLogRequest(BaseModel):
     user_id: str
     raw_input: str
     food_name: Optional[str] = None
+    # When the user picks a grounded alternative/portion, the frontend sends
+    # the already-resolved nutrition so we log it exactly as shown — no
+    # re-parse, no re-lookup, no drift from what they saw and chose.
+    resolved: bool = False
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fat: Optional[float] = None
+    quantity: Optional[str] = None
 
 
 class CorrectionRequest(BaseModel):
@@ -34,6 +48,9 @@ class CorrectionRequest(BaseModel):
 class ParseRequest(BaseModel):
     raw_input: str
     conversation_history: list[dict] = []
+    # "generic" | "brand" — set when re-querying after the user answers the
+    # brand-vs-generic question, so retrieval is restricted to that source.
+    source_filter: Optional[str] = None
 
 
 class TTSRequest(BaseModel):
@@ -86,12 +103,44 @@ async def parse_food(request: ParseRequest):
     Parse-only endpoint used by the frontend to decide whether to auto-log
     (high confidence) or ask the user to confirm (medium/low confidence).
     """
-    parsed = await parse_food_input(request.raw_input, request.conversation_history)
+    parsed = await parse_food_input(
+        request.raw_input,
+        request.conversation_history,
+        source_filter=request.source_filter,
+    )
     return parsed
 
 
 @router.post("/food")
 async def log_food(request: FoodLogRequest):
+    # Grounded pick path: log exactly what the user selected, skipping the
+    # parser/lookup entirely so the stored values match the shown values.
+    if request.resolved:
+        food_log = FoodLog(
+            user_id=request.user_id,
+            raw_input=request.raw_input,
+            food_name=request.food_name or request.raw_input,
+            calories=request.calories,
+            protein=request.protein,
+            carbs=request.carbs,
+            fat=request.fat,
+            quantity=request.quantity,
+            confidence="high",
+        )
+        await food_log.insert()
+        return {
+            "message": "Food logged successfully",
+            "id": str(food_log.id),
+            "parsed": {
+                "food": food_log.food_name,
+                "calories": food_log.calories,
+                "confidence": "high",
+                "notes": None,
+                "reasoning": None,
+                "alternatives": None,
+            },
+        }
+
     parsed = await parse_food_input(request.raw_input)
 
     if "error" in parsed:
@@ -115,6 +164,25 @@ async def log_food_voice(
 ):
     audio_bytes = await audio.read()
     raw_input = await transcribe_audio(audio_bytes, audio.filename)
+
+    history = json.loads(conversation_history)
+
+    # If we're mid-clarification, the utterance is a command about the question
+    # we just asked — NOT a new food. Catch it before the parser can combine it
+    # with the previous food and silently auto-log. We only classify here; the
+    # frontend acts on it (resolve a number, re-query with a source filter, etc).
+    state = clarification_state(history)
+    if state == "brand_choice":
+        choice = parse_brand_choice(raw_input)
+        if choice:
+            return {
+                "transcription": raw_input,
+                "clarification": {"type": "brand_choice", "value": choice},
+            }
+    elif state == "list":
+        command = parse_clarification_command(raw_input)
+        if command:
+            return {"transcription": raw_input, "clarification": command}
 
     intent = await classify_intent(raw_input)
 
@@ -155,7 +223,6 @@ async def log_food_voice(
         return {"message": f"Today you ate: {names}", "transcription": raw_input}
 
     # default — treat as food log
-    history = json.loads(conversation_history)
     parsed = await parse_food_input(raw_input, history)
     if "error" in parsed:
         return {

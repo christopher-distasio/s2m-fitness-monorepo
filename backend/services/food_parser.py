@@ -17,6 +17,7 @@ Your job is to extract structured information and return ONLY valid JSON — no 
 Return this exact shape:
 {
   "food": "string — normalized food name, optimized for database lookup",
+  "brand": "string — the brand/manufacturer the user EXPLICITLY named, else empty string",
   "serving_size": "string — e.g. '1 cup', '2 eggs', '1 medium'",
   "confidence": "high" | "medium" | "low",
   "notes": "string — optional clarification or assumption made",
@@ -27,6 +28,7 @@ Return this exact shape:
 Rules:
 - Do NOT include calories or macronutrients — those come from the nutrition database
 - Normalize the food name for database lookup but PRESERVE brand names. For branded items, include the brand name in the food field (e.g. 'great value light greek yogurt' not just 'greek yogurt', 'chobani nonfat plain yogurt' not just 'yogurt'). Brand names are essential for accurate nutrition lookup.
+- Set "brand" to the brand/manufacturer ONLY when the user explicitly named one (e.g. 'Chobani', 'Great Value', "McDonald's"). If they named no brand (e.g. just 'banana', 'yogurt', 'chicken'), set "brand" to an empty string "".
 - If multiple foods are mentioned, combine them into one descriptive name (e.g. "2 eggs and black coffee")
 - If the input is completely unparseable as food, return { "error": "unparseable", "raw": "<input>" }
 - Never guess wildly — if uncertain, set confidence to "low" and explain in notes
@@ -69,6 +71,12 @@ Example: history has "pasta", user says "a small bowl" → parse as "a small bow
 NEVER return unparseable for a clarification response.
 """
 
+# The single upfront disambiguating question, before any mixed candidate list.
+# Shared by text and voice so the two flows can't diverge.
+BRAND_CHOICE_QUESTION = (
+    "Are you looking for a specific brand, or a general item?"
+)
+
 _VAGUE_QUANTIFIER_RE = re.compile(
     r"\b(some|a\s+bit|a\s+little|a\s+few|a\s+snack|about|roughly|around)\b",
     re.IGNORECASE,
@@ -102,7 +110,56 @@ def _apply_confidence_guards(parsed: dict, raw_input: str) -> dict:
     return parsed
 
 
-async def parse_food_input(raw_input: str, conversation_history: list = []) -> dict:
+def _format_alt(name: str, brand: str | None, calories, extra: str | None = None) -> str:
+    label = f"{brand} {name}" if brand else name
+    parts = [label]
+    if extra:
+        parts.append(extra)
+    if calories is not None:
+        parts.append(f"{int(round(calories))} calories")
+    return ", ".join(parts)
+
+
+def _build_grounded_alternatives(parsed: dict, nutrition: dict) -> list[str]:
+    """Human-readable alternatives derived from the actual data: other likely
+    foods (identity) and, when the food is clear but the amount isn't, real
+    portion sizes (amount). Returns [] when nothing grounded is available so
+    the caller can fall back to the model's suggestions."""
+    chosen_name = (nutrition.get("food_name") or "").strip().lower()
+    alternatives: list[str] = []
+
+    # Other candidate foods the user might have meant.
+    for candidate in nutrition.get("candidates", []):
+        name = (candidate.get("name") or "").strip()
+        if not name or name.lower() == chosen_name:
+            continue
+        alternatives.append(
+            _format_alt(name, candidate.get("brand"), candidate.get("calories"))
+        )
+        if len(alternatives) >= 3:
+            break
+
+    # If the food itself is clear, offer real portion sizes instead.
+    portion_options = nutrition.get("portion_options", [])
+    if not alternatives and len(portion_options) > 1:
+        for option in portion_options[:3]:
+            alternatives.append(
+                _format_alt(
+                    nutrition.get("food_name") or "food",
+                    nutrition.get("brand"),
+                    option.get("calories"),
+                    extra=option.get("label"),
+                )
+            )
+
+    return alternatives
+
+
+async def parse_food_input(
+    raw_input: str,
+    conversation_history: list = [],
+    source_filter: str | None = None,
+) -> dict:
     # If this is a clarification, combine with previous food
     if conversation_history:
         try:
@@ -142,10 +199,17 @@ async def parse_food_input(raw_input: str, conversation_history: list = []) -> d
 
     parsed = _apply_confidence_guards(parsed, raw_input)
 
+    # Did the user explicitly name a brand? If so, we skip the brand-vs-generic
+    # question entirely and go straight to branded results — the answer's known.
+    stated_brand = (parsed.get("brand") or "").strip()
+    effective_source = source_filter
+    if effective_source is None and stated_brand:
+        effective_source = "brand"
+
     # Step 2 — Current food data source looks up accurate nutrition data
     food_query = parsed['food']    
-    print("calling lookup_food with:", food_query)
-    nutrition = await lookup_food(food_query)
+    print("calling lookup_food with:", food_query, "| source:", effective_source)
+    nutrition = await lookup_food(food_query, source_filter=effective_source)
 
     if nutrition:
         # Use Current food data source data
@@ -156,6 +220,16 @@ async def parse_food_input(raw_input: str, conversation_history: list = []) -> d
             "fats": nutrition["fat"],
         }
         parsed["data_source"] = "usda"
+
+        # Serving/brand context, straight from the matched record.
+        parsed["brand"] = nutrition.get("brand") or None
+        parsed["serving_label"] = nutrition.get("serving_label")
+        parsed["serving_note"] = nutrition.get("serving_note")
+
+        # Grounded choices from the data (real foods + real portions), so the
+        # frontend can offer accurate, priced alternatives instead of guesses.
+        parsed["candidates"] = nutrition.get("candidates", [])
+        parsed["portion_options"] = nutrition.get("portion_options", [])
 
         # Scale per-serving nutrition by the parsed quantity (e.g. "2" eggs).
         quantity_str = parsed.get("serving_size", "1")
@@ -174,6 +248,57 @@ async def parse_food_input(raw_input: str, conversation_history: list = []) -> d
 
         parsed["quantity_used"] = quantity
         print(f"quantity: {quantity}, calories after: {parsed['calories']}")
+
+        # Consolidated resolver: even when the model was confident about the
+        # TEXT, the DATA may show the plausible interpretations disagree on
+        # calories (e.g. "milk" -> skim ~83 vs whole ~149). When that happens
+        # we drop to "medium" so the app asks one grounded question instead of
+        # silently logging a coin-flip. Runs BEFORE the alternatives block so a
+        # downgrade still populates the options the user will pick from.
+        resolution = nutrition.get("resolution") or {}
+        parsed["resolution"] = resolution
+
+        # Brand-vs-generic gate: when the user named no brand AND we haven't yet
+        # filtered by source AND the pool is genuinely ambiguous, ask ONE
+        # upfront question (brand vs generic) instead of showing a mixed list of
+        # branded products, generics, and substitutes. The answer re-queries
+        # with a source filter (see routes + frontend), and only THEN do we
+        # build the candidate/portion list — now from a single clean source.
+        if (
+            source_filter is None
+            and not stated_brand
+            and resolution.get("status") == "needs_clarification"
+        ):
+            parsed["confidence"] = "medium"
+            parsed["resolution"] = {
+                "status": "needs_brand_choice",
+                "axis": "brand",
+                "reason": (
+                    "Could be a specific brand or a general item — the calories "
+                    "differ a lot."
+                ),
+                "question": BRAND_CHOICE_QUESTION,
+            }
+            # Withhold the mixed list; the filtered follow-up query builds it.
+            parsed["candidates"] = []
+            parsed["portion_options"] = []
+            parsed["alternatives"] = []
+            return _apply_confidence_guards(parsed, raw_input)
+
+        if (
+            resolution.get("status") == "needs_clarification"
+            and parsed.get("confidence") == "high"
+        ):
+            parsed["confidence"] = "medium"
+            if not parsed.get("reasoning"):
+                parsed["reasoning"] = resolution.get("reason")
+
+        # For medium/low confidence, prefer data-grounded alternatives over the
+        # model's free-text guesses: real, priced options the user can pick.
+        if parsed.get("confidence") != "high":
+            parsed["alternatives"] = _build_grounded_alternatives(
+                parsed, nutrition
+            ) or parsed.get("alternatives")
     else:
         # Current food data source found nothing — ask GPT to estimate as fallback
         parsed["calories"] = None
