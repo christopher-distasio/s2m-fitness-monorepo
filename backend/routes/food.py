@@ -10,6 +10,8 @@ from backend.services.intent_classifier import classify_intent
 from backend.services.clarification import (
     parse_clarification_command,
     parse_brand_choice,
+    parse_timeout_choice,
+    parse_stop_command,
     clarification_state,
 )
 from backend.services.tts_service import generate_speech
@@ -161,11 +163,31 @@ async def log_food_voice(
     user_id: str = Form(...),
     audio: UploadFile = File(...),
     conversation_history: str = Form(default="[]"),
+    awaiting_more_time: str = Form(default="false"),
 ):
     audio_bytes = await audio.read()
     raw_input = await transcribe_audio(audio_bytes, audio.filename)
 
     history = json.loads(conversation_history)
+
+    # "Stop" ends the voice session at any time — before more-time / clarify /
+    # food parsing so it always wins.
+    if parse_stop_command(raw_input):
+        return {
+            "transcription": raw_input,
+            "clarification": {"type": "stop"},
+        }
+
+    # Only when the frontend just asked "Do you need more time?" — yes keeps
+    # listening, no stops. Not checked on ordinary clarification replies so a
+    # bare "yes"/"no" can't steal a real food answer.
+    if awaiting_more_time.strip().lower() in ("true", "1", "yes"):
+        timeout = parse_timeout_choice(raw_input)
+        if timeout:
+            return {
+                "transcription": raw_input,
+                "clarification": {"type": timeout},
+            }
 
     # If we're mid-clarification, the utterance is a command about the question
     # we just asked — NOT a new food. Catch it before the parser can combine it

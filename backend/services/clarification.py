@@ -1,15 +1,14 @@
 """Recognize voice replies to an open clarification prompt.
 
-When the app has just asked a numbered "did you mean 1, 2, 3…?" question, the
-user's next utterance is usually a *command about that list* ("one", "number
-three", "repeat", "more") rather than a brand-new food. Those must be caught
-BEFORE the normal food parser runs, otherwise a bare "one" can be combined with
-the previous food and silently auto-logged.
+When the app has just asked a numbered "did you mean…?" question, the user's
+next utterance is usually a *command about that list* ("one", "repeat", "more")
+rather than a brand-new food. Those must be caught BEFORE the normal food
+parser runs.
 
-This module is intentionally tiny and pure so it's trivial to unit-test and so
-the same recognition is reused wherever it's needed. It only ever *classifies*
-the utterance — the frontend owns which options are currently shown (trimmed vs
-expanded) and therefore does the number-to-item resolution and the logging.
+This module only *classifies* the utterance. The frontend owns which options
+are currently shown and does number-to-item resolution / logging.
+conversation_history is used only to detect which clarification is open
+(brand_choice vs list), not to store the spoken option list.
 """
 import json
 import re
@@ -21,8 +20,7 @@ _WORD_NUMBERS = {
     "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
 }
 
-# Whole-utterance matches only — we don't want "more chicken" to read as "more"
-# or "one banana" to read as "select 1".
+# Whole-utterance only — "more chicken" / "one banana" must fall through.
 _REPEAT_PHRASES = {
     "repeat", "repeat that", "say it again", "say that again", "again",
     "one more time", "come again", "what were they", "what are they",
@@ -32,6 +30,21 @@ _MORE_PHRASES = {
     "more", "hear more", "show more", "see more", "tell me more",
     "the rest", "others", "other options", "more options", "what else",
     "more please", "hear the rest",
+}
+_YES_MORE_TIME_PHRASES = {
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay",
+    "more time", "need more time", "i need more time", "give me more time",
+    "a little more time", "keep listening", "keep going", "continue",
+}
+_NO_STOP_PHRASES = {
+    "no", "nope", "nah", "no thanks", "stop", "stop listening",
+    "never mind", "nevermind", "cancel", "dismiss", "forget it",
+    "forget that", "i m done", "im done", "i am done", "quit",
+    "nothing", "skip",
+}
+# Narrower than _NO_STOP_PHRASES so a lone "no" during food logging isn't cancel.
+_STOP_ANYTIME_PHRASES = {
+    "stop", "stop listening", "stop now", "please stop", "stop please",
 }
 
 _WORD_NUMBER_RE = re.compile(
@@ -48,21 +61,66 @@ _DIGIT_RE = re.compile(
     r"(?:\s+one)?$"
 )
 
+# Spoken order: Number 1 = general, Number 2 = specific. Whisper often hears
+# "two" as "to"/"too".
+_GENERAL_INDEX_TOKENS = frozenset({"one", "1", "first"})
+_SPECIFIC_INDEX_TOKENS = frozenset({"two", "to", "too", "2", "second"})
+_BRAND_INDEX_RE = re.compile(
+    r"^(?:the\s+|a\s+)?"
+    r"(?:number\s+|option\s+|choice\s+|item\s+)?"
+    r"(one|two|to|too|1|2|first|second)"
+    r"(?:\s+one)?$"
+)
+_BRAND_INDEX_LEAD_RE = re.compile(
+    r"^(?:number|option|choice|item)\s+"
+    r"(one|two|to|too|1|2|first|second)\b"
+)
+_BRAND_DIGIT_LEAD_RE = re.compile(r"^([12])(?:st|nd|rd|th)?\b")
+
+_BRAND_WORDS = {
+    "brand", "branded", "a brand", "specific", "specific brand", "a specific brand",
+    "brand name", "name brand", "packaged", "store brand", "particular brand",
+    "the brand", "the specific one", "specific one",
+}
+_GENERAL_WORDS = {
+    "general", "generic", "a general", "a general item", "general item",
+    "the general", "the general one", "general one", "plain", "regular",
+    "normal", "basic", "just the general", "just the generic",
+    "the generic", "standard", "no brand", "not a brand", "not brand", "unbranded",
+}
+_BRAND_TOKENS = frozenset({"brand", "branded", "specific", "packaged"})
+_GENERAL_TOKENS = frozenset({"general", "generic", "plain", "regular", "unbranded"})
+
 
 def _normalize(text: str) -> str:
     t = (text or "").strip().lower()
-    t = re.sub(r"[^\w\s#]", " ", t)      # drop punctuation (keep # for "#3")
+    t = re.sub(r"[^\w\s#]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
-    # Strip a few polite trailers that don't change meaning.
     for trailer in (" please", " thanks", " thank you"):
         if t.endswith(trailer):
             t = t[: -len(trailer)].strip()
     return t
 
 
+def _source_from_index_token(token: str) -> str | None:
+    """Map prompt index token → API source key (generic | brand)."""
+    if token in _GENERAL_INDEX_TOKENS:
+        return "generic"
+    if token in _SPECIFIC_INDEX_TOKENS:
+        return "brand"
+    return None
+
+
+def _source_from_select_index(index: int) -> str | None:
+    if index == 1:
+        return "generic"
+    if index == 2:
+        return "brand"
+    return None
+
+
 def parse_clarification_command(text: str) -> dict | None:
-    """Classify an utterance as a list command, or None if it's something else
-    (e.g. a real food name) that should fall through to normal parsing.
+    """Classify a list command, or None to fall through to food parsing.
 
     Returns one of:
       {"type": "select", "index": <1-based int>}
@@ -72,7 +130,6 @@ def parse_clarification_command(text: str) -> dict | None:
     t = _normalize(text)
     if not t:
         return None
-
     if t in _REPEAT_PHRASES:
         return {"type": "repeat"}
     if t in _MORE_PHRASES:
@@ -81,47 +138,73 @@ def parse_clarification_command(text: str) -> dict | None:
     digit = _DIGIT_RE.match(t)
     if digit:
         n = int(digit.group(1))
-        if 1 <= n <= 20:
-            return {"type": "select", "index": n}
-        return None
+        return {"type": "select", "index": n} if 1 <= n <= 20 else None
 
     word = _WORD_NUMBER_RE.match(t)
     if word:
         return {"type": "select", "index": _WORD_NUMBERS[word.group(1)]}
-
     return None
 
 
-# Words that answer "a specific brand, or a general item?".
-_BRAND_WORDS = {
-    "brand", "branded", "a brand", "specific", "specific brand", "a specific brand",
-    "brand name", "name brand", "packaged", "store brand", "particular brand",
-}
-_GENERIC_WORDS = {
-    "generic", "general", "a general item", "general item", "plain", "regular",
-    "normal", "basic", "any", "whatever", "just the generic", "the generic",
-    "standard", "the general one", "no brand", "any brand",
-}
+def parse_timeout_choice(text: str) -> str | None:
+    """Reply to "Do you need more time?" → "more_time" | "stop" | None."""
+    t = _normalize(text)
+    if not t:
+        return None
+    if t in _YES_MORE_TIME_PHRASES:
+        return "more_time"
+    if t in _NO_STOP_PHRASES:
+        return "stop"
+    return None
+
+
+def parse_stop_command(text: str) -> bool:
+    """True when the user said stop — ends listening at any time."""
+    t = _normalize(text)
+    return bool(t) and t in _STOP_ANYTIME_PHRASES
 
 
 def parse_brand_choice(text: str) -> str | None:
-    """Classify a reply to the brand-vs-generic question as "brand" or
-    "generic", or None if it's neither (fall through to normal parsing)."""
+    """Brand-vs-general reply → "brand" | "generic" (API source key) | None.
+
+    Accepts words (general/specific/brand/…), numbers (1 = general, 2 = specific),
+    and short Whisper variants ("to" for "two", "I said general").
+    """
     t = _normalize(text)
     if not t:
         return None
     if t in _BRAND_WORDS:
         return "brand"
-    if t in _GENERIC_WORDS:
+    if t in _GENERAL_WORDS:
         return "generic"
+
+    num = _BRAND_INDEX_RE.match(t)
+    if num:
+        return _source_from_index_token(num.group(1))
+
+    command = parse_clarification_command(t)
+    if command and command.get("type") == "select":
+        return _source_from_select_index(command["index"])
+
+    tokens = set(t.split())
+    brand_hits = tokens & _BRAND_TOKENS
+    general_hits = tokens & _GENERAL_TOKENS
+    if brand_hits and not general_hits:
+        return "brand"
+    if general_hits and not brand_hits:
+        return "generic"
+
+    lead = _BRAND_INDEX_LEAD_RE.match(t)
+    if lead:
+        return _source_from_index_token(lead.group(1))
+    lead_digit = _BRAND_DIGIT_LEAD_RE.match(t)
+    if lead_digit:
+        return _source_from_select_index(int(lead_digit.group(1)))
     return None
 
 
 def clarification_state(history: list[dict]) -> str | None:
-    """Which kind of clarification (if any) the most recent assistant turn is
-    waiting on: "brand_choice" (the upfront brand-vs-generic question) or
-    "list" (a numbered candidate/portion list). None means no open
-    clarification, so an utterance is a fresh food, not a command."""
+    """Open clarification kind from the latest assistant turn, or None."""
     if not history:
         return None
     for message in reversed(history):
@@ -147,5 +230,4 @@ def clarification_state(history: list[dict]) -> str | None:
 
 
 def is_awaiting_clarification(history: list[dict]) -> bool:
-    """Back-compat helper: True when any clarification is open."""
     return clarification_state(history) is not None

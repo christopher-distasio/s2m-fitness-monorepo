@@ -4,6 +4,8 @@ import os
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from pinecone import Pinecone
+
+from backend.services.query_match_rank import rerank_matches_by_query
 # import httpx  # kept for potential future use — see commented fallback block below
 
 load_dotenv()
@@ -405,6 +407,11 @@ async def lookup_food(query: str, source_filter: str | None = None) -> dict | No
     if winning_variant.strip().lower() != query.strip().lower():
         print(f"RAG: variant '{winning_variant}' outscored original '{query}'")
 
+    # Vector score alone often buries the everyday food (e.g. "Bananas, raw")
+    # under chips/branded neighbors. Re-rank by how closely the name matches
+    # what the user said before picking the primary + candidate list.
+    matches = rerank_matches_by_query(query, matches)
+
     match = matches[0]
     if match.get("score", 0) < SCORE_THRESHOLD:
         return None
@@ -412,7 +419,10 @@ async def lookup_food(query: str, source_filter: str | None = None) -> dict | No
     metadata = match.get("metadata", {})
     fdc_id = match["id"]
 
-    print(f"Top match: {metadata.get('name')} — score: {match['score']}")
+    print(
+        f"Top match: {metadata.get('name')} — score: {match['score']} "
+        f"(after query-match re-rank)"
+    )
 
     # Pinecone stores nutrient values per 100g. serving_size_g (branded) or
     # a default portion's gram_weight (SR Legacy) tells us the actual amount

@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { supabase } from "../lib/supabaseClient";
-import { speak as _speak } from "../lib/speak";
+import { speak as _speak, stopSpeaking } from "../lib/speak";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -99,8 +99,10 @@ const HOW_IT_WORKS_TEXT =
 
 const RECORDING_TIMEOUT_MS = 8000;
 const MIN_RECORDING_BYTES = 8000;
-const RECORDING_TIMEOUT_MESSAGE =
-  "I didn't hear anything. Please say that again.";
+// After any 8s mic silence (clarification, greet, manual speak), ask this —
+// yes → listen another 8s; no → stop. Not the old "say that again / be more specific".
+const MORE_TIME_MESSAGE = "Do you need more time?";
+const SAY_NUMBER_OR_WORD = "Say the number or the word.";
 
 function readStoredBoolean(key: string, defaultValue: boolean) {
   if (typeof window === "undefined") return defaultValue;
@@ -285,7 +287,7 @@ interface ParsedResult {
 // the two flows can't drift (same lesson as the spoken-message bug).
 const BRAND_CHOICE_QUESTION =
   "Are you looking for a specific brand, or a general item?";
-const BRAND_CHOICE_SPEECH = `${BRAND_CHOICE_QUESTION} Just say "brand", or "generic".`;
+const BRAND_CHOICE_SPEECH = `${SAY_NUMBER_OR_WORD} ${BRAND_CHOICE_QUESTION} Number 1: general. Number 2: specific.`;
 
 function isBrandChoice(parsed: ParsedResult): boolean {
   return parsed.resolution?.status === "needs_brand_choice";
@@ -294,8 +296,6 @@ function isBrandChoice(parsed: ParsedResult): boolean {
 // Trim limits for the clarification list. The visual card can show a bit more
 // since it's scannable at a glance; the spoken voice list is deliberately
 // shorter (a long read-aloud is tiring) but "more" still reveals the full list.
-// The divergence is intentional and lives here in one place — not accidental
-// drift between two independently-built lists (the earlier voice bug).
 const MAX_VISIBLE_CANDIDATES = 3;
 const MAX_VISIBLE_PORTIONS = 4;
 const MAX_VOICE_OPTIONS = 3;
@@ -430,12 +430,21 @@ function clarifyOptions(
   return expanded ? all : all.slice(0, MAX_VOICE_OPTIONS);
 }
 
-/**
- * Spoken clarification for VOICE mode: a short numbered list (top
- * MAX_VOICE_OPTIONS) so the user can answer "one", "number three", etc. Ends by
- * offering to hear more only when trimmed-off items actually exist. "more"
- * expands to the full list.
- */
+function formatNumberedSpeech(
+  options: Array<{ speech: string }>,
+  startIndex = 1,
+): string {
+  return options
+    .map((o, i) => `Number ${startIndex + i}: ${o.speech}`)
+    .join(". ");
+}
+
+function withNumberCue(body: string, offerMore = false): string {
+  let msg = `${SAY_NUMBER_OR_WORD} ${body}`;
+  if (offerMore) msg += " Or say more to hear the rest.";
+  return msg;
+}
+
 function buildNumberedClarificationSpeech(
   parsed: ParsedResult,
   rawInput: string,
@@ -443,18 +452,54 @@ function buildNumberedClarificationSpeech(
 ): string {
   const all = allClarifyOptions(parsed, rawInput);
   if (all.length === 0) {
-    const alt = parsed.alternatives?.join(", or ") ?? "";
-    if (alt) return `I think this is ${parsed.food}. Did you mean ${alt}?`;
+    const alts = parsed.alternatives ?? [];
+    if (alts.length > 0) {
+      const numbered = formatNumberedSpeech(alts.map((a) => ({ speech: a })));
+      return withNumberCue(
+        `I think this is ${parsed.food}. Did you mean: ${numbered}.`,
+      );
+    }
     return `I wasn't sure about that.${
       parsed.reasoning ? ` ${parsed.reasoning}.` : ""
     } Please be more specific.`;
   }
   const options = expanded ? all : all.slice(0, MAX_VOICE_OPTIONS);
   const hasMore = all.length > options.length;
-  const numbered = options.map((o, i) => `${i + 1}, ${o.speech}`).join(". ");
-  let msg = `I think this is ${parsed.food}. Did you mean: ${numbered}.`;
-  if (hasMore) msg += " ...or would you like to hear more?";
-  return msg;
+  const numbered = formatNumberedSpeech(options);
+  return withNumberCue(
+    `I think this is ${parsed.food}. Did you mean: ${numbered}.`,
+    hasMore,
+  );
+}
+
+function buildSpeechFromSpokenOptions(
+  parsed: ParsedResult,
+  options: ClarifyOption[],
+  offerMore: boolean,
+): string {
+  if (options.length === 0) {
+    return buildNumberedClarificationSpeech(parsed, "", true);
+  }
+  const numbered = formatNumberedSpeech(options);
+  return withNumberCue(
+    `I think this is ${parsed.food}. Did you mean: ${numbered}.`,
+    offerMore,
+  );
+}
+
+function buildMoreClarificationSpeech(
+  parsed: ParsedResult,
+  rawInput: string,
+): string {
+  const all = allClarifyOptions(parsed, rawInput);
+  const additional = all.slice(MAX_VOICE_OPTIONS);
+  if (additional.length === 0) {
+    return buildNumberedClarificationSpeech(parsed, rawInput, true);
+  }
+  const numbered = formatNumberedSpeech(additional, MAX_VOICE_OPTIONS + 1);
+  const lead =
+    additional.length === 1 ? "Here's the other option" : "Here are the rest";
+  return withNumberCue(`${lead}: ${numbered}.`);
 }
 
 /**
@@ -536,6 +581,33 @@ export default function Home() {
   const [conversationHistory, setConversationHistory] = useState<
     Array<{ role: "user" | "assistant"; content: string }>
   >([]);
+  // conversation_history is only for (1) backend open-prompt detection
+  // (clarification_state) and (2) quantity-prepend in the food parser. It does
+  // NOT store the spoken option list — that lives in spokenClarifyOptionsRef
+  // below. Same ref pattern as pendingParseRef: recorder onstop must not close
+  // over a stale empty history (e.g. muted TTS returns before React re-renders).
+  const conversationHistoryRef = useRef(conversationHistory);
+  const setConversationHistoryBoth = useCallback(
+    (
+      next:
+        | Array<{ role: "user" | "assistant"; content: string }>
+        | ((
+            prev: Array<{ role: "user" | "assistant"; content: string }>,
+          ) => Array<{ role: "user" | "assistant"; content: string }>),
+    ) => {
+      if (typeof next === "function") {
+        setConversationHistory((prev) => {
+          const updated = next(prev);
+          conversationHistoryRef.current = updated;
+          return updated;
+        });
+      } else {
+        conversationHistoryRef.current = next;
+        setConversationHistory(next);
+      }
+    },
+    [],
+  );
   // Whether the clarification list is expanded past the trimmed default. Drives
   // BOTH the visual "See more" and the voice "more" command, and is read inside
   // the recorder's onstop closure (hence the ref) so "repeat"/number-selection
@@ -546,6 +618,23 @@ export default function Home() {
     clarifyExpandedRef.current = value;
     setClarifyExpanded(value);
   }, []);
+  // The option list most recently spoken in this clarification turn. Number
+  // selection and "repeat" resolve against THIS — not a regenerated slice —
+  // so after "more" appends the trimmed-off items, later replies stay
+  // consistent with the full expanded set. Owned by the frontend (not
+  // conversation_history / clarification.py); those only classify the reply.
+  const spokenClarifyOptionsRef = useRef<ClarifyOption[]>([]);
+  const rememberSpokenClarifyOptions = (options: ClarifyOption[]) => {
+    spokenClarifyOptionsRef.current = options;
+  };
+  const clearSpokenClarifyOptions = () => {
+    spokenClarifyOptionsRef.current = [];
+  };
+  // Set when we just asked MORE_TIME_MESSAGE; the next voice reply is yes/no
+  // (or a normal answer that falls through). Applies to every mic session.
+  const awaitingMoreTimeReplyRef = useRef(false);
+  // User tapped Speak-to-me while already listening — discard the clip silently.
+  const cancelRecordingRef = useRef(false);
   const [showVoiceSetupRecovery, setShowVoiceSetupRecovery] = useState(false);
   const [continuingVoiceSetup, setContinuingVoiceSetup] = useState(false);
 
@@ -630,10 +719,17 @@ export default function Home() {
   }, [wantsVoiceOnOpen]);
 
   const maybeAutoListen = useCallback(async () => {
-    if (!autoListen || mode !== "speak" || muted || loading || recording) return;
+    if (mode !== "speak" || muted || loading || recording) return;
     const awaitingClarification = pendingParseRef.current !== null;
     const awaitingPostLogin = postLoginVoiceSessionRef.current;
-    if (!awaitingClarification && !awaitingPostLogin) return;
+    // Clarification answers always re-open the mic for the 8s window — even
+    // when the global auto-listen pref is off. Post-login greet still needs
+    // the pref.
+    if (awaitingClarification) {
+      await startRecordingRef.current({ fromAutoListen: true });
+      return;
+    }
+    if (!autoListen || !awaitingPostLogin) return;
     await startRecordingRef.current({ fromAutoListen: true });
   }, [autoListen, mode, muted, loading, recording]);
 
@@ -772,6 +868,10 @@ export default function Home() {
   }, [pendingParse]);
 
   useEffect(() => {
+    conversationHistoryRef.current = conversationHistory;
+  }, [conversationHistory]);
+
+  useEffect(() => {
     if (!status) return;
     const timer = setTimeout(() => setStatus(""), 5000);
     return () => clearTimeout(timer);
@@ -867,12 +967,19 @@ export default function Home() {
   }
 
   async function handleRecordingSilenceTimeout() {
-    setStatus(RECORDING_TIMEOUT_MESSAGE);
-    await speak(RECORDING_TIMEOUT_MESSAGE);
-    await maybeAutoListen();
+    // Every mic silence (clarify, greet, manual speak): ask more time, then
+    // listen for yes (another 8s) / no (stop).
+    awaitingMoreTimeReplyRef.current = true;
+    setStatus(MORE_TIME_MESSAGE);
+    await speak(MORE_TIME_MESSAGE);
+    if (!muted && !recording) {
+      await startRecordingRef.current({ fromAutoListen: true });
+    }
   }
 
   async function submitText() {
+    // Text wins over any in-progress TTS — cut speech immediately.
+    stopSpeaking();
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -905,7 +1012,7 @@ export default function Home() {
         const resolvedInput = `${parsed.serving_size} ${parsed.food}`;
         await confirmLog(uid, resolvedInput);
       } else {
-        setConversationHistory((prev) => [
+        setConversationHistoryBoth((prev) => [
           ...prev,
           { role: "user", content: textInput },
           { role: "assistant", content: JSON.stringify(parsed) },
@@ -914,6 +1021,7 @@ export default function Home() {
         setPendingParse(pending);
         pendingParseRef.current = pending;
         setClarifyExpandedBoth(false);
+        clearSpokenClarifyOptions();
         const msg = isBrandChoice(parsed)
           ? `I think this is ${parsed.food}. ${BRAND_CHOICE_SPEECH}`
           : parsed.confidence === "low"
@@ -1002,6 +1110,13 @@ export default function Home() {
       streamRef.current = null;
       setRecording(false);
       setAutoListening(false);
+      // User cancelled by tapping Speak-to-me again — no API, no TTS, no status.
+      if (cancelRecordingRef.current) {
+        cancelRecordingRef.current = false;
+        recordingTimedOutRef.current = false;
+        chunksRef.current = [];
+        return;
+      }
       const timedOut = recordingTimedOutRef.current;
       recordingTimedOutRef.current = false;
       const wasAwaitingClarification = pendingParseRef.current !== null;
@@ -1018,7 +1133,11 @@ export default function Home() {
       formData.append("audio", blob, `recording.${extension}`);
       formData.append(
         "conversation_history",
-        JSON.stringify(conversationHistory),
+        JSON.stringify(conversationHistoryRef.current),
+      );
+      formData.append(
+        "awaiting_more_time",
+        awaitingMoreTimeReplyRef.current ? "true" : "false",
       );
       setLoading(true);
       setStatus("Transcribing...");
@@ -1043,7 +1162,13 @@ export default function Home() {
           transcription?: string;
           parsed?: ParsedResult;
           clarification?: {
-            type: "select" | "repeat" | "more" | "brand_choice";
+            type:
+              | "select"
+              | "repeat"
+              | "more"
+              | "brand_choice"
+              | "more_time"
+              | "stop";
             index?: number;
             value?: "generic" | "brand";
           };
@@ -1055,60 +1180,93 @@ export default function Home() {
           );
         }
 
-        // The user is answering an open clarification with a voice command
-        // ("one" / "repeat" / "more") rather than naming a food. The backend
-        // detected this and did NOT parse/log, so we act on the SAME list the
-        // card is currently showing (respecting the expanded state). We set a
-        // flag instead of returning so control still reaches the auto-listen
-        // at the end (which re-arms the mic for the next spoken answer).
+        // "Stop" anytime, or "Do you need more time?" yes/no.
+        if (data.clarification?.type === "stop") {
+          awaitingMoreTimeReplyRef.current = false;
+          stopSpeaking();
+          dismissPending();
+          endPostLoginVoiceSession();
+          setStatus("");
+          return;
+        }
+        if (data.clarification?.type === "more_time") {
+          awaitingMoreTimeReplyRef.current = false;
+          flushSync(() => setLoading(false));
+          await startRecordingRef.current({ fromAutoListen: true });
+          return;
+        }
+        if (awaitingMoreTimeReplyRef.current) {
+          awaitingMoreTimeReplyRef.current = false;
+        }
+
+        // Clarification commands are classified on the backend from
+        // conversation_history; the frontend only acts on the result.
         let handledClarification = false;
         if (wasAwaitingClarification && data.clarification) {
           const pending = pendingParseRef.current;
           if (pending) {
             handledClarification = true;
-            const expanded = clarifyExpandedRef.current;
             const cmd = data.clarification;
             if (cmd.type === "brand_choice" && cmd.value) {
-              // Answered the upfront brand-vs-generic question — re-query the
-              // ORIGINAL food, filtered to that source, then continue.
               await resolveWithSource(pending.uid, pending.raw_input, cmd.value);
-              // If it produced another clarification, keep listening; if it
-              // logged (high confidence), pendingParse is now null so
-              // maybeAutoListen will simply no-op.
               shouldAutoListen = true;
             } else if (cmd.type === "select" && cmd.index != null) {
-              const options = clarifyOptions(
-                pending.parsed,
-                pending.raw_input,
-                expanded,
-              );
+              // Resolve against the list most recently spoken (trimmed default,
+              // or full expanded set after "more") — no re-parse. Fall back to
+              // the expand-flag slice only if we somehow never recorded a list.
+              const options =
+                spokenClarifyOptionsRef.current.length > 0
+                  ? spokenClarifyOptionsRef.current
+                  : clarifyOptions(
+                      pending.parsed,
+                      pending.raw_input,
+                      clarifyExpandedRef.current,
+                    );
               const chosen = options[cmd.index - 1];
               if (chosen) {
-                // Same path as tapping the button — no re-parse, terminal log.
                 await logResolved(pending.uid, chosen.pick);
                 return;
               }
-              const msg = `I only have ${options.length} option${options.length === 1 ? "" : "s"}. ${buildNumberedClarificationSpeech(pending.parsed, pending.raw_input, expanded)}`;
+              const offerMore =
+                allClarifyOptions(pending.parsed, pending.raw_input).length >
+                options.length;
+              const msg = `I only have ${options.length} option${options.length === 1 ? "" : "s"}. ${buildSpeechFromSpokenOptions(pending.parsed, options, offerMore)}`;
               setStatus(msg);
               shouldAutoListen = true;
               await speak(msg);
             } else if (cmd.type === "more") {
-              // Expand once; re-render and re-speak reflect the fuller list.
-              setClarifyExpandedBoth(true);
-              const msg = buildNumberedClarificationSpeech(
+              // Speak only the trimmed-off items, then append them to the
+              // tracked spoken list so later number/repeat use the full set.
+              const all = allClarifyOptions(
                 pending.parsed,
                 pending.raw_input,
-                true,
+              );
+              setClarifyExpandedBoth(true);
+              rememberSpokenClarifyOptions(all);
+              const msg = buildMoreClarificationSpeech(
+                pending.parsed,
+                pending.raw_input,
               );
               setStatus(msg);
               shouldAutoListen = true;
               await speak(msg);
             } else {
-              // "repeat" — say the currently shown list again, as-is.
-              const msg = buildNumberedClarificationSpeech(
+              // "repeat" — exact list most recently spoken (same items/order).
+              const options =
+                spokenClarifyOptionsRef.current.length > 0
+                  ? spokenClarifyOptionsRef.current
+                  : clarifyOptions(
+                      pending.parsed,
+                      pending.raw_input,
+                      clarifyExpandedRef.current,
+                    );
+              const offerMore =
+                allClarifyOptions(pending.parsed, pending.raw_input).length >
+                options.length;
+              const msg = buildSpeechFromSpokenOptions(
                 pending.parsed,
-                pending.raw_input,
-                expanded,
+                options,
+                offerMore,
               );
               setStatus(msg);
               shouldAutoListen = true;
@@ -1154,7 +1312,8 @@ export default function Home() {
             await fetchSummary(uid);
             setPendingParse(null);
             pendingParseRef.current = null;
-            setConversationHistory([]);
+            setConversationHistoryBoth([]);
+            clearSpokenClarifyOptions();
             endPostLoginVoiceSession();
           } else {
             const pending = {
@@ -1165,7 +1324,7 @@ export default function Home() {
             setPendingParse(pending);
             pendingParseRef.current = pending;
             setClarifyExpandedBoth(false);
-            setConversationHistory((prev) => [
+            setConversationHistoryBoth((prev) => [
               ...prev,
               { role: "user", content: data.transcription ?? "" },
               { role: "assistant", content: JSON.stringify(data.parsed) },
@@ -1174,13 +1333,23 @@ export default function Home() {
             // the user can answer "one", "two"… (even at low confidence, as
             // long as there are grounded options — the builder falls back to a
             // "be more specific" prompt only when there's genuinely nothing).
-            const msg = isBrandChoice(data.parsed)
-              ? `I think this is ${data.parsed.food}. ${BRAND_CHOICE_SPEECH}`
-              : buildNumberedClarificationSpeech(
-                  data.parsed,
-                  data.transcription ?? "",
-                  false,
-                );
+            let msg: string;
+            if (isBrandChoice(data.parsed)) {
+              clearSpokenClarifyOptions();
+              msg = `I think this is ${data.parsed.food}. ${BRAND_CHOICE_SPEECH}`;
+            } else {
+              const spoken = clarifyOptions(
+                data.parsed,
+                data.transcription ?? "",
+                false,
+              );
+              rememberSpokenClarifyOptions(spoken);
+              msg = buildNumberedClarificationSpeech(
+                data.parsed,
+                data.transcription ?? "",
+                false,
+              );
+            }
             setStatus(msg);
             shouldAutoListen = true;
             await speak(msg);
@@ -1217,12 +1386,19 @@ export default function Home() {
   }
   startRecordingRef.current = startRecording;
 
-  function stopRecording() {
+  function cancelListeningSilent() {
+    cancelRecordingRef.current = true;
+    awaitingMoreTimeReplyRef.current = false;
     clearRecordingTimeout();
     recordingTimedOutRef.current = false;
-    mediaRecorderRef.current?.stop();
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    } else {
+      cancelRecordingRef.current = false;
+    }
     setRecording(false);
     setAutoListening(false);
+    setStatus("");
   }
 
   async function saveGoal() {
@@ -1256,7 +1432,8 @@ export default function Home() {
     setPendingParse(null);
     pendingParseRef.current = null;
     endPostLoginVoiceSession();
-    setConversationHistory([]);
+    setConversationHistoryBoth([]);
+    clearSpokenClarifyOptions();
     fetchLogs(uid);
     fetchSummary(uid);
   }
@@ -1298,7 +1475,8 @@ export default function Home() {
       setPendingParse(null);
       pendingParseRef.current = null;
       endPostLoginVoiceSession();
-      setConversationHistory([]);
+      setConversationHistoryBoth([]);
+      clearSpokenClarifyOptions();
       await fetchLogs(uid);
       await fetchSummary(uid);
     } finally {
@@ -1307,8 +1485,8 @@ export default function Home() {
   }
 
   // Re-run the parse for the ORIGINAL input, now restricted to a single source
-  // (the user's brand-vs-generic answer). Shared by text (button tap) and voice
-  // (spoken "brand"/"generic"), so both flows resolve identically. If the
+  // (the user's brand-vs-general answer). Shared by text (button tap) and voice
+  // (spoken "brand"/"general"), so both flows resolve identically. If the
   // filtered result is unambiguous it logs directly; otherwise it shows the
   // now single-source candidate/portion clarification.
   async function resolveWithSource(
@@ -1349,18 +1527,21 @@ export default function Home() {
       setPendingParse(pending);
       pendingParseRef.current = pending;
       setClarifyExpandedBoth(false);
-      setConversationHistory((prev) => [
-        ...prev,
-        { role: "user", content: source },
+      // Replace history so the open prompt is the filtered list — not the
+      // earlier brand/general question (which made "1"/"2" re-trigger brand).
+      setConversationHistoryBoth([
+        { role: "user", content: originalInput },
         { role: "assistant", content: JSON.stringify(parsed) },
       ]);
-      // Voice interactions happen in speak mode → numbered list (with "hear
-      // more?"); text mode taps buttons so it gets a plain readout. Both
-      // builders fall back gracefully when there are no grounded options.
-      const numbered = mode === "speak";
-      const msg = numbered
-        ? buildNumberedClarificationSpeech(parsed, originalInput, false)
-        : `I think this is ${parsed.food}. Did you mean ${buildDidYouMeanSpeech(parsed)}?`;
+      // Always remember the spoken numbered list when we offer voice picks,
+      // including See-mode mic, so number replies resolve correctly.
+      rememberSpokenClarifyOptions(
+        clarifyOptions(parsed, originalInput, false),
+      );
+      const msg =
+        mode === "speak"
+          ? buildNumberedClarificationSpeech(parsed, originalInput, false)
+          : `I think this is ${parsed.food}. Did you mean ${buildDidYouMeanSpeech(parsed)}?`;
       setStatus(msg);
       await speak(msg);
     } finally {
@@ -1372,7 +1553,8 @@ export default function Home() {
     setPendingParse(null);
     pendingParseRef.current = null;
     setStatus("");
-    setConversationHistory([]);
+    setConversationHistoryBoth([]);
+    clearSpokenClarifyOptions();
     setClarifyExpandedBoth(false);
   }
 
@@ -1393,16 +1575,22 @@ export default function Home() {
         className={`w-full text-left border rounded-xl p-4 sm:p-6 outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-700 ${parsed.confidence === "low" ? "bg-red-900/30 border-red-400/40" : "bg-yellow-900/30 border-yellow-400/40"}`}
       >
         <div className="flex items-start justify-between gap-3 mb-1">
-          <h2
-            id="confidence-heading"
-            className="text-lg font-semibold text-white"
-          >
-            {parsed.confidence === "low" ? "Unsure" : "Less Sure"}
-          </h2>
+          {!brandChoice ? (
+            <h2
+              id="confidence-heading"
+              className="text-lg font-semibold text-white"
+            >
+              {parsed.confidence === "low" ? "Unsure" : "Less Sure"}
+            </h2>
+          ) : (
+            <h2 id="confidence-heading" className="sr-only">
+              Brand or general item
+            </h2>
+          )}
           <button
             type="button"
             onClick={dismissPending}
-            className="flex flex-col items-center shrink-0 text-white/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-white rounded px-1.5 py-0.5 -mt-1 -mr-1"
+            className={`flex flex-col items-center shrink-0 text-white/80 hover:text-white focus:outline-none focus:ring-2 focus:ring-white rounded px-1.5 py-0.5 -mt-1 -mr-1 ${brandChoice ? "ml-auto" : ""}`}
             aria-label="Dismiss this suggestion"
           >
             <span aria-hidden="true" className="text-lg leading-none">
@@ -1411,26 +1599,30 @@ export default function Home() {
             <span className="text-[10px] leading-tight">Tap to dismiss</span>
           </button>
         </div>
-        <p className="text-white text-sm mb-1">
-          <strong>
-            {parsed.brand ? `${parsed.brand} ` : ""}
-            {parsed.food}
-          </strong>
-          {parsed.serving_label ? ` — ${parsed.serving_label}` : ""}{" "}
-          — {Math.round(parsed.calories)} cal
-        </p>
-        {parsed.serving_note && (
-          <p className="text-amber-200 text-xs mb-2">{parsed.serving_note}</p>
-        )}
-        {parsed.reasoning && (
-          <p className="text-white text-sm mb-3">{parsed.reasoning}</p>
+        {!brandChoice && (
+          <>
+            <p className="text-white text-sm mb-1">
+              <strong>
+                {parsed.brand ? `${parsed.brand} ` : ""}
+                {parsed.food}
+              </strong>
+              {parsed.serving_label ? ` — ${parsed.serving_label}` : ""}{" "}
+              — {Math.round(parsed.calories)} cal
+            </p>
+            {parsed.serving_note && (
+              <p className="text-amber-200 text-xs mb-2">{parsed.serving_note}</p>
+            )}
+            {parsed.reasoning && (
+              <p className="text-white text-sm mb-3">{parsed.reasoning}</p>
+            )}
+          </>
         )}
         {(() => {
-          // Brand-vs-generic comes first, before any mixed candidate list.
+          // Brand-vs-general comes first, before any mixed candidate list.
           if (brandChoice) {
             return (
               <div className="mb-4">
-                <p className="text-xs text-white uppercase tracking-wide font-medium mb-2">
+                <p className="text-sm text-white font-medium mb-3">
                   Are you looking for a specific brand, or a general item?
                 </p>
                 <div className="flex flex-col gap-2">
@@ -1444,11 +1636,11 @@ export default function Home() {
                       )
                     }
                     className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                    aria-label="A general item — say generic"
+                    aria-label="A general item — say general"
                   >
                     <span className="font-medium">A general item</span>
                     <span className="shrink-0 text-xs text-white/70">
-                      say &ldquo;generic&rdquo;
+                      say &ldquo;general&rdquo; or &ldquo;1&rdquo;
                     </span>
                   </button>
                   <button
@@ -1461,11 +1653,11 @@ export default function Home() {
                       )
                     }
                     className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                    aria-label="A specific brand — say brand"
+                    aria-label="A specific brand — say specific"
                   >
                     <span className="font-medium">A specific brand</span>
                     <span className="shrink-0 text-xs text-white/70">
-                      say &ldquo;brand&rdquo;
+                      say &ldquo;specific&rdquo; or &ldquo;2&rdquo;
                     </span>
                   </button>
                 </div>
@@ -1565,7 +1757,22 @@ export default function Home() {
                 {(view.hasMore || clarifyExpanded) && (
                   <button
                     type="button"
-                    onClick={() => setClarifyExpandedBoth(!clarifyExpanded)}
+                    onClick={() => {
+                      const next = !clarifyExpanded;
+                      setClarifyExpandedBoth(next);
+                      // Keep the voice "most recently spoken" list in sync with
+                      // the card when the user expands/collapses visually, so a
+                      // later spoken number still resolves against what's shown.
+                      if (pendingParse) {
+                        rememberSpokenClarifyOptions(
+                          clarifyOptions(
+                            pendingParse.parsed,
+                            pendingParse.raw_input,
+                            next,
+                          ),
+                        );
+                      }
+                    }}
                     className="self-start text-xs font-medium text-white underline underline-offset-2 hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-white rounded px-1 py-0.5"
                     aria-expanded={clarifyExpanded}
                   >
@@ -1975,7 +2182,9 @@ export default function Home() {
             >
               <button
                 type="button"
-                onClick={recording ? stopRecording : () => startRecording()}
+                onClick={
+                  recording ? cancelListeningSilent : () => startRecording()
+                }
                 disabled={loading}
                 aria-pressed={recording ? "true" : "false"}
                 aria-label={
@@ -2372,7 +2581,9 @@ export default function Home() {
                     </span>
                     <button
                       type="button"
-                      onClick={recording ? stopRecording : () => startRecording()}
+                      onClick={
+                  recording ? cancelListeningSilent : () => startRecording()
+                }
                       disabled={loading}
                       aria-pressed={recording ? "true" : "false"}
                       aria-label={
@@ -2441,7 +2652,11 @@ export default function Home() {
                         ref={textInputRef}
                         type="text"
                         value={textInput}
-                        onChange={(e) => setTextInput(e.target.value)}
+                        onChange={(e) => {
+                          // Typing a text reply cuts any in-progress verbal response.
+                          if (e.target.value) stopSpeaking();
+                          setTextInput(e.target.value);
+                        }}
                         onKeyDown={(e) => e.key === "Enter" && submitText()}
                         placeholder="e.g. two eggs and a coffee"
                         autoComplete="off"

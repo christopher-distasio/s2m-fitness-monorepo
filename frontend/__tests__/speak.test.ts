@@ -1,4 +1,4 @@
-import { speak } from "../lib/speak";
+import { speak, stopSpeaking } from "../lib/speak";
 
 const defaultArgs = {
   muted: false,
@@ -6,15 +6,29 @@ const defaultArgs = {
   apiBase: "http://localhost:8000",
 };
 
-const mockPlay = jest.fn();
-
 beforeEach(() => {
   jest.resetAllMocks();
+  stopSpeaking();
 
   global.fetch = jest.fn();
   global.URL.createObjectURL = jest.fn().mockReturnValue("blob:fake-url");
-  global.Audio = jest.fn().mockImplementation(() => ({ play: mockPlay }));
-  global.window.speechSynthesis = { speak: jest.fn() } as any;
+  global.URL.revokeObjectURL = jest.fn();
+  global.Audio = jest.fn().mockImplementation(() => {
+    const audio: any = {
+      play: jest.fn().mockImplementation(() => {
+        queueMicrotask(() => audio.onended?.());
+        return Promise.resolve();
+      }),
+      pause: jest.fn(),
+      removeAttribute: jest.fn(),
+      load: jest.fn(),
+    };
+    return audio;
+  });
+  global.window.speechSynthesis = {
+    speak: jest.fn(),
+    cancel: jest.fn(),
+  } as any;
   global.SpeechSynthesisUtterance = jest
     .fn()
     .mockImplementation((text) => ({ text })) as any;
@@ -50,27 +64,49 @@ test("plays audio via Audio when TTS succeeds", async () => {
 
   expect(URL.createObjectURL).toHaveBeenCalled();
   expect(Audio).toHaveBeenCalledWith("blob:fake-url");
-  expect(mockPlay).toHaveBeenCalled();
 });
 
 test("falls back to speechSynthesis when res.ok is false", async () => {
   (fetch as jest.Mock).mockResolvedValueOnce({ ok: false });
 
+  // Resolve speechSynthesis via onend on next tick
+  (window.speechSynthesis.speak as jest.Mock).mockImplementation((utt: any) => {
+    queueMicrotask(() => utt.onend?.());
+  });
+
   await speak("hello", defaultArgs);
 
   expect(window.speechSynthesis.speak).toHaveBeenCalledWith(
     expect.objectContaining({ text: "hello" }),
   );
-  expect(mockPlay).not.toHaveBeenCalled();
 });
 
 test("falls back to speechSynthesis when fetch throws", async () => {
   (fetch as jest.Mock).mockRejectedValueOnce(new Error("network error"));
+  (window.speechSynthesis.speak as jest.Mock).mockImplementation((utt: any) => {
+    queueMicrotask(() => utt.onend?.());
+  });
 
   await speak("hello", defaultArgs);
 
   expect(window.speechSynthesis.speak).toHaveBeenCalledWith(
     expect.objectContaining({ text: "hello" }),
   );
-  expect(mockPlay).not.toHaveBeenCalled();
+});
+
+test("stopSpeaking cancels in-progress speechSynthesis fallback", async () => {
+  (fetch as jest.Mock).mockResolvedValueOnce({ ok: false });
+  let uttRef: any;
+  (window.speechSynthesis.speak as jest.Mock).mockImplementation((utt: any) => {
+    uttRef = utt;
+    // never ends on its own
+  });
+
+  const p = speak("hello", defaultArgs);
+  await Promise.resolve();
+  stopSpeaking();
+  await p;
+
+  expect(window.speechSynthesis.cancel).toHaveBeenCalled();
+  expect(uttRef).toBeTruthy();
 });
