@@ -164,9 +164,16 @@ async def log_food_voice(
     audio: UploadFile = File(...),
     conversation_history: str = Form(default="[]"),
     awaiting_more_time: str = Form(default="false"),
+    awaiting_clarification: str = Form(default="false"),
 ):
     audio_bytes = await audio.read()
-    raw_input = await transcribe_audio(audio_bytes, audio.filename)
+    clarify_flag = awaiting_clarification.strip().lower()
+    raw_input = await transcribe_audio(
+        audio_bytes,
+        audio.filename or "recording.webm",
+        clarification=clarify_flag
+        in ("list", "brand_choice", "true", "1", "yes"),
+    )
 
     history = json.loads(conversation_history)
 
@@ -193,7 +200,14 @@ async def log_food_voice(
     # we just asked — NOT a new food. Catch it before the parser can combine it
     # with the previous food and silently auto-log. We only classify here; the
     # frontend acts on it (resolve a number, re-query with a source filter, etc).
+    # Frontend flag backs up history when barge-in races a stale/empty history.
     state = clarification_state(history)
+    flag = clarify_flag
+    if state is None:
+        if flag == "brand_choice":
+            state = "brand_choice"
+        elif flag in ("list", "true", "1", "yes"):
+            state = "list"
     if state == "brand_choice":
         choice = parse_brand_choice(raw_input)
         if choice:
@@ -201,10 +215,20 @@ async def log_food_voice(
                 "transcription": raw_input,
                 "clarification": {"type": "brand_choice", "value": choice},
             }
-    elif state == "list":
+        # Do NOT fall through to food parse — that re-asks the same prompt.
+        return {
+            "transcription": raw_input,
+            "clarification": {"type": "unrecognized"},
+        }
+    if state == "list":
         command = parse_clarification_command(raw_input)
         if command:
             return {"transcription": raw_input, "clarification": command}
+        # Same: a missed "one" must not re-run the food parser and loop the list.
+        return {
+            "transcription": raw_input,
+            "clarification": {"type": "unrecognized"},
+        }
 
     intent = await classify_intent(raw_input)
 

@@ -143,6 +143,89 @@ def parse_clarification_command(text: str) -> dict | None:
     word = _WORD_NUMBER_RE.match(t)
     if word:
         return {"type": "select", "index": _WORD_NUMBERS[word.group(1)]}
+
+    whisper_nums = {
+        "won": 1,
+        "to": 2,
+        "too": 2,
+        "tu": 2,
+        "do": 2,
+        "dew": 2,
+    }
+
+    # Barge-in clips sometimes include TTS echo / filler before the answer.
+    # Prefer a number command at the end of the utterance.
+    trailing = re.search(
+        r"(?:^|\s)(?:number\s+|option\s+|choice\s+|item\s+|#)?"
+        r"(one|two|three|four|five|six|seven|eight|nine|ten|"
+        r"first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+        r"won|to|too|"
+        r"\d{1,2})(?:st|nd|rd|th)?$",
+        t,
+    )
+    if trailing:
+        token = trailing.group(1)
+        if token.isdigit():
+            n = int(token)
+            return {"type": "select", "index": n} if 1 <= n <= 20 else None
+        if token in whisper_nums:
+            return {"type": "select", "index": whisper_nums[token]}
+        if token in _WORD_NUMBERS:
+            return {"type": "select", "index": _WORD_NUMBERS[token]}
+
+    # Short barge-in answers: "um one", "it's 2" — but not "one banana".
+    _FILLERS = frozenset(
+        {
+            "um",
+            "uh",
+            "erm",
+            "its",
+            "it",
+            "is",
+            "the",
+            "a",
+            "an",
+            "number",
+            "option",
+            "choice",
+            "item",
+            "please",
+            "i",
+            "said",
+            "pick",
+            "choose",
+            "go",
+            "with",
+            "select",
+            "yeah",
+            "ok",
+            "okay",
+        }
+    )
+    tokens = t.split()
+    if len(tokens) <= 6:
+        found: int | None = None
+        only_filler_and_number = True
+        for token in tokens:
+            n: int | None = None
+            if token.isdigit():
+                value = int(token)
+                if 1 <= value <= 20:
+                    n = value
+            elif token in whisper_nums:
+                n = whisper_nums[token]
+            elif token in _WORD_NUMBERS:
+                n = _WORD_NUMBERS[token]
+            if n is not None:
+                if found is not None and found != n:
+                    only_filler_and_number = False
+                    break
+                found = n
+            elif token not in _FILLERS:
+                only_filler_and_number = False
+                break
+        if only_filler_and_number and found is not None:
+            return {"type": "select", "index": found}
     return None
 
 

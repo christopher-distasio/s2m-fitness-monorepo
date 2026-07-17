@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { supabase } from "../lib/supabaseClient";
 import { speak as _speak, stopSpeaking, onSpeakingChange, isSpeaking } from "../lib/speak";
+import { speakWithBargeIn } from "../lib/bargeIn";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -637,6 +638,11 @@ export default function Home() {
   const cancelRecordingRef = useRef(false);
   // User cut TTS with the Speak button — don't auto-open the mic afterward.
   const suppressAutoListenRef = useRef(false);
+  // Active barge-in session: Speak/Stop sets this to discard the mic clip.
+  const cancelBargeInRef = useRef<(() => void) | null>(null);
+  const processVoiceBlobRef = useRef<
+    (blob: Blob, mimeType: string, uid: string) => Promise<void>
+  >(async () => {});
   const [speaking, setSpeaking] = useState(false);
   const [showVoiceSetupRecovery, setShowVoiceSetupRecovery] = useState(false);
   const [continuingVoiceSetup, setContinuingVoiceSetup] = useState(false);
@@ -691,6 +697,46 @@ export default function Home() {
     (text: string) => _speak(text, { muted, selectedVoice, apiBase: API_BASE }),
     [muted, selectedVoice],
   );
+
+  /**
+   * Numbered clarification TTS with mic open for barge-in. Returns true when a
+   * barge-in clip was handled (or Stop discarded it) — caller should skip
+   * maybeAutoListen. Speak mode only; See/muted fall back to plain speak.
+   */
+  async function speakClarificationWithBargeIn(
+    msg: string,
+    uid: string,
+  ): Promise<boolean> {
+    if (mode !== "speak" || muted) {
+      await speak(msg);
+      return false;
+    }
+    let cancelled = false;
+    cancelBargeInRef.current = () => {
+      cancelled = true;
+    };
+    setAutoListening(true);
+    const result = await speakWithBargeIn(
+      msg,
+      { muted, selectedVoice, apiBase: API_BASE },
+      {
+        onMicReady: () => setRecording(true),
+        onBargeIn: () => setStatus("Listening..."),
+        shouldCancel: () => cancelled || suppressAutoListenRef.current,
+      },
+    );
+    cancelBargeInRef.current = null;
+    setRecording(false);
+    setAutoListening(false);
+
+    if (suppressAutoListenRef.current) {
+      suppressAutoListenRef.current = false;
+      return true;
+    }
+    if (!result.bargedIn) return false;
+    await processVoiceBlobRef.current(result.blob, result.mimeType, uid);
+    return true;
+  }
 
   const speakTodaysSummary = useCallback(
     async (s: SummarySnapshot, goal: number) => {
@@ -992,9 +1038,12 @@ export default function Home() {
 
   /** Speak button: stop TTS, or cancel listening, or start recording. */
   function handleSpeakButtonClick() {
-    if (isSpeaking() || speaking) {
+    if (isSpeaking() || speaking || cancelBargeInRef.current) {
       suppressAutoListenRef.current = true;
+      cancelBargeInRef.current?.();
       stopSpeaking();
+      setRecording(false);
+      setAutoListening(false);
       return;
     }
     if (recording) {
@@ -1055,9 +1104,16 @@ export default function Home() {
             ? `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`
             : `I think this is ${parsed.food}. Did you mean ${buildDidYouMeanSpeech(parsed)}?`;
         setStatus(msg);
-        shouldAutoListen = true;
-        await speak(msg);
         setTextInput("");
+        const numberedClarify =
+          isBrandChoice(parsed) || parsed.confidence !== "low";
+        if (numberedClarify) {
+          const barged = await speakClarificationWithBargeIn(msg, uid);
+          if (!barged) shouldAutoListen = true;
+        } else {
+          shouldAutoListen = true;
+          await speak(msg);
+        }
       }
     } catch {
       const err = "Error logging food.";
@@ -1098,6 +1154,320 @@ export default function Home() {
     fetchSummary(uid);
   }
 
+  async function processVoiceBlob(
+    blob: Blob,
+    mimeType: string,
+    uid: string,
+  ) {
+    const extension = mimeType.includes("wav")
+      ? "wav"
+      : mimeType === "audio/webm"
+        ? "webm"
+        : "mp4";
+    const wasAwaitingClarification = pendingParseRef.current !== null;
+    const pendingForFlag = pendingParseRef.current;
+    const awaitingClarificationFlag = !pendingForFlag
+      ? "false"
+      : isBrandChoice(pendingForFlag.parsed)
+        ? "brand_choice"
+        : "list";
+
+    const formData = new FormData();
+    formData.append("user_id", uid);
+    formData.append("audio", blob, `recording.${extension}`);
+    formData.append(
+      "conversation_history",
+      JSON.stringify(conversationHistoryRef.current),
+    );
+    formData.append(
+      "awaiting_more_time",
+      awaitingMoreTimeReplyRef.current ? "true" : "false",
+    );
+    formData.append("awaiting_clarification", awaitingClarificationFlag);
+    setLoading(true);
+    setStatus("Transcribing...");
+    let shouldAutoListen = false;
+    let voiceResponseStatus: number | undefined;
+    let voiceResponseBody: unknown;
+    try {
+      const res = await fetch(`${API_BASE}/food/voice`, {
+        method: "POST",
+        body: formData,
+      });
+      voiceResponseStatus = res.status;
+      const responseText = await res.text();
+      try {
+        voiceResponseBody = JSON.parse(responseText);
+      } catch {
+        voiceResponseBody = responseText;
+      }
+      const data = voiceResponseBody as {
+        error?: string;
+        message?: string;
+        transcription?: string;
+        parsed?: ParsedResult;
+        clarification?: {
+          type:
+            | "select"
+            | "repeat"
+            | "more"
+            | "brand_choice"
+            | "more_time"
+            | "stop"
+            | "unrecognized";
+          index?: number;
+          value?: "generic" | "brand";
+        };
+      };
+
+      if (!res.ok) {
+        throw new Error(
+          `Voice API ${res.status}: ${responseText.slice(0, 500)}`,
+        );
+      }
+
+      console.log(
+        "[voice] transcribed",
+        JSON.stringify({
+          transcription: data.transcription,
+          clarification: data.clarification,
+          wasAwaitingClarification,
+          historyLen: conversationHistoryRef.current.length,
+          awaitingClarificationFlag,
+        }),
+      );
+
+      // "Stop" anytime, or "Do you need more time?" yes/no.
+      if (data.clarification?.type === "stop") {
+        awaitingMoreTimeReplyRef.current = false;
+        stopSpeaking();
+        dismissPending();
+        endPostLoginVoiceSession();
+        setStatus("");
+        return;
+      }
+      if (data.clarification?.type === "more_time") {
+        awaitingMoreTimeReplyRef.current = false;
+        flushSync(() => setLoading(false));
+        await startRecordingRef.current({ fromAutoListen: true });
+        return;
+      }
+      if (awaitingMoreTimeReplyRef.current) {
+        awaitingMoreTimeReplyRef.current = false;
+      }
+
+      // Clarification commands are classified on the backend from
+      // conversation_history; the frontend only acts on the result.
+      let handledClarification = false;
+      if (wasAwaitingClarification && data.clarification) {
+        const pending = pendingParseRef.current;
+        if (pending) {
+          handledClarification = true;
+          const cmd = data.clarification;
+          if (cmd.type === "brand_choice" && cmd.value) {
+            const barged = await resolveWithSource(
+              pending.uid,
+              pending.raw_input,
+              cmd.value,
+            );
+            if (!barged) shouldAutoListen = true;
+          } else if (cmd.type === "select" && cmd.index != null) {
+            // Resolve against the list most recently spoken (trimmed default,
+            // or full expanded set after "more") — no re-parse. Fall back to
+            // the expand-flag slice only if we somehow never recorded a list.
+            const options =
+              spokenClarifyOptionsRef.current.length > 0
+                ? spokenClarifyOptionsRef.current
+                : clarifyOptions(
+                    pending.parsed,
+                    pending.raw_input,
+                    clarifyExpandedRef.current,
+                  );
+            const chosen = options[cmd.index - 1];
+            if (chosen) {
+              await logResolved(pending.uid, chosen.pick);
+              return;
+            }
+            const offerMore =
+              allClarifyOptions(pending.parsed, pending.raw_input).length >
+              options.length;
+            const msg = `I only have ${options.length} option${options.length === 1 ? "" : "s"}. ${buildSpeechFromSpokenOptions(pending.parsed, options, offerMore)}`;
+            setStatus(msg);
+            const barged = await speakClarificationWithBargeIn(
+              msg,
+              pending.uid,
+            );
+            if (!barged) shouldAutoListen = true;
+          } else if (cmd.type === "more") {
+            // Speak only the trimmed-off items, then append them to the
+            // tracked spoken list so later number/repeat use the full set.
+            const all = allClarifyOptions(
+              pending.parsed,
+              pending.raw_input,
+            );
+            setClarifyExpandedBoth(true);
+            rememberSpokenClarifyOptions(all);
+            const msg = buildMoreClarificationSpeech(
+              pending.parsed,
+              pending.raw_input,
+            );
+            setStatus(msg);
+            const barged = await speakClarificationWithBargeIn(
+              msg,
+              pending.uid,
+            );
+            if (!barged) shouldAutoListen = true;
+          } else if (cmd.type === "unrecognized") {
+            // Missed the number — re-ask without re-parsing food (that looped
+            // the same list). Brand gate gets the brand prompt again.
+            const msg = isBrandChoice(pending.parsed)
+              ? `I didn't catch that. ${BRAND_CHOICE_SPEECH}`
+              : (() => {
+                  const options =
+                    spokenClarifyOptionsRef.current.length > 0
+                      ? spokenClarifyOptionsRef.current
+                      : clarifyOptions(
+                          pending.parsed,
+                          pending.raw_input,
+                          clarifyExpandedRef.current,
+                        );
+                  const offerMore =
+                    allClarifyOptions(pending.parsed, pending.raw_input)
+                      .length > options.length;
+                  return `I didn't catch a number. ${buildSpeechFromSpokenOptions(pending.parsed, options, offerMore)}`;
+                })();
+            setStatus(msg);
+            const barged = await speakClarificationWithBargeIn(
+              msg,
+              pending.uid,
+            );
+            if (!barged) shouldAutoListen = true;
+          } else {
+            // "repeat" — exact list most recently spoken (same items/order).
+            const options =
+              spokenClarifyOptionsRef.current.length > 0
+                ? spokenClarifyOptionsRef.current
+                : clarifyOptions(
+                    pending.parsed,
+                    pending.raw_input,
+                    clarifyExpandedRef.current,
+                  );
+            const offerMore =
+              allClarifyOptions(pending.parsed, pending.raw_input).length >
+              options.length;
+            const msg = buildSpeechFromSpokenOptions(
+              pending.parsed,
+              options,
+              offerMore,
+            );
+            setStatus(msg);
+            const barged = await speakClarificationWithBargeIn(
+              msg,
+              pending.uid,
+            );
+            if (!barged) shouldAutoListen = true;
+          }
+        }
+      }
+
+      if (!handledClarification) {
+        if (data.error) {
+          const err =
+            "I couldn't understand that. Please try saying something more specific.";
+          setStatus(err);
+          await speak(err);
+          if (wasAwaitingClarification) shouldAutoListen = true;
+          return;
+        }
+
+        if (data.message && !data.parsed) {
+          setStatus(data.message);
+          await speak(data.message);
+          fetchLogs(uid);
+          await fetchSummary(uid);
+          return;
+        }
+
+        if (!data.parsed) {
+          throw new Error("Voice API response missing parsed food data");
+        }
+
+        console.log("[voice] processVoiceBlob response", {
+          confidence: data.parsed.confidence,
+          parsed: data.parsed,
+          transcription: data.transcription,
+        });
+
+        if (data.parsed.confidence === "high") {
+          const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
+          setStatus(
+            `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} cal`,
+          );
+          await speak(msg);
+          await fetchLogs(uid);
+          await fetchSummary(uid);
+          setPendingParse(null);
+          pendingParseRef.current = null;
+          setConversationHistoryBoth([]);
+          clearSpokenClarifyOptions();
+          endPostLoginVoiceSession();
+        } else {
+          const pending = {
+            parsed: data.parsed,
+            raw_input: data.transcription ?? "",
+            uid,
+          };
+          setPendingParse(pending);
+          pendingParseRef.current = pending;
+          setClarifyExpandedBoth(false);
+          setConversationHistoryBoth((prev) => [
+            ...prev,
+            { role: "user", content: data.transcription ?? "" },
+            { role: "assistant", content: JSON.stringify(data.parsed) },
+          ]);
+          // Brand-vs-generic gate comes first; otherwise a numbered list so
+          // the user can answer "one", "two"… (even at low confidence, as
+          // long as there are grounded options — the builder falls back to a
+          // "be more specific" prompt only when there's genuinely nothing).
+          let msg: string;
+          if (isBrandChoice(data.parsed)) {
+            clearSpokenClarifyOptions();
+            msg = `I think this is ${data.parsed.food}. ${BRAND_CHOICE_SPEECH}`;
+          } else {
+            const spoken = clarifyOptions(
+              data.parsed,
+              data.transcription ?? "",
+              false,
+            );
+            rememberSpokenClarifyOptions(spoken);
+            msg = buildNumberedClarificationSpeech(
+              data.parsed,
+              data.transcription ?? "",
+              false,
+            );
+          }
+          setStatus(msg);
+          const barged = await speakClarificationWithBargeIn(msg, uid);
+          if (!barged) shouldAutoListen = true;
+        }
+      }
+    } catch (err) {
+      console.log("[voice] processVoiceBlob catch", {
+        status: voiceResponseStatus,
+        body: voiceResponseBody,
+        error: err,
+      });
+      const errMsg = "Error processing audio. Please try again.";
+      setStatus(errMsg);
+      await speak(errMsg);
+      if (wasAwaitingClarification) shouldAutoListen = true;
+    } finally {
+      flushSync(() => setLoading(false));
+    }
+    if (shouldAutoListen) await maybeAutoListen();
+  }
+  processVoiceBlobRef.current = processVoiceBlob;
+
   async function startRecording(options?: { fromAutoListen?: boolean }) {
     if (recording || loading) return;
     // Unlock audio context for Safari
@@ -1118,12 +1488,22 @@ export default function Home() {
     setAutoListening(!!options?.fromAutoListen);
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
     } catch {
-      setAutoListening(false);
-      setRecording(false);
-      setStatus("Microphone access is required to listen.");
-      return;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        setAutoListening(false);
+        setRecording(false);
+        setStatus("Microphone access is required to listen.");
+        return;
+      }
     }
     const mimeType = MediaRecorder.isTypeSupported("audio/webm")
       ? "audio/webm"
@@ -1146,256 +1526,14 @@ export default function Home() {
       }
       const timedOut = recordingTimedOutRef.current;
       recordingTimedOutRef.current = false;
-      const wasAwaitingClarification = pendingParseRef.current !== null;
       const blob = new Blob(chunksRef.current, { type: mimeType });
-      const extension = mimeType === "audio/webm" ? "webm" : "mp4";
 
       if (timedOut && blob.size < MIN_RECORDING_BYTES) {
         await handleRecordingSilenceTimeout();
         return;
       }
 
-      const formData = new FormData();
-      formData.append("user_id", uid);
-      formData.append("audio", blob, `recording.${extension}`);
-      formData.append(
-        "conversation_history",
-        JSON.stringify(conversationHistoryRef.current),
-      );
-      formData.append(
-        "awaiting_more_time",
-        awaitingMoreTimeReplyRef.current ? "true" : "false",
-      );
-      setLoading(true);
-      setStatus("Transcribing...");
-      let shouldAutoListen = false;
-      let voiceResponseStatus: number | undefined;
-      let voiceResponseBody: unknown;
-      try {
-        const res = await fetch(`${API_BASE}/food/voice`, {
-          method: "POST",
-          body: formData,
-        });
-        voiceResponseStatus = res.status;
-        const responseText = await res.text();
-        try {
-          voiceResponseBody = JSON.parse(responseText);
-        } catch {
-          voiceResponseBody = responseText;
-        }
-        const data = voiceResponseBody as {
-          error?: string;
-          message?: string;
-          transcription?: string;
-          parsed?: ParsedResult;
-          clarification?: {
-            type:
-              | "select"
-              | "repeat"
-              | "more"
-              | "brand_choice"
-              | "more_time"
-              | "stop";
-            index?: number;
-            value?: "generic" | "brand";
-          };
-        };
-
-        if (!res.ok) {
-          throw new Error(
-            `Voice API ${res.status}: ${responseText.slice(0, 500)}`,
-          );
-        }
-
-        // "Stop" anytime, or "Do you need more time?" yes/no.
-        if (data.clarification?.type === "stop") {
-          awaitingMoreTimeReplyRef.current = false;
-          stopSpeaking();
-          dismissPending();
-          endPostLoginVoiceSession();
-          setStatus("");
-          return;
-        }
-        if (data.clarification?.type === "more_time") {
-          awaitingMoreTimeReplyRef.current = false;
-          flushSync(() => setLoading(false));
-          await startRecordingRef.current({ fromAutoListen: true });
-          return;
-        }
-        if (awaitingMoreTimeReplyRef.current) {
-          awaitingMoreTimeReplyRef.current = false;
-        }
-
-        // Clarification commands are classified on the backend from
-        // conversation_history; the frontend only acts on the result.
-        let handledClarification = false;
-        if (wasAwaitingClarification && data.clarification) {
-          const pending = pendingParseRef.current;
-          if (pending) {
-            handledClarification = true;
-            const cmd = data.clarification;
-            if (cmd.type === "brand_choice" && cmd.value) {
-              await resolveWithSource(pending.uid, pending.raw_input, cmd.value);
-              shouldAutoListen = true;
-            } else if (cmd.type === "select" && cmd.index != null) {
-              // Resolve against the list most recently spoken (trimmed default,
-              // or full expanded set after "more") — no re-parse. Fall back to
-              // the expand-flag slice only if we somehow never recorded a list.
-              const options =
-                spokenClarifyOptionsRef.current.length > 0
-                  ? spokenClarifyOptionsRef.current
-                  : clarifyOptions(
-                      pending.parsed,
-                      pending.raw_input,
-                      clarifyExpandedRef.current,
-                    );
-              const chosen = options[cmd.index - 1];
-              if (chosen) {
-                await logResolved(pending.uid, chosen.pick);
-                return;
-              }
-              const offerMore =
-                allClarifyOptions(pending.parsed, pending.raw_input).length >
-                options.length;
-              const msg = `I only have ${options.length} option${options.length === 1 ? "" : "s"}. ${buildSpeechFromSpokenOptions(pending.parsed, options, offerMore)}`;
-              setStatus(msg);
-              shouldAutoListen = true;
-              await speak(msg);
-            } else if (cmd.type === "more") {
-              // Speak only the trimmed-off items, then append them to the
-              // tracked spoken list so later number/repeat use the full set.
-              const all = allClarifyOptions(
-                pending.parsed,
-                pending.raw_input,
-              );
-              setClarifyExpandedBoth(true);
-              rememberSpokenClarifyOptions(all);
-              const msg = buildMoreClarificationSpeech(
-                pending.parsed,
-                pending.raw_input,
-              );
-              setStatus(msg);
-              shouldAutoListen = true;
-              await speak(msg);
-            } else {
-              // "repeat" — exact list most recently spoken (same items/order).
-              const options =
-                spokenClarifyOptionsRef.current.length > 0
-                  ? spokenClarifyOptionsRef.current
-                  : clarifyOptions(
-                      pending.parsed,
-                      pending.raw_input,
-                      clarifyExpandedRef.current,
-                    );
-              const offerMore =
-                allClarifyOptions(pending.parsed, pending.raw_input).length >
-                options.length;
-              const msg = buildSpeechFromSpokenOptions(
-                pending.parsed,
-                options,
-                offerMore,
-              );
-              setStatus(msg);
-              shouldAutoListen = true;
-              await speak(msg);
-            }
-          }
-        }
-
-        if (!handledClarification) {
-          if (data.error) {
-            const err =
-              "I couldn't understand that. Please try saying something more specific.";
-            setStatus(err);
-            await speak(err);
-            if (wasAwaitingClarification) shouldAutoListen = true;
-            return;
-          }
-
-          if (data.message && !data.parsed) {
-            setStatus(data.message);
-            await speak(data.message);
-            fetchLogs(uid);
-            await fetchSummary(uid);
-            return;
-          }
-
-          if (!data.parsed) {
-            throw new Error("Voice API response missing parsed food data");
-          }
-
-          console.log("[voice] onstop response", {
-            confidence: data.parsed.confidence,
-            parsed: data.parsed,
-          });
-
-          if (data.parsed.confidence === "high") {
-            const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
-            setStatus(
-              `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} cal`,
-            );
-            await speak(msg);
-            await fetchLogs(uid);
-            await fetchSummary(uid);
-            setPendingParse(null);
-            pendingParseRef.current = null;
-            setConversationHistoryBoth([]);
-            clearSpokenClarifyOptions();
-            endPostLoginVoiceSession();
-          } else {
-            const pending = {
-              parsed: data.parsed,
-              raw_input: data.transcription ?? "",
-              uid,
-            };
-            setPendingParse(pending);
-            pendingParseRef.current = pending;
-            setClarifyExpandedBoth(false);
-            setConversationHistoryBoth((prev) => [
-              ...prev,
-              { role: "user", content: data.transcription ?? "" },
-              { role: "assistant", content: JSON.stringify(data.parsed) },
-            ]);
-            // Brand-vs-generic gate comes first; otherwise a numbered list so
-            // the user can answer "one", "two"… (even at low confidence, as
-            // long as there are grounded options — the builder falls back to a
-            // "be more specific" prompt only when there's genuinely nothing).
-            let msg: string;
-            if (isBrandChoice(data.parsed)) {
-              clearSpokenClarifyOptions();
-              msg = `I think this is ${data.parsed.food}. ${BRAND_CHOICE_SPEECH}`;
-            } else {
-              const spoken = clarifyOptions(
-                data.parsed,
-                data.transcription ?? "",
-                false,
-              );
-              rememberSpokenClarifyOptions(spoken);
-              msg = buildNumberedClarificationSpeech(
-                data.parsed,
-                data.transcription ?? "",
-                false,
-              );
-            }
-            setStatus(msg);
-            shouldAutoListen = true;
-            await speak(msg);
-          }
-        }
-      } catch (err) {
-        console.log("[voice] onstop catch", {
-          status: voiceResponseStatus,
-          body: voiceResponseBody,
-          error: err,
-        });
-        const errMsg = "Error processing audio. Please try again.";
-        setStatus(errMsg);
-        await speak(errMsg);
-        if (wasAwaitingClarification) shouldAutoListen = true;
-      } finally {
-        flushSync(() => setLoading(false));
-      }
-      if (shouldAutoListen) await maybeAutoListen();
+      await processVoiceBlob(blob, mimeType, uid);
     };
     mediaRecorderRef.current = recorder;
     recorder.start();
@@ -1516,11 +1654,12 @@ export default function Home() {
   // (spoken "brand"/"general"), so both flows resolve identically. If the
   // filtered result is unambiguous it logs directly; otherwise it shows the
   // now single-source candidate/portion clarification.
+  // Returns true if barge-in already handled the follow-up (skip maybeAutoListen).
   async function resolveWithSource(
     uid: string,
     originalInput: string,
     source: "generic" | "brand",
-  ) {
+  ): Promise<boolean> {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/food/parse`, {
@@ -1534,7 +1673,7 @@ export default function Home() {
         const err = `I couldn't find a ${source === "brand" ? "branded" : "general"} match. Please try again.`;
         setStatus(err);
         await speak(err);
-        return;
+        return false;
       }
 
       if (parsed.confidence === "high") {
@@ -1547,7 +1686,7 @@ export default function Home() {
           quantity: parsed.serving_size,
           raw_input: originalInput,
         });
-        return;
+        return false;
       }
 
       const pending = { parsed, raw_input: originalInput, uid };
@@ -1570,7 +1709,11 @@ export default function Home() {
           ? buildNumberedClarificationSpeech(parsed, originalInput, false)
           : `I think this is ${parsed.food}. Did you mean ${buildDidYouMeanSpeech(parsed)}?`;
       setStatus(msg);
+      if (mode === "speak") {
+        return await speakClarificationWithBargeIn(msg, uid);
+      }
       await speak(msg);
+      return false;
     } finally {
       flushSync(() => setLoading(false));
     }

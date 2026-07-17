@@ -50,6 +50,18 @@ def test_select_word_forms():
     }
 
 
+def test_select_trailing_number_in_longer_transcript():
+    """Barge-in / echo: number at the end still counts as a selection."""
+    assert parse_clarification_command(
+        "say the number or the word number one"
+    ) == {"type": "select", "index": 1}
+    assert parse_clarification_command("um two") == {"type": "select", "index": 2}
+    assert parse_clarification_command("I said 3") == {"type": "select", "index": 3}
+    assert parse_clarification_command("won") == {"type": "select", "index": 1}
+    assert parse_clarification_command("to") == {"type": "select", "index": 2}
+    assert parse_clarification_command("it's one") == {"type": "select", "index": 1}
+
+
 def test_repeat_and_more():
     assert parse_clarification_command("repeat") == {"type": "repeat"}
     assert parse_clarification_command("say it again") == {"type": "repeat"}
