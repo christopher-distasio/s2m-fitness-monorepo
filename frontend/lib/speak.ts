@@ -1,6 +1,28 @@
-/** Module-level playback so any caller can cut TTS short (e.g. text submit). */
+/** Module-level playback so any caller can cut TTS short (e.g. Speak button). */
 let currentAudio: HTMLAudioElement | null = null;
 let speakEpoch = 0;
+let speakInFlight = false;
+const speakingListeners = new Set<(speaking: boolean) => void>();
+
+function notifySpeaking(speaking: boolean) {
+  speakInFlight = speaking;
+  speakingListeners.forEach((fn) => fn(speaking));
+}
+
+/** Subscribe to TTS start/stop (for enabling the Speak interrupt button). */
+export function onSpeakingChange(
+  listener: (speaking: boolean) => void,
+): () => void {
+  speakingListeners.add(listener);
+  listener(speakInFlight);
+  return () => {
+    speakingListeners.delete(listener);
+  };
+}
+
+export function isSpeaking(): boolean {
+  return speakInFlight;
+}
 
 /** Immediately end any in-progress TTS (OpenAI audio or speechSynthesis). */
 export function stopSpeaking() {
@@ -18,6 +40,7 @@ export function stopSpeaking() {
   if (typeof window !== "undefined" && window.speechSynthesis) {
     window.speechSynthesis.cancel();
   }
+  notifySpeaking(false);
 }
 
 function waitUntilDone(
@@ -53,9 +76,25 @@ export async function speak(
   }: { muted: boolean; selectedVoice: string; apiBase: string },
 ) {
   if (muted) return;
-  stopSpeaking();
+  // Interrupt any prior utterance without clearing the upcoming "speaking" flag
+  // via stopSpeaking's notify(false) — we go straight into this utterance.
+  speakEpoch += 1;
+  if (currentAudio) {
+    try {
+      currentAudio.pause();
+      currentAudio.removeAttribute("src");
+      currentAudio.load();
+    } catch {
+      /* ignore */
+    }
+    currentAudio = null;
+  }
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
   const epoch = speakEpoch;
   const aborted = () => epoch !== speakEpoch;
+  notifySpeaking(true);
 
   try {
     const res = await fetch(`${apiBase}/food/tts`, {
@@ -87,5 +126,7 @@ export async function speak(
     utt.onerror = finish;
     window.speechSynthesis.speak(utt);
     await done;
+  } finally {
+    if (epoch === speakEpoch) notifySpeaking(false);
   }
 }

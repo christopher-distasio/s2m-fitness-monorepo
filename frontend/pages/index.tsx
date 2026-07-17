@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { supabase } from "../lib/supabaseClient";
-import { speak as _speak, stopSpeaking } from "../lib/speak";
+import { speak as _speak, stopSpeaking, onSpeakingChange, isSpeaking } from "../lib/speak";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -635,6 +635,9 @@ export default function Home() {
   const awaitingMoreTimeReplyRef = useRef(false);
   // User tapped Speak-to-me while already listening — discard the clip silently.
   const cancelRecordingRef = useRef(false);
+  // User cut TTS with the Speak button — don't auto-open the mic afterward.
+  const suppressAutoListenRef = useRef(false);
+  const [speaking, setSpeaking] = useState(false);
   const [showVoiceSetupRecovery, setShowVoiceSetupRecovery] = useState(false);
   const [continuingVoiceSetup, setContinuingVoiceSetup] = useState(false);
 
@@ -719,6 +722,10 @@ export default function Home() {
   }, [wantsVoiceOnOpen]);
 
   const maybeAutoListen = useCallback(async () => {
+    if (suppressAutoListenRef.current) {
+      suppressAutoListenRef.current = false;
+      return;
+    }
     if (mode !== "speak" || muted || loading || recording) return;
     const awaitingClarification = pendingParseRef.current !== null;
     const awaitingPostLogin = postLoginVoiceSessionRef.current;
@@ -871,6 +878,8 @@ export default function Home() {
     conversationHistoryRef.current = conversationHistory;
   }, [conversationHistory]);
 
+  useEffect(() => onSpeakingChange(setSpeaking), []);
+
   useEffect(() => {
     if (!status) return;
     const timer = setTimeout(() => setStatus(""), 5000);
@@ -972,9 +981,27 @@ export default function Home() {
     awaitingMoreTimeReplyRef.current = true;
     setStatus(MORE_TIME_MESSAGE);
     await speak(MORE_TIME_MESSAGE);
+    if (suppressAutoListenRef.current) {
+      suppressAutoListenRef.current = false;
+      return;
+    }
     if (!muted && !recording) {
       await startRecordingRef.current({ fromAutoListen: true });
     }
+  }
+
+  /** Speak button: stop TTS, or cancel listening, or start recording. */
+  function handleSpeakButtonClick() {
+    if (isSpeaking() || speaking) {
+      suppressAutoListenRef.current = true;
+      stopSpeaking();
+      return;
+    }
+    if (recording) {
+      cancelListeningSilent();
+      return;
+    }
+    void startRecording();
   }
 
   async function submitText() {
@@ -2182,24 +2209,26 @@ export default function Home() {
             >
               <button
                 type="button"
-                onClick={
-                  recording ? cancelListeningSilent : () => startRecording()
-                }
-                disabled={loading}
-                aria-pressed={recording ? "true" : "false"}
+                onClick={handleSpeakButtonClick}
+                disabled={loading && !speaking && !recording}
+                aria-pressed={recording || speaking ? "true" : "false"}
                 aria-label={
-                  autoListening
-                    ? "Listening ..."
-                    : recording
-                      ? "Stop recording"
-                      : "Speak to log food"
+                  speaking
+                    ? "Stop speaking"
+                    : autoListening
+                      ? "Listening ..."
+                      : recording
+                        ? "Stop recording"
+                        : "Speak to log food"
                 }
                 className={`w-44 h-44 rounded-full font-semibold text-white text-sm flex flex-col items-center justify-center gap-3 focus:outline-none focus:ring-4 transition-colors ${
-                  recording
-                    ? autoListening
-                      ? "animate-pulse bg-amber-500 ring-4 ring-amber-200/90 hover:bg-amber-600 focus:ring-amber-100"
-                      : "bg-green-700 focus:ring-white"
-                    : "bg-green-600 hover:bg-green-700 focus:ring-white"
+                  speaking
+                    ? "bg-red-600 hover:bg-red-700 focus:ring-white"
+                    : recording
+                      ? autoListening
+                        ? "animate-pulse bg-amber-500 ring-4 ring-amber-200/90 hover:bg-amber-600 focus:ring-amber-100"
+                        : "bg-green-700 focus:ring-white"
+                      : "bg-green-600 hover:bg-green-700 focus:ring-white"
                 }`}
               >
                 <svg
@@ -2249,11 +2278,13 @@ export default function Home() {
                   />
                 </svg>
                 <span>
-                  {autoListening
-                    ? "Listening ..."
-                    : recording
-                      ? "Listening..."
-                      : "Speak to me"}
+                  {speaking
+                    ? "Stop"
+                    : autoListening
+                      ? "Listening ..."
+                      : recording
+                        ? "Listening..."
+                        : "Speak to me"}
                 </span>
               </button>
 
@@ -2581,17 +2612,23 @@ export default function Home() {
                     </span>
                     <button
                       type="button"
-                      onClick={
-                  recording ? cancelListeningSilent : () => startRecording()
-                }
-                      disabled={loading}
-                      aria-pressed={recording ? "true" : "false"}
+                      onClick={handleSpeakButtonClick}
+                      disabled={loading && !speaking && !recording}
+                      aria-pressed={recording || speaking ? "true" : "false"}
                       aria-label={
-                        recording
-                          ? "Stop voice recording"
-                          : "Start voice recording to log food"
+                        speaking
+                          ? "Stop speaking"
+                          : recording
+                            ? "Stop voice recording"
+                            : "Start voice recording to log food"
                       }
-                      className={`w-10 h-10 rounded-full flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-white transition-colors disabled:cursor-not-allowed ${recording ? "bg-amber-500 hover:bg-amber-600" : "bg-green-600 hover:bg-green-700"}`}
+                      className={`w-10 h-10 rounded-full flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-white transition-colors disabled:cursor-not-allowed ${
+                        speaking
+                          ? "bg-red-600 hover:bg-red-700"
+                          : recording
+                            ? "bg-amber-500 hover:bg-amber-600"
+                            : "bg-green-600 hover:bg-green-700"
+                      }`}
                     >
                       <svg
                         width="16"
