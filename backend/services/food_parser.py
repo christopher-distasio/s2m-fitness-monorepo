@@ -3,6 +3,7 @@ import re
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from backend.services.nutrition_service import lookup_food
+from backend.services.query_match_rank import is_zero_calorie_query
 
 load_dotenv()
 
@@ -248,6 +249,28 @@ async def parse_food_input(
 
         parsed["quantity_used"] = quantity
         print(f"quantity: {quantity}, calories after: {parsed['calories']}")
+
+        # Never silently high-confidence-log a degenerate 0 kcal for a food that
+        # should have calories (bad branded USDA rows). Atwater usually fills
+        # this in lookup; this is the last-resort safety net.
+        cal = parsed.get("calories")
+        try:
+            cal_f = float(cal) if cal is not None else None
+        except (TypeError, ValueError):
+            cal_f = None
+        if (
+            cal_f is not None
+            and cal_f <= 0.5
+            and not is_zero_calorie_query(food_query)
+            and not is_zero_calorie_query(raw_input or "")
+        ):
+            parsed["confidence"] = "low"
+            note = "Nutrition data looks incomplete (0 calories for this food)."
+            parsed["reasoning"] = (
+                f"{parsed['reasoning']} {note}".strip()
+                if parsed.get("reasoning")
+                else note
+            )
 
         # Consolidated resolver: even when the model was confident about the
         # TEXT, the DATA may show the plausible interpretations disagree on

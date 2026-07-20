@@ -5,7 +5,11 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from pinecone import Pinecone
 
-from backend.services.query_match_rank import rerank_matches_by_query
+from backend.services.query_match_rank import (
+    effective_calories_per_100g,
+    is_zero_calorie_query,
+    rerank_matches_by_query,
+)
 # import httpx  # kept for potential future use — see commented fallback block below
 
 load_dotenv()
@@ -82,6 +86,28 @@ def _parse_portions(metadata: dict) -> list[dict]:
     return portions if isinstance(portions, list) else []
 
 
+def _sanitize_serving_size_g(serving_size_g: float) -> tuple[float, str | None]:
+    """Fix implausibly small branded serving weights.
+
+    Some USDA branded rows store grams off by 1000 (e.g. 0.056 instead of 56),
+    which scales a real 125 kcal/100g food down to ~0.07 kcal per serving.
+    If ×1000 lands in a normal serving range, use that; otherwise fall back
+    to 100g so we never silently log ~0 for a caloric food.
+    """
+    try:
+        grams = float(serving_size_g)
+    except (TypeError, ValueError):
+        return 100.0, "serving_size_g_invalid_fallback"
+    if grams >= 1.0:
+        return grams, None
+    if grams <= 0:
+        return 100.0, "serving_size_g_nonpositive_fallback"
+    bumped = grams * 1000.0
+    if 5.0 <= bumped <= 2000.0:
+        return bumped, "serving_size_g_x1000_fix"
+    return 100.0, "serving_size_g_implausible_fallback"
+
+
 def get_serving_size_g(metadata: dict) -> tuple[float, str]:
     """
     Returns (serving_size_g, source_label). Handles both dataset shapes:
@@ -93,13 +119,25 @@ def get_serving_size_g(metadata: dict) -> tuple[float, str]:
     neither is present, so behavior is at least predictable, not silently
     wrong, for any food this doesn't yet handle.
     """
-    if metadata.get("serving_size_g"):
-        return metadata["serving_size_g"], "branded_serving_size"
+    raw = metadata.get("serving_size_g")
+    if raw is not None and raw != "":
+        try:
+            raw_f = float(raw)
+        except (TypeError, ValueError):
+            raw_f = None
+        if raw_f is not None and raw_f != 0:
+            grams, fix = _sanitize_serving_size_g(raw_f)
+            if fix:
+                return grams, fix
+            return grams, "branded_serving_size"
 
     for portion in _parse_portions(metadata):
         gram_weight = portion.get("gram_weight")
         if gram_weight:
-            return gram_weight, "sr_legacy_default_portion"
+            grams, fix = _sanitize_serving_size_g(gram_weight)
+            if fix:
+                return grams, fix
+            return grams, "sr_legacy_default_portion"
 
     return 100, "no_serving_data_fallback"
 
@@ -108,14 +146,42 @@ def scale_nutrients(metadata: dict, serving_size_g: float) -> dict:
     """Pinecone stores nutrient values per 100g. Scale them to the given
     serving size in grams. Central helper so the primary result, the
     candidate list, and each portion option all compute calories the exact
-    same way."""
+    same way.
+
+    When the calorie field is missing/0 but macros are present (common in
+    branded USDA rows), calories are estimated with Atwater (4P+4C+9F).
+    """
     multiplier = serving_size_g / 100
+    calories_100 = effective_calories_per_100g(metadata)
+    protein_100 = float(metadata.get("protein") or 0)
+    carbs_100 = float(metadata.get("carbs") or 0)
+    fat_100 = float(metadata.get("fat") or 0)
     return {
-        "calories": round((metadata.get("calories") or 0) * multiplier, 2),
-        "protein": round((metadata.get("protein") or 0) * multiplier, 2),
-        "carbs": round((metadata.get("carbs") or 0) * multiplier, 2),
-        "fat": round((metadata.get("fat") or 0) * multiplier, 2),
+        "calories": round((calories_100 or 0) * multiplier, 2),
+        "protein": round(protein_100 * multiplier, 2),
+        "carbs": round(carbs_100 * multiplier, 2),
+        "fat": round(fat_100 * multiplier, 2),
     }
+
+
+def _pick_match_with_usable_calories(query: str, matches: list[dict]) -> dict | None:
+    """Prefer a hit whose effective calories aren't a degenerate zero.
+
+    For caloric foods, skip rows that are still ~0 after Atwater. Zero-cal
+    queries (water, black coffee, …) keep the top lexical hit.
+    """
+    if not matches:
+        return None
+    if is_zero_calorie_query(query):
+        return matches[0]
+    for match in matches:
+        if match.get("score", 0) < SCORE_THRESHOLD:
+            continue
+        cal = effective_calories_per_100g(match.get("metadata") or {})
+        if cal is not None and cal > 0.5:
+            return match
+    # Nothing usable — return top match and let the parser refuse high-confidence.
+    return matches[0]
 
 
 def get_brand(metadata: dict) -> str:
@@ -409,11 +475,12 @@ async def lookup_food(query: str, source_filter: str | None = None) -> dict | No
 
     # Vector score alone often buries the everyday food (e.g. "Bananas, raw")
     # under chips/branded neighbors. Re-rank by how closely the name matches
-    # what the user said before picking the primary + candidate list.
+    # what the user said (plus a small near-zero-kcal demotion for caloric
+    # foods) before picking the primary + candidate list.
     matches = rerank_matches_by_query(query, matches)
 
-    match = matches[0]
-    if match.get("score", 0) < SCORE_THRESHOLD:
+    match = _pick_match_with_usable_calories(query, matches)
+    if match is None or match.get("score", 0) < SCORE_THRESHOLD:
         return None
 
     metadata = match.get("metadata", {})
