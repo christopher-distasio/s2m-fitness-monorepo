@@ -297,21 +297,15 @@ function isBrandChoice(parsed: ParsedResult): boolean {
 // Trim limits for the clarification list. The visual card can show a bit more
 // since it's scannable at a glance; the spoken voice list is deliberately
 // shorter (a long read-aloud is tiring) but "more" still reveals the full list.
-const MAX_VISIBLE_CANDIDATES = 3;
-const MAX_VISIBLE_PORTIONS = 4;
 const MAX_VOICE_OPTIONS = 3;
-
-interface ClarifyView {
-  candidates: FoodCandidate[];
-  portions: PortionOption[];
-  visibleCandidates: FoodCandidate[];
-  visiblePortions: PortionOption[];
-  hasMore: boolean;
-}
 
 interface ClarifyOption {
   key: string;
+  kind: "candidate" | "portion";
   speech: string;
+  title: string;
+  subtitle?: string;
+  calories: number;
   pick: {
     food_name: string;
     calories: number;
@@ -337,29 +331,6 @@ function clarificationCandidates(parsed: ParsedResult): FoodCandidate[] {
   );
 }
 
-/**
- * Compute the trimmed clarification view. `expanded` decides whether the full
- * lists are shown or just the top MAX_VISIBLE_* of each group. This is the ONE
- * place the trim limits live, so the visual card and the spoken list always
- * agree on what's shown. `hasMore` is true only when something was trimmed off.
- */
-function clarifyView(parsed: ParsedResult, expanded: boolean): ClarifyView {
-  const candidates = clarificationCandidates(parsed);
-  const allPortions = parsed.portion_options || [];
-  // A single portion isn't a real choice, so we never offer it.
-  const portions = allPortions.length > 1 ? allPortions : [];
-  const visibleCandidates = expanded
-    ? candidates
-    : candidates.slice(0, MAX_VISIBLE_CANDIDATES);
-  const visiblePortions = expanded
-    ? portions
-    : portions.slice(0, MAX_VISIBLE_PORTIONS);
-  const hasMore =
-    candidates.length > visibleCandidates.length ||
-    portions.length > visiblePortions.length;
-  return { candidates, portions, visibleCandidates, visiblePortions, hasMore };
-}
-
 function speakCandidate(c: FoodCandidate): string {
   const name = c.brand ? `${c.brand} ${c.name}` : c.name;
   return c.calories != null
@@ -368,10 +339,10 @@ function speakCandidate(c: FoodCandidate): string {
 }
 
 /**
- * The FULL flat, ordered list of selectable options for voice: candidates
- * first, then portions — the same top-to-bottom order the card renders. Each
- * option carries the exact logResolved() payload, so a spoken number resolves
- * identically to a tap. Not trimmed here; callers apply MAX_VOICE_OPTIONS.
+ * The FULL flat, ordered list of selectable options: candidates first, then
+ * portions — same top-to-bottom order the card renders and voice speaks. Each
+ * option carries the exact logResolved() payload. Not trimmed here; callers
+ * apply MAX_VOICE_OPTIONS via clarifyOptions().
  */
 function allClarifyOptions(
   parsed: ParsedResult,
@@ -387,7 +358,11 @@ function allClarifyOptions(
   for (const c of candidates) {
     options.push({
       key: `c-${c.fdc_id}`,
+      kind: "candidate",
       speech: speakCandidate(c),
+      title: c.brand ? `${c.brand} ${c.name}` : c.name,
+      subtitle: c.serving_label,
+      calories: c.calories ?? 0,
       pick: {
         food_name: c.brand ? `${c.brand} ${c.name}` : c.name,
         calories: c.calories,
@@ -402,7 +377,10 @@ function allClarifyOptions(
   for (const p of portions) {
     options.push({
       key: `p-${p.label}`,
+      kind: "portion",
       speech: `${p.label}, ${Math.round(p.calories)} calories`,
+      title: p.label,
+      calories: p.calories,
       pick: {
         food_name: foodName,
         calories: p.calories,
@@ -418,9 +396,9 @@ function allClarifyOptions(
 }
 
 /**
- * The options actually offered by voice right now: the top MAX_VOICE_OPTIONS
- * by default, or the full list once "more" has expanded it. Spoken numbering
- * and number-selection both use this, so they always agree on what "3" means.
+ * Options shown on the card AND offered by voice right now: top
+ * MAX_VOICE_OPTIONS by default, or the full list once expanded ("more" /
+ * "See more"). Numbering on-screen and aloud always use this same list.
  */
 function clarifyOptions(
   parsed: ParsedResult,
@@ -464,7 +442,7 @@ function buildNumberedClarificationSpeech(
       parsed.reasoning ? ` ${parsed.reasoning}.` : ""
     } Please be more specific.`;
   }
-  const options = expanded ? all : all.slice(0, MAX_VOICE_OPTIONS);
+  const options = clarifyOptions(parsed, rawInput, expanded);
   const hasMore = all.length > options.length;
   const numbered = formatNumberedSpeech(options);
   return withNumberCue(
@@ -501,25 +479,6 @@ function buildMoreClarificationSpeech(
   const lead =
     additional.length === 1 ? "Here's the other option" : "Here are the rest";
   return withNumberCue(`${lead}: ${numbered}.`);
-}
-
-/**
- * Plain (un-numbered) spoken clarification for TEXT mode, trimmed to the same
- * shared limits as the default visual view. Text mode resolves by tapping a
- * button, so there's no numbering or voice commands — just a short readout of
- * the top options. Falls back to free-text alternatives when nothing grounded.
- */
-function buildDidYouMeanSpeech(parsed: ParsedResult): string {
-  const { visibleCandidates, visiblePortions } = clarifyView(parsed, false);
-  if (visibleCandidates.length > 0) {
-    return visibleCandidates.map(speakCandidate).join(", or ");
-  }
-  if (visiblePortions.length > 0) {
-    return visiblePortions
-      .map((p) => `${p.label}, ${Math.round(p.calories)} calories`)
-      .join(", or ");
-  }
-  return parsed.alternatives?.join(", or ") ?? "";
 }
 
 export default function Home() {
@@ -713,13 +672,14 @@ export default function Home() {
   /**
    * Numbered clarification TTS with mic open for barge-in. Returns true when a
    * barge-in clip was handled (or Stop discarded it) — caller should skip
-   * maybeAutoListen. Speak mode only; See/muted fall back to plain speak.
+   * maybeAutoListen. Works in See and Speak (mic exists in both); muted falls
+   * back to plain speak.
    */
   async function speakClarificationWithBargeIn(
     msg: string,
     uid: string,
   ): Promise<boolean> {
-    if (mode !== "speak" || muted) {
+    if (muted) {
       await speak(msg);
       return false;
     }
@@ -787,26 +747,19 @@ export default function Home() {
       suppressAutoListenRef.current = false;
       return;
     }
-    // Use refs: after clarification TTS / barge-in, React state can still say
-    // recording/loading while the mic is actually free (esp. after "more").
-    if (
-      mode !== "speak" ||
-      muted ||
-      loadingRef.current ||
-      recordingRef.current
-    ) {
+    if (muted || loadingRef.current || recordingRef.current) {
       return;
     }
     const awaitingClarification = pendingParseRef.current !== null;
     const awaitingPostLogin = postLoginVoiceSessionRef.current;
-    // Clarification answers always re-open the mic for the 8s window — even
-    // when the global auto-listen pref is off. Post-login greet still needs
-    // the pref.
+    // Clarification answers re-open the mic in BOTH See and Speak — the Speak
+    // button exists in both modes and must keep listening after choices.
     if (awaitingClarification) {
       await startRecordingRef.current({ fromAutoListen: true });
       return;
     }
-    if (!autoListen || !awaitingPostLogin) return;
+    // Post-login greet auto-listen stays Speak-mode + pref gated.
+    if (mode !== "speak" || !autoListen || !awaitingPostLogin) return;
     await startRecordingRef.current({ fromAutoListen: true });
   }, [autoListen, mode, muted]);
 
@@ -1122,11 +1075,17 @@ export default function Home() {
         pendingParseRef.current = pending;
         setClarifyExpandedBoth(false);
         clearSpokenClarifyOptions();
-        const msg = isBrandChoice(parsed)
-          ? `I think this is ${parsed.food}. ${BRAND_CHOICE_SPEECH}`
-          : parsed.confidence === "low"
-            ? `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`
-            : `I think this is ${parsed.food}. Did you mean ${buildDidYouMeanSpeech(parsed)}?`;
+        let msg: string;
+        if (isBrandChoice(parsed)) {
+          msg = `I think this is ${parsed.food}. ${BRAND_CHOICE_SPEECH}`;
+        } else if (parsed.confidence === "low") {
+          msg = `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`;
+        } else {
+          rememberSpokenClarifyOptions(
+            clarifyOptions(parsed, textInput, false),
+          );
+          msg = buildNumberedClarificationSpeech(parsed, textInput, false);
+        }
         setStatus(msg);
         setTextInput("");
         const numberedClarify =
@@ -1728,16 +1687,13 @@ export default function Home() {
       rememberSpokenClarifyOptions(
         clarifyOptions(parsed, originalInput, false),
       );
-      const msg =
-        mode === "speak"
-          ? buildNumberedClarificationSpeech(parsed, originalInput, false)
-          : `I think this is ${parsed.food}. Did you mean ${buildDidYouMeanSpeech(parsed)}?`;
+      const msg = buildNumberedClarificationSpeech(
+        parsed,
+        originalInput,
+        false,
+      );
       setStatus(msg);
-      if (mode === "speak") {
-        return await speakClarificationWithBargeIn(msg, uid);
-      }
-      await speak(msg);
-      return false;
+      return await speakClarificationWithBargeIn(msg, uid);
     } finally {
       flushSync(() => setLoadingBoth(false));
     }
@@ -1829,13 +1785,16 @@ export default function Home() {
                         "generic",
                       )
                     }
-                    className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                    aria-label="A general item — say general"
+                    className="flex items-center gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                    aria-label="1, A general item"
                   >
-                    <span className="font-medium">A general item</span>
-                    <span className="shrink-0 text-xs text-white/70">
-                      say &ldquo;general&rdquo; or &ldquo;1&rdquo;
+                    <span
+                      aria-hidden="true"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-sm font-bold tabular-nums"
+                    >
+                      1
                     </span>
+                    <span className="font-medium">A general item</span>
                   </button>
                   <button
                     type="button"
@@ -1846,109 +1805,123 @@ export default function Home() {
                         "brand",
                       )
                     }
-                    className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                    aria-label="A specific brand — say specific"
+                    className="flex items-center gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                    aria-label="2, A specific brand"
                   >
-                    <span className="font-medium">A specific brand</span>
-                    <span className="shrink-0 text-xs text-white/70">
-                      say &ldquo;specific&rdquo; or &ldquo;2&rdquo;
+                    <span
+                      aria-hidden="true"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-sm font-bold tabular-nums"
+                    >
+                      2
                     </span>
+                    <span className="font-medium">A specific brand</span>
                   </button>
                 </div>
               </div>
             );
           }
 
-          const view = clarifyView(parsed, clarifyExpanded);
-          const hasGrounded =
-            view.candidates.length > 0 || view.portions.length > 0;
+          const allOptions = allClarifyOptions(
+            parsed,
+            pendingParse.raw_input,
+          );
+          const options = clarifyOptions(
+            parsed,
+            pendingParse.raw_input,
+            clarifyExpanded,
+          );
+          const hasGrounded = allOptions.length > 0;
+          const hasMore = allOptions.length > options.length;
+          const visibleCandidates = options.filter((o) => o.kind === "candidate");
+          const visiblePortions = options.filter((o) => o.kind === "portion");
 
           if (hasGrounded) {
             return (
               <div className="mb-4 flex flex-col gap-4">
-                {view.visibleCandidates.length > 0 && (
+                {visibleCandidates.length > 0 && (
                   <div>
                     <p className="text-xs text-white uppercase tracking-wide font-medium mb-2">
                       Did you mean a different food?
                     </p>
                     <div className="flex flex-col gap-2">
-                      {view.visibleCandidates.map((c) => (
-                        <button
-                          key={c.fdc_id}
-                          type="button"
-                          onClick={() =>
-                            logResolved(pendingParse.uid, {
-                              food_name: c.brand
-                                ? `${c.brand} ${c.name}`
-                                : c.name,
-                              calories: c.calories,
-                              protein: c.protein,
-                              carbs: c.carbs,
-                              fat: c.fat,
-                              quantity: c.serving_label,
-                              raw_input: pendingParse.raw_input,
-                            })
-                          }
-                          className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                          aria-label={`Log ${c.brand ? `${c.brand} ` : ""}${c.name}, ${c.serving_label ?? ""}, ${Math.round(c.calories)} calories`}
-                        >
-                          <span className="min-w-0">
-                            <span className="block font-medium truncate">
-                              {c.brand ? `${c.brand} ` : ""}
-                              {c.name}
+                      {visibleCandidates.map((o, i) => {
+                        const n = i + 1;
+                        return (
+                          <button
+                            key={o.key}
+                            type="button"
+                            onClick={() =>
+                              logResolved(pendingParse.uid, o.pick)
+                            }
+                            className="flex items-center gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                            aria-label={`${n}, Log ${o.title}, ${Math.round(o.calories)} calories`}
+                          >
+                            <span
+                              aria-hidden="true"
+                              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-sm font-bold tabular-nums"
+                            >
+                              {n}
                             </span>
-                            {c.serving_label && (
-                              <span className="block text-xs text-white/70">
-                                {c.serving_label}
+                            <span className="min-w-0 flex-1">
+                              <span className="block font-medium truncate">
+                                {o.title}
                               </span>
-                            )}
-                          </span>
-                          <span className="shrink-0 text-xs font-semibold">
-                            {Math.round(c.calories)} cal
-                          </span>
-                        </button>
-                      ))}
+                              {o.subtitle && (
+                                <span className="block text-xs text-white/70">
+                                  {o.subtitle}
+                                </span>
+                              )}
+                            </span>
+                            <span className="shrink-0 text-xs font-semibold">
+                              {Math.round(o.calories)} cal
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
 
-                {view.visiblePortions.length > 0 && (
+                {visiblePortions.length > 0 && (
                   <div>
                     <p className="text-xs text-white uppercase tracking-wide font-medium mb-2">
                       How much? — {parsed.food}
                     </p>
                     <div className="flex flex-col gap-2">
-                      {view.visiblePortions.map((p, i) => (
-                        <button
-                          key={`${p.label}-${i}`}
-                          type="button"
-                          onClick={() =>
-                            logResolved(pendingParse.uid, {
-                              food_name: parsed.brand
-                                ? `${parsed.brand} ${parsed.food}`
-                                : parsed.food,
-                              calories: p.calories,
-                              protein: p.protein,
-                              carbs: p.carbs,
-                              fat: p.fat,
-                              quantity: p.label,
-                              raw_input: pendingParse.raw_input,
-                            })
-                          }
-                          className="flex items-center justify-between gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                          aria-label={`Log ${p.label}, ${Math.round(p.calories)} calories`}
-                        >
-                          <span className="min-w-0 truncate">{p.label}</span>
-                          <span className="shrink-0 text-xs font-semibold">
-                            {Math.round(p.calories)} cal
-                          </span>
-                        </button>
-                      ))}
+                      {visiblePortions.map((o, i) => {
+                        // Continue numbering after candidates so on-screen
+                        // matches the flat spoken list (candidates then portions).
+                        const n = visibleCandidates.length + i + 1;
+                        return (
+                          <button
+                            key={o.key}
+                            type="button"
+                            onClick={() =>
+                              logResolved(pendingParse.uid, o.pick)
+                            }
+                            className="flex items-center gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                            aria-label={`${n}, Log ${o.title}, ${Math.round(o.calories)} calories`}
+                          >
+                            <span
+                              aria-hidden="true"
+                              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-sm font-bold tabular-nums"
+                            >
+                              {n}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate">
+                              {o.title}
+                            </span>
+                            <span className="shrink-0 text-xs font-semibold">
+                              {Math.round(o.calories)} cal
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
 
-                {(view.hasMore || clarifyExpanded) && (
+                {(hasMore || clarifyExpanded) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -1999,10 +1972,16 @@ export default function Home() {
                         setPendingParse({ ...pendingParse, raw_input: alt });
                         confirmLog(pendingParse.uid, alt);
                       }}
-                      className="text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                      aria-label={`Log ${alt} instead`}
+                      className="flex items-center gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                      aria-label={`${i + 1}, Log ${alt} instead`}
                     >
-                      {alt}
+                      <span
+                        aria-hidden="true"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-sm font-bold tabular-nums"
+                      >
+                        {i + 1}
+                      </span>
+                      <span className="min-w-0 flex-1">{alt}</span>
                     </button>
                   ))}
                 </div>
