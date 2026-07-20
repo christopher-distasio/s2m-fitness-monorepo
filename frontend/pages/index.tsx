@@ -527,6 +527,18 @@ export default function Home() {
   const [logs, setLogs] = useState<FoodLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
+  // Refs so maybeAutoListen / startRecording see current flags after barge-in
+  // TTS (React state can still be true when we try to reopen the mic).
+  const loadingRef = useRef(false);
+  const recordingRef = useRef(false);
+  const setLoadingBoth = (value: boolean) => {
+    loadingRef.current = value;
+    setLoading(value);
+  };
+  const setRecordingBoth = (value: boolean) => {
+    recordingRef.current = value;
+    setRecording(value);
+  };
   const [autoListening, setAutoListening] = useState(false);
   const [status, setStatus] = useState("");
   const [summary, setSummary] = useState({
@@ -720,14 +732,17 @@ export default function Home() {
       msg,
       { muted, selectedVoice, apiBase: API_BASE },
       {
-        onMicReady: () => setRecording(true),
+        onMicReady: () => setRecordingBoth(true),
         onBargeIn: () => setStatus("Listening..."),
         shouldCancel: () => cancelled || suppressAutoListenRef.current,
       },
     );
     cancelBargeInRef.current = null;
-    setRecording(false);
-    setAutoListening(false);
+    // Flush so follow-on maybeAutoListen / startRecording see mic free.
+    flushSync(() => {
+      setRecordingBoth(false);
+      setAutoListening(false);
+    });
 
     if (suppressAutoListenRef.current) {
       suppressAutoListenRef.current = false;
@@ -772,7 +787,16 @@ export default function Home() {
       suppressAutoListenRef.current = false;
       return;
     }
-    if (mode !== "speak" || muted || loading || recording) return;
+    // Use refs: after clarification TTS / barge-in, React state can still say
+    // recording/loading while the mic is actually free (esp. after "more").
+    if (
+      mode !== "speak" ||
+      muted ||
+      loadingRef.current ||
+      recordingRef.current
+    ) {
+      return;
+    }
     const awaitingClarification = pendingParseRef.current !== null;
     const awaitingPostLogin = postLoginVoiceSessionRef.current;
     // Clarification answers always re-open the mic for the 8s window — even
@@ -784,7 +808,7 @@ export default function Home() {
     }
     if (!autoListen || !awaitingPostLogin) return;
     await startRecordingRef.current({ fromAutoListen: true });
-  }, [autoListen, mode, muted, loading, recording]);
+  }, [autoListen, mode, muted]);
 
   const runOpenVoiceSetup = useCallback(
     async (options?: { isRecovery?: boolean }) => {
@@ -811,7 +835,7 @@ export default function Home() {
         postLoginVoiceSessionRef.current = true;
       }
       markVoiceSetupComplete();
-      flushSync(() => setLoading(false));
+      flushSync(() => setLoadingBoth(false));
       await maybeAutoListen();
     },
     [
@@ -1031,7 +1055,7 @@ export default function Home() {
       suppressAutoListenRef.current = false;
       return;
     }
-    if (!muted && !recording) {
+    if (!muted && !recordingRef.current) {
       await startRecordingRef.current({ fromAutoListen: true });
     }
   }
@@ -1042,7 +1066,7 @@ export default function Home() {
       suppressAutoListenRef.current = true;
       cancelBargeInRef.current?.();
       stopSpeaking();
-      setRecording(false);
+      setRecordingBoth(false);
       setAutoListening(false);
       return;
     }
@@ -1061,7 +1085,7 @@ export default function Home() {
     } = await supabase.auth.getSession();
     if (!session) return;
     if (!textInput.trim()) return;
-    setLoading(true);
+    setLoadingBoth(true);
     setStatus("Parsing...");
     const uid = session.user.id;
     let shouldAutoListen = false;
@@ -1120,7 +1144,7 @@ export default function Home() {
       setStatus(err);
       await speak(err);
     } finally {
-      flushSync(() => setLoading(false));
+      flushSync(() => setLoadingBoth(false));
     }
     if (shouldAutoListen) await maybeAutoListen();
   }
@@ -1184,7 +1208,7 @@ export default function Home() {
       awaitingMoreTimeReplyRef.current ? "true" : "false",
     );
     formData.append("awaiting_clarification", awaitingClarificationFlag);
-    setLoading(true);
+    setLoadingBoth(true);
     setStatus("Transcribing...");
     let shouldAutoListen = false;
     let voiceResponseStatus: number | undefined;
@@ -1248,7 +1272,7 @@ export default function Home() {
       }
       if (data.clarification?.type === "more_time") {
         awaitingMoreTimeReplyRef.current = false;
-        flushSync(() => setLoading(false));
+        flushSync(() => setLoadingBoth(false));
         await startRecordingRef.current({ fromAutoListen: true });
         return;
       }
@@ -1462,14 +1486,14 @@ export default function Home() {
       await speak(errMsg);
       if (wasAwaitingClarification) shouldAutoListen = true;
     } finally {
-      flushSync(() => setLoading(false));
+      flushSync(() => setLoadingBoth(false));
     }
     if (shouldAutoListen) await maybeAutoListen();
   }
   processVoiceBlobRef.current = processVoiceBlob;
 
   async function startRecording(options?: { fromAutoListen?: boolean }) {
-    if (recording || loading) return;
+    if (recordingRef.current || loadingRef.current) return;
     // Unlock audio context for Safari
     const AudioContext =
       window.AudioContext || (window as any).webkitAudioContext;
@@ -1500,7 +1524,7 @@ export default function Home() {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch {
         setAutoListening(false);
-        setRecording(false);
+        setRecordingBoth(false);
         setStatus("Microphone access is required to listen.");
         return;
       }
@@ -1515,7 +1539,7 @@ export default function Home() {
       clearRecordingTimeout();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
-      setRecording(false);
+      setRecordingBoth(false);
       setAutoListening(false);
       // User cancelled by tapping Speak-to-me again — no API, no TTS, no status.
       if (cancelRecordingRef.current) {
@@ -1537,7 +1561,7 @@ export default function Home() {
     };
     mediaRecorderRef.current = recorder;
     recorder.start();
-    setRecording(true);
+    setRecordingBoth(true);
     setStatus("Recording...");
     recordingTimedOutRef.current = false;
     clearRecordingTimeout();
@@ -1561,7 +1585,7 @@ export default function Home() {
     } else {
       cancelRecordingRef.current = false;
     }
-    setRecording(false);
+    setRecordingBoth(false);
     setAutoListening(false);
     setStatus("");
   }
@@ -1615,7 +1639,7 @@ export default function Home() {
       raw_input: string;
     },
   ) {
-    setLoading(true);
+    setLoadingBoth(true);
     try {
       const res = await fetch(`${API_BASE}/food`, {
         method: "POST",
@@ -1645,7 +1669,7 @@ export default function Home() {
       await fetchLogs(uid);
       await fetchSummary(uid);
     } finally {
-      flushSync(() => setLoading(false));
+      flushSync(() => setLoadingBoth(false));
     }
   }
 
@@ -1660,7 +1684,7 @@ export default function Home() {
     originalInput: string,
     source: "generic" | "brand",
   ): Promise<boolean> {
-    setLoading(true);
+    setLoadingBoth(true);
     try {
       const res = await fetch(`${API_BASE}/food/parse`, {
         method: "POST",
@@ -1715,7 +1739,7 @@ export default function Home() {
       await speak(msg);
       return false;
     } finally {
-      flushSync(() => setLoading(false));
+      flushSync(() => setLoadingBoth(false));
     }
   }
 
