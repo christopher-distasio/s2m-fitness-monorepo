@@ -1,22 +1,31 @@
 """
-Food parser eval suite — calls the real GPT + Current food data source  pipeline (no mocks).
+Food parser eval suite — calls the real GPT + Current food data source pipeline
+(no mocks), plus a few Tier 3 locked fixtures that must stay deterministic.
 
 Run: pytest tests/eval_food_parser.py -v -s
 Use -s to see the score summary printed after the test run.
+
+Nutrition / zero-cal / Atwater cases live under category "nutrition" and also
+assert calorie bounds. The empty-macros → low-confidence case cannot be live
+(Pinecone) and is the mocked test in this module.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Literal
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from backend.services.food_parser import parse_food_input
 
-Category = Literal["simple", "branded", "composite", "vague", "ambiguous"]
+Category = Literal[
+    "simple", "branded", "composite", "vague", "ambiguous", "nutrition"
+]
 
 
 @dataclass
@@ -28,6 +37,12 @@ class EvalCase:
     category: Category
     expected_size: str = ""
     expected_measurement: str = ""
+    # Optional calorie bounds (inclusive). Used by Tier 3 nutrition
+    # regressions — zero-cal / Atwater / pass-through — without forcing
+    # every food/qty case to assert calories.
+    min_calories: float | None = None
+    max_calories: float | None = None
+    expected_confidence: str | None = None
 
 
 @dataclass
@@ -43,6 +58,10 @@ class CaseResult:
     unit_match: bool
     size_match: bool = True
     measurement_match: bool = True
+    actual_calories: float | None = None
+    actual_confidence: str | None = None
+    calories_match: bool = True
+    confidence_match: bool = True
     error: str | None = None
 
     @property
@@ -66,12 +85,28 @@ class CaseResult:
         return self.measurement_match
 
     @property
+    def scored_calories(self) -> bool | None:
+        if self.case.min_calories is None and self.case.max_calories is None:
+            return None
+        return self.calories_match
+
+    @property
+    def scored_confidence(self) -> bool | None:
+        if not self.case.expected_confidence:
+            return None
+        return self.confidence_match
+
+    @property
     def case_score(self) -> float:
         dims = [self.food_score, float(self.quantity_match), float(self.unit_match)]
         if self.case.expected_size:
             dims.append(float(self.size_match))
         if self.case.expected_measurement:
             dims.append(float(self.measurement_match))
+        if self.scored_calories is not None:
+            dims.append(float(self.calories_match))
+        if self.scored_confidence is not None:
+            dims.append(float(self.confidence_match))
         return sum(dims) / len(dims)
 
     @property
@@ -178,6 +213,48 @@ EVAL_CASES: list[EvalCase] = [
     EvalCase("fish", "fish", "1", "serving", "ambiguous"),
     EvalCase("chips", "chips", "1", "serving", "ambiguous"),
     EvalCase("yogurt", "yogurt", "1", "serving", "ambiguous"),
+    # --- nutrition / zero-cal + Atwater (Tier 3 regressions) ---
+    # Live bug: branded ham logged ~0 kcal (bad serving_size_g and/or
+    # calories:0 + macros). Must return a real non-zero serving calorie.
+    EvalCase(
+        "Kroger smoked deli style lean ham",
+        "ham",
+        "1",
+        "serving",
+        "nutrition",
+        min_calories=40,
+        max_calories=250,
+    ),
+    # Genuinely near-zero foods must stay near-zero (no Atwater invent,
+    # no near-zero penalty demotion into a caloric substitute).
+    EvalCase(
+        "a cup of water",
+        "water",
+        "1",
+        "cup",
+        "nutrition",
+        min_calories=0,
+        max_calories=5,
+    ),
+    EvalCase(
+        "a cup of black coffee",
+        "coffee",
+        "1",
+        "cup",
+        "nutrition",
+        min_calories=0,
+        max_calories=15,
+    ),
+    # Healthy row with real calories: fallback must not rewrite them.
+    EvalCase(
+        "one medium banana",
+        "banana",
+        "1",
+        "",
+        "nutrition",
+        min_calories=50,
+        max_calories=250,
+    ),
 ]
 
 _WORD_TO_NUM: dict[str, str] = {
@@ -467,6 +544,37 @@ def score_measurement(
     return score_unit(expected, actual_unit, raw_serving)
 
 
+def _as_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def score_calories(
+    actual: float | None,
+    min_calories: float | None,
+    max_calories: float | None,
+) -> bool:
+    if min_calories is None and max_calories is None:
+        return True
+    if actual is None:
+        return False
+    if min_calories is not None and actual < min_calories:
+        return False
+    if max_calories is not None and actual > max_calories:
+        return False
+    return True
+
+
+def score_confidence(expected: str | None, actual: str | None) -> bool:
+    if not expected:
+        return True
+    return (actual or "").strip().lower() == expected.strip().lower()
+
+
 async def evaluate_case(case: EvalCase) -> CaseResult:
     parsed = await parse_food_input(case.raw_input)
 
@@ -483,12 +591,18 @@ async def evaluate_case(case: EvalCase) -> CaseResult:
             unit_match=False,
             size_match=False if case.expected_size else True,
             measurement_match=False if case.expected_measurement else True,
+            calories_match=False
+            if case.min_calories is not None or case.max_calories is not None
+            else True,
+            confidence_match=False if case.expected_confidence else True,
             error=parsed.get("error"),
         )
 
     raw_serving = parsed.get("serving_size")
     actual_quantity, actual_unit = parse_serving_size(raw_serving)
     actual_food = parsed.get("food")
+    actual_calories = _as_float(parsed.get("calories"))
+    actual_confidence = parsed.get("confidence")
 
     food_exact, food_fuzzy_ratio = score_food(case.expected_food, actual_food)
     quantity_match = score_quantity(case.expected_quantity, actual_quantity, raw_serving)
@@ -499,6 +613,10 @@ async def evaluate_case(case: EvalCase) -> CaseResult:
     measurement_match = score_measurement(
         case.expected_measurement, actual_unit, raw_serving
     )
+    calories_match = score_calories(
+        actual_calories, case.min_calories, case.max_calories
+    )
+    confidence_match = score_confidence(case.expected_confidence, actual_confidence)
 
     return CaseResult(
         case=case,
@@ -512,6 +630,10 @@ async def evaluate_case(case: EvalCase) -> CaseResult:
         unit_match=unit_match,
         size_match=size_match,
         measurement_match=measurement_match,
+        actual_calories=actual_calories,
+        actual_confidence=actual_confidence,
+        calories_match=calories_match,
+        confidence_match=confidence_match,
     )
 
 
@@ -571,12 +693,20 @@ def format_report(report: dict) -> str:
                 expected_parts.append(f"size={case.expected_size!r}")
             if case.expected_measurement:
                 expected_parts.append(f"measurement={case.expected_measurement!r}")
+            if case.min_calories is not None or case.max_calories is not None:
+                expected_parts.append(
+                    f"calories=[{case.min_calories}, {case.max_calories}]"
+                )
+            if case.expected_confidence:
+                expected_parts.append(f"confidence={case.expected_confidence!r}")
             lines.append(f"    expected: {' '.join(expected_parts)}")
 
             lines.append(
                 f"    actual:   food={failure.actual_food!r} "
                 f"serving_size={failure.raw_serving_size!r} "
-                f"(parsed qty={failure.actual_quantity!r}, unit={failure.actual_unit!r})"
+                f"(parsed qty={failure.actual_quantity!r}, unit={failure.actual_unit!r}) "
+                f"calories={failure.actual_calories!r} "
+                f"confidence={failure.actual_confidence!r}"
             )
 
             score_parts = [
@@ -589,9 +719,12 @@ def format_report(report: dict) -> str:
                 score_parts.append(f"size={failure.size_match}")
             if failure.scored_measurement is not None:
                 score_parts.append(f"measurement={failure.measurement_match}")
+            if failure.scored_calories is not None:
+                score_parts.append(f"calories={failure.calories_match}")
+            if failure.scored_confidence is not None:
+                score_parts.append(f"confidence={failure.confidence_match}")
             score_parts.append(f"case={failure.case_score:.1%}")
             lines.append(f"    scores:   {' '.join(score_parts)}")
-
     lines.append("=" * 72)
     return "\n".join(lines)
 
@@ -607,3 +740,71 @@ async def test_food_parser_eval():
     print(format_report(report))
 
     assert len(results) == len(EVAL_CASES)
+    nutrition = [r for r in results if r.case.category == "nutrition"]
+    assert nutrition, "expected Tier 3 nutrition regression cases"
+    nutrition_failures = [r for r in nutrition if not r.passed]
+    assert not nutrition_failures, (
+        "nutrition regressions failed:\n"
+        + "\n".join(
+            f"  {r.case.raw_input!r} cal={r.actual_calories!r} "
+            f"match={r.calories_match}"
+            for r in nutrition_failures
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_macros_zero_calories_degrades_to_low_confidence():
+    """Tier 3 locked fixture: calories AND macros all ~0 must not silently
+    high-confidence-log a fabricated number — drop to low confidence instead.
+
+    Cannot be a live Pinecone case (we can't force empty macros on a real
+    row), so this stays a mocked regression in the eval module.
+    """
+
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps(
+            {
+                "food": "lean ham",
+                "brand": "Kroger",
+                "serving_size": "1",
+                "confidence": "high",
+                "alternatives": [],
+                "reasoning": "",
+            }
+        )
+        return mock_response
+
+    empty = {
+        "calories": 0,
+        "carbs": 0,
+        "protein": 0,
+        "fat": 0,
+        "food_name": "LEAN HAM",
+        "brand": "Kroger",
+        "serving_label": "1 serving",
+        "candidates": [],
+        "portion_options": [],
+        "resolution": {"status": "resolved"},
+    }
+
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=fake_create,
+    ):
+        with patch(
+            "backend.services.food_parser.lookup_food",
+            new_callable=AsyncMock,
+        ) as mock_lookup:
+            mock_lookup.return_value = empty
+            result = await parse_food_input("Kroger lean ham")
+
+    assert "error" not in result
+    assert float(result.get("calories") or 0) <= 0.5
+    assert result.get("confidence") == "low"
+    # Must not invent Atwater calories when every macro is also zero.
+    macros = result.get("macronutrients") or {}
+    assert float(macros.get("protein") or 0) == 0
+    assert float(macros.get("carbohydrates") or 0) == 0
+    assert float(macros.get("fats") or 0) == 0
