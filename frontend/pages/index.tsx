@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import { supabase } from "../lib/supabaseClient";
 import { speak as _speak, stopSpeaking, onSpeakingChange, isSpeaking } from "../lib/speak";
 import { speakWithBargeIn } from "../lib/bargeIn";
+import { formatBrandedName } from "../lib/foodName";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -332,7 +333,7 @@ function clarificationCandidates(parsed: ParsedResult): FoodCandidate[] {
 }
 
 function speakCandidate(c: FoodCandidate): string {
-  const name = c.brand ? `${c.brand} ${c.name}` : c.name;
+  const name = formatBrandedName(c.name, c.brand);
   return c.calories != null
     ? `${name}, ${Math.round(c.calories)} calories`
     : name;
@@ -351,20 +352,18 @@ function allClarifyOptions(
   const candidates = clarificationCandidates(parsed);
   const allPortions = parsed.portion_options || [];
   const portions = allPortions.length > 1 ? allPortions : [];
-  const foodName = parsed.brand
-    ? `${parsed.brand} ${parsed.food}`
-    : parsed.food;
+  const foodName = formatBrandedName(parsed.food, parsed.brand);
   const options: ClarifyOption[] = [];
   for (const c of candidates) {
     options.push({
       key: `c-${c.fdc_id}`,
       kind: "candidate",
       speech: speakCandidate(c),
-      title: c.brand ? `${c.brand} ${c.name}` : c.name,
+      title: formatBrandedName(c.name, c.brand),
       subtitle: c.serving_label,
       calories: c.calories ?? 0,
       pick: {
-        food_name: c.brand ? `${c.brand} ${c.name}` : c.name,
+        food_name: formatBrandedName(c.name, c.brand),
         calories: c.calories,
         protein: c.protein,
         carbs: c.carbs,
@@ -1661,7 +1660,7 @@ export default function Home() {
 
       if (parsed.confidence === "high") {
         await logResolved(uid, {
-          food_name: parsed.brand ? `${parsed.brand} ${parsed.food}` : parsed.food,
+          food_name: formatBrandedName(parsed.food, parsed.brand),
           calories: parsed.calories,
           protein: parsed.macronutrients?.protein,
           carbs: parsed.macronutrients?.carbohydrates,
@@ -1753,8 +1752,7 @@ export default function Home() {
           <>
             <p className="text-white text-sm mb-1">
               <strong>
-                {parsed.brand ? `${parsed.brand} ` : ""}
-                {parsed.food}
+                {formatBrandedName(parsed.food, parsed.brand)}
               </strong>
               {parsed.serving_label ? ` — ${parsed.serving_label}` : ""}{" "}
               — {Math.round(parsed.calories)} cal

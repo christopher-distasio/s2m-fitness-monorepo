@@ -2,7 +2,7 @@ import json
 import re
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
-from backend.services.nutrition_service import lookup_food
+from backend.services.nutrition_service import format_branded_name, lookup_food
 from backend.services.query_match_rank import is_zero_calorie_query
 
 load_dotenv()
@@ -112,7 +112,7 @@ def _apply_confidence_guards(parsed: dict, raw_input: str) -> dict:
 
 
 def _format_alt(name: str, brand: str | None, calories, extra: str | None = None) -> str:
-    label = f"{brand} {name}" if brand else name
+    label = format_branded_name(name, brand)
     parts = [label]
     if extra:
         parts.append(extra)

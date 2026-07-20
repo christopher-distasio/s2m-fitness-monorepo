@@ -190,6 +190,23 @@ def get_brand(metadata: dict) -> str:
     return (metadata.get("brand_name") or metadata.get("brand_owner") or "").strip()
 
 
+def format_branded_name(name: str | None, brand: str | None) -> str:
+    """Join brand + name for display/speech without duplicating brand.
+
+    Pinecone branded `name` often already starts with brand_name (e.g.
+    'GREAT VALUE POTATO CHIPS'). Callers that also have a separate `brand`
+    field must not prepend again — that produces 'Great Value Great Value…'.
+    Comparison is case-insensitive substring, matching process_branded.py.
+    """
+    name = (name or "").strip()
+    brand = (brand or "").strip()
+    if not brand:
+        return name
+    if brand.lower() in name.lower():
+        return name
+    return f"{brand} {name}"
+
+
 def _format_portion_label(portion: dict) -> str:
     """Build a human-readable label from an SR Legacy portion row, e.g.
     '1 cup, mashed' or '1 medium (7" to 7-7/8" long)'. Falls back through
@@ -339,8 +356,7 @@ def assess_resolution(
     if identity["diverges"] and identity_gap >= amount_gap:
         options = [
             {
-                "label": (f"{c['brand']} " if c.get("brand") else "")
-                + (c.get("name") or ""),
+                "label": format_branded_name(c.get("name"), c.get("brand")),
                 "calories": c.get("calories"),
                 "kind": "food",
             }

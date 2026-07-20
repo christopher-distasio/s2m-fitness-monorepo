@@ -99,8 +99,12 @@ with open(get_file("branded_food.csv"), newline="", encoding="utf-8") as f:
 
         brand_name = (row.get("brand_name") or "").strip()
         brand_owner = (row.get("brand_owner") or "").strip()
-        # Fallback brand used for name-building, same logic as before
-        brand = brand_name or brand_owner
+        # Consumer-facing brand for name-building. Do NOT fall back to
+        # brand_owner here — manufacturer strings like "Wal-Mart Stores, Inc."
+        # are absent from descriptions that already start with "GREAT VALUE",
+        # so owner-fallback would prepend and later live brand+name concat
+        # would double again.
+        brand = brand_name
 
         serving_size_unit = (row.get("serving_size_unit") or "").strip().lower()
         serving_size_raw = (row.get("serving_size") or "").strip()
@@ -177,6 +181,8 @@ with open(get_file("food.csv"), newline="", encoding="utf-8") as f:
         meta = branded_meta.get(fdc_id, {})
         brand = meta.get("brand", "")
 
+        # Case-insensitive: skip prepend when description already contains
+        # the brand (e.g. description "GREAT VALUE POTATO CHIPS").
         if brand and brand.lower() not in description.lower():
             search_name = f"{brand} {description}"
         else:
