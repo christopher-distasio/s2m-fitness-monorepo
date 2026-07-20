@@ -135,7 +135,12 @@ def _build_grounded_alternatives(parsed: dict, nutrition: dict) -> list[str]:
         if not name or name.lower() == chosen_name:
             continue
         alternatives.append(
-            _format_alt(name, candidate.get("brand"), candidate.get("calories"))
+            _format_alt(
+                name,
+                candidate.get("brand"),
+                candidate.get("calories"),
+                extra=candidate.get("serving_label"),
+            )
         )
         if len(alternatives) >= 3:
             break

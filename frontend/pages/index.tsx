@@ -333,10 +333,20 @@ function clarificationCandidates(parsed: ParsedResult): FoodCandidate[] {
 }
 
 function speakCandidate(c: FoodCandidate): string {
+  // Match the visual card: name + serving/measurement + calories so
+  // voice-only users get the same per-option information.
   const name = formatBrandedName(c.name, c.brand);
-  return c.calories != null
-    ? `${name}, ${Math.round(c.calories)} calories`
-    : name;
+  const parts = [name];
+  const serving = (c.serving_label || "").trim();
+  if (serving) parts.push(serving);
+  if (c.calories != null) parts.push(`${Math.round(c.calories)} calories`);
+  return parts.join(", ");
+}
+
+function speakPortion(foodName: string, p: PortionOption): string {
+  const parts = [foodName, (p.label || "").trim()].filter(Boolean);
+  if (p.calories != null) parts.push(`${Math.round(p.calories)} calories`);
+  return parts.join(", ");
 }
 
 /**
@@ -377,7 +387,7 @@ function allClarifyOptions(
     options.push({
       key: `p-${p.label}`,
       kind: "portion",
-      speech: `${p.label}, ${Math.round(p.calories)} calories`,
+      speech: speakPortion(foodName, p),
       title: p.label,
       calories: p.calories,
       pick: {
@@ -1852,7 +1862,11 @@ export default function Home() {
                               logResolved(pendingParse.uid, o.pick)
                             }
                             className="flex items-center gap-3 text-left px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                            aria-label={`${n}, Log ${o.title}, ${Math.round(o.calories)} calories`}
+                            aria-label={
+                              o.subtitle
+                                ? `${n}, Log ${o.title}, ${o.subtitle}, ${Math.round(o.calories)} calories`
+                                : `${n}, Log ${o.title}, ${Math.round(o.calories)} calories`
+                            }
                           >
                             <span
                               aria-hidden="true"
