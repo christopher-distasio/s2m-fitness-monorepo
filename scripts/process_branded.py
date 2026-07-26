@@ -1,23 +1,28 @@
 """
 Process USDA Branded Foods CSV into clean JSON for embedding.
 Filters: US market only, complete nutrition data, deduplicates by name.
-Output: branded_clean.json
+Output: data/processed/branded_clean.json
 
-Run from your scripts/ folder:
-    python3 process_branded.py
+Run from repo root:
+    poetry run python scripts/process_branded.py
 
-Expects the zip file at: ./FoodData_Central_branded_food_csv_2026-04-30.zip
-Or extracted files in: ./FoodData_Central_branded_food_csv_2026-04-30/
+Expects the zip at: data/raw/FoodData_Central_branded_food_csv_2026-04-30.zip
+Or extracted files in: data/raw/FoodData_Central_branded_food_csv_2026-04-30/
 """
 
 import csv
 import json
 import os
 import zipfile
+from pathlib import Path
 
-ZIP_PATH = "./FoodData_Central_branded_food_csv_2026-04-30.zip"
-EXTRACT_DIR = "./FoodData_Central_branded_food_csv_2026-04-30"
-OUTPUT_PATH = "./branded_clean.json"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_RAW = _REPO_ROOT / "data" / "raw"
+_PROCESSED = _REPO_ROOT / "data" / "processed"
+
+ZIP_PATH = str(_RAW / "FoodData_Central_branded_food_csv_2026-04-30.zip")
+EXTRACT_DIR = str(_RAW / "FoodData_Central_branded_food_csv_2026-04-30")
+OUTPUT_PATH = str(_PROCESSED / "branded_clean.json")
 
 NUTRIENT_IDS = {
     "1008": "calories",
@@ -68,7 +73,7 @@ def get_file(filename):
     print(f"Extracting {filename} from zip...")
     with zipfile.ZipFile(ZIP_PATH, "r") as z:
         target = f"FoodData_Central_branded_food_csv_2026-04-30/{filename}"
-        z.extract(target, ".")
+        z.extract(target, str(_RAW))
     return full_path
 
 # Step 1 - Load US-only food IDs + metadata from branded_food.csv

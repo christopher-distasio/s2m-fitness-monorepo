@@ -29,7 +29,9 @@ BATCH_SIZE = 100  # OpenAI embedding batch size
 UPSERT_BATCH_SIZE = 100  # Pinecone upsert batch size
 
 # Load clean food data
-DATA_PATH = os.path.join(os.path.dirname(__file__), "branded_clean_test.json")
+DATA_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "processed", "branded_clean_test.json"
+)
 with open(DATA_PATH, "r", encoding="utf-8") as f:
     foods = json.load(f)
 

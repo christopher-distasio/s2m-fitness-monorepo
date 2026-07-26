@@ -32,7 +32,9 @@ index = pc.Index(INDEX_NAME)
 # path if embed_foods.py lives somewhere else relative to this file.
 from embed_foods import NUTRIENT_FIELDS, TEXT_METADATA_FIELDS, truncate_text, build_metadata  # noqa: E402
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "branded_clean.json")
+DATA_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "processed", "branded_clean.json"
+)
 with open(DATA_PATH, "r", encoding="utf-8") as f:
     foods = json.load(f)
 

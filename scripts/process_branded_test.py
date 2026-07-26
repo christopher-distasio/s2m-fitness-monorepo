@@ -4,21 +4,26 @@ Run this before the full process_branded.py to sanity-check the schema
 (all 39 nutrient fields, all 17 metadata fields, serving_size_g conversion)
 on a manageable sample before committing write-units to the full ~460k run.
 
-Run from your scripts/ folder:
-    python3 process_branded_test.py
+Run from repo root:
+    poetry run python scripts/process_branded_test.py
 
-Expects the zip file at: ./FoodData_Central_branded_food_csv_2026-04-30.zip
-Or extracted files in: ./FoodData_Central_branded_food_csv_2026-04-30/
+Expects the zip at: data/raw/FoodData_Central_branded_food_csv_2026-04-30.zip
+Or extracted files in: data/raw/FoodData_Central_branded_food_csv_2026-04-30/
 """
 
 import csv
 import json
 import os
 import zipfile
+from pathlib import Path
 
-ZIP_PATH = "./FoodData_Central_branded_food_csv_2026-04-30.zip"
-EXTRACT_DIR = "./FoodData_Central_branded_food_csv_2026-04-30"
-OUTPUT_PATH = "./branded_clean_test.json"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_RAW = _REPO_ROOT / "data" / "raw"
+_PROCESSED = _REPO_ROOT / "data" / "processed"
+
+ZIP_PATH = str(_RAW / "FoodData_Central_branded_food_csv_2026-04-30.zip")
+EXTRACT_DIR = str(_RAW / "FoodData_Central_branded_food_csv_2026-04-30")
+OUTPUT_PATH = str(_PROCESSED / "branded_clean_test.json")
 ROW_LIMIT = 500
 
 NUTRIENT_IDS = {
@@ -70,7 +75,7 @@ def get_file(filename):
     print(f"Extracting {filename} from zip...")
     with zipfile.ZipFile(ZIP_PATH, "r") as z:
         target = f"FoodData_Central_branded_food_csv_2026-04-30/{filename}"
-        z.extract(target, ".")
+        z.extract(target, str(_RAW))
     return full_path
 
 # Step 1 - Load US-only food IDs + metadata from branded_food.csv

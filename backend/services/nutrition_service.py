@@ -40,7 +40,7 @@ RETRIEVAL_TOP_K = 25
 # source — not a mixed pile of brands, generics, and substitutes.
 SOURCE_GROUPS = {
     "generic": ["usda_sr_legacy", "usda_fndds"],
-    "brand": ["usda_branded_foods"],
+    "brand": ["usda_branded_foods", "usda_restaurant_brand"],
 }
 
 

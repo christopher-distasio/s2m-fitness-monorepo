@@ -4,16 +4,20 @@ Captures full nutrient panel (same field list as branded foods, verified
 against nutrient.csv) plus ALL portion/serving options per food (SR Legacy
 foods can have multiple named portions, unlike branded's single label serving).
 
-Run from your scripts/ folder (adjust EXTRACT_DIR to your actual folder name):
-    python3 process_sr_legacy.py
+Run from repo root:
+    poetry run python scripts/process_sr_legacy.py
 """
 
 import csv
 import json
 import os
+from pathlib import Path
 
-EXTRACT_DIR = "./FoodData_Central_sr_legacy_food_csv_2018-04"
-OUTPUT_PATH = "./sr_legacy_full_clean.json"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+EXTRACT_DIR = str(
+    _REPO_ROOT / "data" / "raw" / "FoodData_Central_sr_legacy_food_csv_2018-04"
+)
+OUTPUT_PATH = str(_REPO_ROOT / "data" / "processed" / "sr_legacy_full_clean.json")
 
 # Same nutrient IDs as process_branded.py — USDA nutrient IDs are universal
 # across all FDC datasets (confirmed via nutrient.csv), so this list is

@@ -364,9 +364,17 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/python,node,nextjs,visualstudiocode
 
 ### USDA FoodData Central source data (large, not for git) ###
+data/
+# Legacy locations under scripts/ (in case anything remains locally)
 scripts/*.zip
 scripts/FoodData_Central_*/
 scripts/branded_clean.json
 scripts/sr_legacy_clean.json
-
+scripts/sr_legacy_full_clean.json
 scripts/branded_clean_test.json
+
+### One-off scratch/diagnostic scripts (keep locally, don't commit) ###
+scripts/check_fndds_metadata.py
+scripts/check_test_batch.py
+scripts/diagnose_fndds_nutrients.py
+scripts/cleanup_old_fndds.py

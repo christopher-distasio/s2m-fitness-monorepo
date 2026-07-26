@@ -118,7 +118,9 @@ def main():
 
     # Data loading and client init happen here, not at module level, so
     # importing this file (e.g. from patch_missing.py) never triggers them.
-    data_path = os.path.join(os.path.dirname(__file__), "branded_clean.json")
+    data_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "processed", "branded_clean.json"
+    )
     with open(data_path, "r", encoding="utf-8") as f:
         foods = json.load(f)
     print(f"Loaded {len(foods)} foods")

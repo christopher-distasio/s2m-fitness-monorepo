@@ -1,5 +1,5 @@
 """
-Embed USDA SR Legacy foods (from sr_legacy_full_clean.json) into Pinecone.
+Embed USDA SR Legacy foods (from data/processed/sr_legacy_full_clean.json) into Pinecone.
 Uses the SAME food-index as branded foods — SR Legacy foods just carry a
 different, smaller set of metadata fields (no brand/ingredients data, but
 DO carry portions_json, which branded foods don't have).
@@ -69,7 +69,9 @@ def build_metadata(food: dict) -> dict:
 
 
 def main():
-    data_path = os.path.join(os.path.dirname(__file__), "sr_legacy_full_clean.json")
+    data_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "processed", "sr_legacy_full_clean.json"
+    )
     with open(data_path, "r", encoding="utf-8") as f:
         foods = json.load(f)
     print(f"Loaded {len(foods)} SR Legacy foods")
