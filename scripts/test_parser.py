@@ -14,9 +14,8 @@ from backend.services.food_parser import parse_food_input  # adjust import if fu
 import asyncio
 
 test_cases = [
-    ("cheeseburger", None),
-    ("cheeseburger", "generic"),
-    ("cheeseburger", "brand"),
+    ("chicken thigh", "generic"),
+    ("boneless skinless chicken thigh", "generic"),
 ]
 
 
