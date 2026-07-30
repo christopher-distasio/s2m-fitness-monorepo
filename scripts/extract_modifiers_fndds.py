@@ -240,6 +240,7 @@ ALL_MAPPINGS = {
 
 EXCLUSIONS = {
     "hot": ["hot dog"],
+    "skin eaten": ["ns as to skin eaten"],  # "NS" = unspecified, not confirmed skin-on
 }
 
 
