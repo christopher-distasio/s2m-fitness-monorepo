@@ -52,9 +52,6 @@ TEST_LIMIT = 50
 
 NONE_VALUE = "NONE"  # sentinel for "no modifier matched in this category"
 
-pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-index = pc.Index("food-index")
-
 # ============================================================================
 # MODIFIER MAPPINGS (USDA term -> Canonical value)
 # ============================================================================
@@ -286,6 +283,9 @@ def extract_modifiers(description):
 
 
 def main():
+    pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+    index = pc.Index("food-index")
+
     survey_map = pd.read_csv(f"{FNDDS_DIR}/survey_fndds_food.csv")
     food_desc = pd.read_csv(f"{FNDDS_DIR}/food.csv")[["fdc_id", "description"]]
     foods = survey_map.merge(food_desc, on="fdc_id", how="left")

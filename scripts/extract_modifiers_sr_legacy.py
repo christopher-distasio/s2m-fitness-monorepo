@@ -58,9 +58,6 @@ ID_PREFIX = "sr_"
 
 NONE_VALUE = "NONE"
 
-pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-index = pc.Index("food-index")
-
 COOKING_METHOD_MAP = {
     "raw": "COOKING_RAW",
     "unheated": "COOKING_RAW",
@@ -286,6 +283,9 @@ def extract_modifiers(description):
 
 
 def main():
+    pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+    index = pc.Index("food-index")
+
     food_desc = pd.read_csv(f"{SR_LEGACY_DIR}/food.csv")[["fdc_id", "description"]]
 
     records = food_desc.to_dict("records")[RESUME_OFFSET:]
