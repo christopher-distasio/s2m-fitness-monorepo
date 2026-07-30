@@ -215,8 +215,11 @@ SOURCE_MAP = {
 }
 
 TEMP_MAP = {
-    "hot": "TEMP_HOT",
     "iced": "TEMP_COLD",
+    "hot chocolate": "TEMP_HOT",
+    "hot cocoa": "TEMP_HOT",
+    "tea, hot": "TEMP_HOT",
+    "hot buttered": "TEMP_HOT",
 }
 
 ALL_MAPPINGS = {
@@ -236,10 +239,9 @@ ALL_MAPPINGS = {
 }
 
 EXCLUSIONS = {
-    "hot": ["hot dog"],
+    "iced": ["cream filled"],
     "skin eaten": ["ns as to skin eaten"],  # "NS" = unspecified, not confirmed skin-on
 }
-
 
 def word_match(term, text):
     """
