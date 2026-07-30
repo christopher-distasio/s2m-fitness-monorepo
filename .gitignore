@@ -378,3 +378,9 @@ scripts/check_fndds_metadata.py
 scripts/check_test_batch.py
 scripts/diagnose_fndds_nutrients.py
 scripts/cleanup_old_fndds.py
+scripts/analyze_ns_patterns.py
+scripts/analyze_sr_legacy_ambiguity.py
+scripts/analyze_fndds_ambiguity.py
+scripts/manual_ns_check.py
+scripts/full_iced_hot_check.py
+scripts/full_fndds_hot_iced_check.py
