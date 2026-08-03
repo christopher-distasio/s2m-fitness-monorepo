@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"  # REST API
+      - "6334:6334"  # gRPC API
+    environment:
+      # Qdrant config
+      QDRANT_API_KEY: "your-secure-api-key-here"  # Change this to something random
+      # Allocate resources for M5
+      RUST_LOG: "info"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    # Resource limits for M5 MacBook with 16GB RAM
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:
+    driver: local
