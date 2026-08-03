@@ -373,6 +373,9 @@ scripts/sr_legacy_clean.json
 scripts/sr_legacy_full_clean.json
 scripts/branded_clean_test.json
 
+### Large diagnostic dumps (keep locally, don't commit) ###
+diagnostic/pinecone_export.json
+
 ### One-off scratch/diagnostic scripts (keep locally, don't commit) ###
 scripts/check_fndds_metadata.py
 scripts/check_test_batch.py
