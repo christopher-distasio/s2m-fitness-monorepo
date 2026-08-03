@@ -4,6 +4,7 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from backend.services.nutrition_service import format_branded_name, lookup_food
 from backend.services.query_match_rank import is_zero_calorie_query
+from backend.services.parse_query_modifiers import parse_query_modifiers
 
 load_dotenv()
 
@@ -205,6 +206,17 @@ async def parse_food_input(
 
     parsed = _apply_confidence_guards(parsed, raw_input)
 
+    # ===== NEW: Extract modifiers from the user's raw input =====
+    # This is independent of GPT's parsing — it uses word-boundary matching
+    # on the same 13 categories as the database-side extractor uses.
+    modifiers = parse_query_modifiers(raw_input)
+    parsed["modifiers"] = modifiers
+    
+    # Log extracted modifiers for debugging
+    non_none_mods = {k: v for k, v in modifiers.items() if v != "NONE"}
+    if non_none_mods:
+        print(f"Extracted modifiers: {non_none_mods}")
+
     # Did the user explicitly name a brand? If so, we skip the brand-vs-generic
     # question entirely and go straight to branded results — the answer's known.
     stated_brand = (parsed.get("brand") or "").strip()
@@ -214,8 +226,9 @@ async def parse_food_input(
 
     # Step 2 — Current food data source looks up accurate nutrition data
     food_query = parsed['food']    
-    print("calling lookup_food with:", food_query, "| source:", effective_source)
-    nutrition = await lookup_food(food_query, source_filter=effective_source)
+    print("calling lookup_food with:", food_query, "| source:", effective_source, "| modifiers:", non_none_mods)
+    # ===== NEW: Pass modifiers to lookup_food =====
+    nutrition = await lookup_food(food_query, source_filter=effective_source, modifiers=modifiers)
 
     if nutrition:
         # Use Current food data source data

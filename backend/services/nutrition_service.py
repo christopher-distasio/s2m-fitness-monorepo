@@ -48,6 +48,50 @@ def _source_pinecone_filter(source_filter: str | None) -> dict | None:
     sources = SOURCE_GROUPS.get((source_filter or "").lower())
     return {"source": {"$in": sources}} if sources else None
 
+
+NONE_MODIFIER = "NONE"
+
+
+def _modifiers_pinecone_filter(modifiers: dict | None) -> dict | None:
+    """Build a Pinecone metadata filter from extracted modifiers.
+
+    Only non-NONE values become hard filters (e.g. skin_status=SKIN_OFF).
+    Returns None when nothing usable was provided, so retrieval is unrestricted.
+    """
+    if not modifiers:
+        return None
+    clauses = [
+        {category: {"$eq": value}}
+        for category, value in modifiers.items()
+        if value and value != NONE_MODIFIER
+    ]
+    if not clauses:
+        return None
+    if len(clauses) == 1:
+        return clauses[0]
+    return {"$and": clauses}
+
+
+def _combine_pinecone_filters(*filters: dict | None) -> dict | None:
+    """Merge independent Pinecone filter dicts with $and when needed.
+
+    Flattens nested `$and` lists so combining a multi-modifier clause with a
+    source clause yields a single flat `$and`, not `$and` of `$and`.
+    """
+    parts: list[dict] = []
+    for f in filters:
+        if not f:
+            continue
+        if set(f.keys()) == {"$and"} and isinstance(f["$and"], list):
+            parts.extend(f["$and"])
+        else:
+            parts.append(f)
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return {"$and": parts}
+
 # --- Resolver tuning -------------------------------------------------------
 # A food is "resolved" when its plausible interpretations agree on calories
 # closely enough that asking the user wouldn't change the logged number.
@@ -478,10 +522,20 @@ async def _retrieve_best(
     return best_matches, best_variant
 
 
-async def lookup_food(query: str, source_filter: str | None = None) -> dict | None:
+async def lookup_food(
+    query: str,
+    source_filter: str | None = None,
+    modifiers: dict | None = None,
+) -> dict | None:
     print("RAG query:", query, "| source_filter:", source_filter)
 
-    pinecone_filter = _source_pinecone_filter(source_filter)
+    source_clause = _source_pinecone_filter(source_filter)
+    modifier_clause = _modifiers_pinecone_filter(modifiers)
+    pinecone_filter = _combine_pinecone_filters(source_clause, modifier_clause)
+    print("RAG modifier filter:", modifier_clause)
+    print("RAG pinecone filter:", pinecone_filter)
+
+    # Embed → then Pinecone query with metadata filter (see _retrieve_best).
     matches, winning_variant = await _retrieve_best(query, pinecone_filter)
     if not matches:
         return None
