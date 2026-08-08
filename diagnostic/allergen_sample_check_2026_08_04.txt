@@ -1,0 +1,117 @@
+Loading sample of 500 records from data/raw/FoodData_Central_branded_food_csv_2026-04-30/branded_food.csv...
+
+================================================================================
+SAMPLE SUMMARY (n=500)
+================================================================================
+
+Records with at least one non-UNKNOWN allergen state: 275 (55.0%)
+
+Breakdown by allergen:state:
+  milk:CONTAINS: 158
+  soy:CONTAINS: 127
+  wheat:CONTAINS: 103
+  egg:CONTAINS: 46
+  peanut:CONTAINS: 25
+  sesame:CONTAINS: 21
+  fish:CONTAINS: 11
+  fish:FREE: 10
+  shellfish:FREE: 10
+  tree_nut:FREE: 10
+  peanut:FREE: 10
+  egg:FREE: 9
+  sesame:FREE: 9
+  tree_nut:CONTAINS: 8
+  wheat:FREE: 6
+  shellfish:CONTAINS: 6
+  milk:FREE: 5
+  soy:FREE: 4
+
+================================================================================
+SAMPLE RECORDS WITH SIGNAL (first 20)
+================================================================================
+
+fdc_id: 1572138
+  Ingredients: CHICKEN STOCK, CHICKEN MEAT (COOKED CHICKEN MEAT, WATER, MODIFIED CORN STARCH, S...
+  States: {'wheat': 'CONTAINS'}
+
+fdc_id: 440785
+  Ingredients: PASTEURIZED PART-SKIM MILK, CHEESE CULTURE, SALT, ENZYMES, POTATO STARCH, CORNST...
+  States: {'milk': 'CONTAINS'}
+
+fdc_id: 428440
+  Ingredients: RAISINS, PEANUTS, SUNFLOWER KERNELS, CASHEWS, ALMONDS, PUMPKIN KERNELS, COTTONSE...
+  States: {'peanut': 'CONTAINS'}
+
+fdc_id: 555476
+  Ingredients: WATER, PREMIER PROTEIN SMOOTHIE PROTEIN BLEND (CALCIUM FORTIFIED SOY PROTEIN ISO...
+  States: {'milk': 'CONTAINS', 'soy': 'CONTAINS'}
+
+fdc_id: 2233601
+  Ingredients: WATER, CANOLA AND SOYBEAN OIL, WHITE WINE VINEGAR, SUGAR,  PARMESAN CHEESE (PART...
+  States: {'milk': 'CONTAINS', 'egg': 'CONTAINS', 'fish': 'CONTAINS', 'soy': 'CONTAINS'}
+
+fdc_id: 2545188
+  Ingredients: WHITE RICE, TUNA (SASHIMI GRADE), SALMON, FISH, TILAPIA, RAW, AVOCADO, MAYONNAIS...
+  States: {'egg': 'CONTAINS', 'fish': 'CONTAINS', 'wheat': 'CONTAINS', 'soy': 'CONTAINS', 'sesame': 'CONTAINS'}
+
+fdc_id: 415249
+  Ingredients: WHITE CHOCOLATE [SUGAR, COCOA BUTTER, MILK, SKIM MILK, SOYA LECITHIN (EMULSIFIER...
+  States: {'milk': 'CONTAINS'}
+
+fdc_id: 1980190
+  Ingredients: UNBLEACHED FLOUR (WHEAT FLOUR, MALTED BARLEY FLOUR), CHEDDAR & ASIAGO CHEESES (M...
+  States: {'milk': 'CONTAINS', 'wheat': 'CONTAINS'}
+
+fdc_id: 427371
+  Ingredients: SESAME SEEDS, SUNFLOWER SEEDS, SUGAR, CORN SYRUP, WATER, ALMONDS, CASHEWS, HONEY...
+  States: {'sesame': 'CONTAINS'}
+
+fdc_id: 2562077
+  Ingredients: RASPBERRY JELLY (SUGAR, WATER, APPLE CONCENTRATE, BOYSENBERRY PUREE, RED RASPBER...
+  States: {'milk': 'CONTAINS', 'egg': 'CONTAINS', 'wheat': 'CONTAINS', 'soy': 'CONTAINS'}
+
+fdc_id: 1637159
+  Ingredients: POTATOES, SUNFLOWER AND/OR CANOLA OIL, SALT, SUGAR, WHEY, CONTAINS 2% OR LESS OF...
+  States: {'milk': 'CONTAINS'}
+
+fdc_id: 1473243
+  Ingredients: PASTA INGREDIENTS: ORGANIC WHEAT FLOUR, WATER, ORGANIC EGGS, ORGANIC PARSLEY, OR...
+  States: {'milk': 'CONTAINS', 'egg': 'CONTAINS', 'wheat': 'CONTAINS'}
+
+fdc_id: 542721
+  Ingredients: CREAM, SKIM MILK, CANE SUGAR, PINEAPPLE, EGG YOLKS, NATURAL FLAVOR (CONTAINS COC...
+  States: {'milk': 'CONTAINS'}
+
+fdc_id: 472032
+  Ingredients: SUGAR, ENRICHED WHEAT FLOUR (WHEAT FLOUR, NIACIN, REDUCED IRON, THIAMINE MONONIT...
+  States: {'wheat': 'CONTAINS', 'soy': 'CONTAINS'}
+
+fdc_id: 2446010
+  Ingredients: COFFEE (FILTERED WATER, COFFEE), REDUCED FAT MILK, CANE SUGAR, CONTAINS 2% OR LE...
+  States: {'milk': 'CONTAINS'}
+
+fdc_id: 738962
+  Ingredients: THYME, SESAME SEEDS, SUMAC, MARJORAM, CINNAMON, STAR ANISE POWDER, CORIANDER, CU...
+  States: {'sesame': 'CONTAINS'}
+
+fdc_id: 754778
+  Ingredients: POULTRY INGREDIENTS (TURKEY, MECHANICALLY SEPARATED TURKEY), WATER, SOY PROTEIN ...
+  States: {'milk': 'FREE', 'egg': 'FREE', 'fish': 'FREE', 'shellfish': 'FREE', 'tree_nut': 'FREE', 'peanut': 'FREE', 'wheat': 'FREE', 'soy': 'CONTAINS', 'sesame': 'FREE'}
+
+fdc_id: 1423977
+  Ingredients: CORN MEAL, CORN OIL, SUGAR, BUTTER (CREAM, SALT), SEA SALT, NONFAT DRY MILK, BUT...
+  States: {'milk': 'CONTAINS'}
+
+fdc_id: 1508090
+  Ingredients: SOYBEAN OIL, WATER, DISTILLED VINEGAR, BLUE CHEESE FROM WISCONSIN USA ([CULTURED...
+  States: {'milk': 'CONTAINS', 'egg': 'CONTAINS', 'soy': 'CONTAINS'}
+
+fdc_id: 2374467
+  Ingredients: POTATOES, VEGETABLE OIL (CONTAINS ONE OR MORE OF THE FOLLOWING: CANOLA, CORN, CO...
+  States: {'soy': 'CONTAINS'}
+
+================================================================================
+FLAGGED FOR MANUAL REVIEW (allergen fired, but no known term found anywhere in full text)
+================================================================================
+
+  None. Every CONTAINS match traces to an actual term in the full ingredient text.

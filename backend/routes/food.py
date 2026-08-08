@@ -25,9 +25,6 @@ class FoodLogRequest(BaseModel):
     user_id: str
     raw_input: str
     food_name: Optional[str] = None
-    # When the user picks a grounded alternative/portion, the frontend sends
-    # the already-resolved nutrition so we log it exactly as shown — no
-    # re-parse, no re-lookup, no drift from what they saw and chose.
     resolved: bool = False
     calories: Optional[float] = None
     protein: Optional[float] = None
@@ -50,9 +47,16 @@ class CorrectionRequest(BaseModel):
 class ParseRequest(BaseModel):
     raw_input: str
     conversation_history: list[dict] = []
-    # "generic" | "brand" — set when re-querying after the user answers the
-    # brand-vs-generic question, so retrieval is restricted to that source.
     source_filter: Optional[str] = None
+    # NEW (2026-08-04): needed so parse_food_input can fetch the user's
+    # dietary preferences (allergens, vegan/kosher/etc, organic/keto/etc) and
+    # apply them to the Qdrant search. Optional so this endpoint still works
+    # (unrestricted search) if the frontend doesn't send it — but the
+    # frontend's /food/parse calls (submitText, resolveWithSource) do NOT
+    # currently send user_id at all, so dietary filtering is a no-op on the
+    # text path until that's also updated. Voice logging already sends
+    # user_id separately as Form data, so /food/voice is unaffected.
+    user_id: Optional[str] = None
 
 
 class TTSRequest(BaseModel):
@@ -109,14 +113,13 @@ async def parse_food(request: ParseRequest):
         request.raw_input,
         request.conversation_history,
         source_filter=request.source_filter,
+        user_id=request.user_id,  # NEW (2026-08-04)
     )
     return parsed
 
 
 @router.post("/food")
 async def log_food(request: FoodLogRequest):
-    # Grounded pick path: log exactly what the user selected, skipping the
-    # parser/lookup entirely so the stored values match the shown values.
     if request.resolved:
         food_log = FoodLog(
             user_id=request.user_id,
@@ -143,11 +146,21 @@ async def log_food(request: FoodLogRequest):
             },
         }
 
-    parsed = await parse_food_input(request.raw_input)
+    parsed = await parse_food_input(request.raw_input, user_id=request.user_id)  # NEW: user_id
 
     if "error" in parsed:
         raise HTTPException(
             status_code=422, detail=f"Could not parse food input: {parsed}"
+        )
+
+    # NEW (2026-08-04): a severe allergen constraint produced zero safe
+    # results. This is not a food log — refuse rather than insert a
+    # calories=None record that would look like a logging bug, not a
+    # deliberate safety refusal.
+    if parsed.get("confidence") == "blocked":
+        raise HTTPException(
+            status_code=403,
+            detail=parsed.get("reasoning") or "Blocked by dietary safety filter",
         )
 
     food_log = build_food_log(
@@ -177,17 +190,12 @@ async def log_food_voice(
 
     history = json.loads(conversation_history)
 
-    # "Stop" ends the voice session at any time — before more-time / clarify /
-    # food parsing so it always wins.
     if parse_stop_command(raw_input):
         return {
             "transcription": raw_input,
             "clarification": {"type": "stop"},
         }
 
-    # Only when the frontend just asked "Do you need more time?" — yes keeps
-    # listening, no stops. Not checked on ordinary clarification replies so a
-    # bare "yes"/"no" can't steal a real food answer.
     if awaiting_more_time.strip().lower() in ("true", "1", "yes"):
         timeout = parse_timeout_choice(raw_input)
         if timeout:
@@ -196,11 +204,6 @@ async def log_food_voice(
                 "clarification": {"type": timeout},
             }
 
-    # If we're mid-clarification, the utterance is a command about the question
-    # we just asked — NOT a new food. Catch it before the parser can combine it
-    # with the previous food and silently auto-log. We only classify here; the
-    # frontend acts on it (resolve a number, re-query with a source filter, etc).
-    # Frontend flag backs up history when barge-in races a stale/empty history.
     state = clarification_state(history)
     flag = clarify_flag
     if state is None:
@@ -215,7 +218,6 @@ async def log_food_voice(
                 "transcription": raw_input,
                 "clarification": {"type": "brand_choice", "value": choice},
             }
-        # Do NOT fall through to food parse — that re-asks the same prompt.
         return {
             "transcription": raw_input,
             "clarification": {"type": "unrecognized"},
@@ -224,7 +226,6 @@ async def log_food_voice(
         command = parse_clarification_command(raw_input)
         if command:
             return {"transcription": raw_input, "clarification": command}
-        # Same: a missed "one" must not re-run the food parser and loop the list.
         return {
             "transcription": raw_input,
             "clarification": {"type": "unrecognized"},
@@ -244,8 +245,6 @@ async def log_food_voice(
         return {"message": "No entries to delete", "transcription": raw_input}
 
     if intent["intent"] == "calories_today":
-        from datetime import datetime, timezone
-
         now = datetime.now(timezone.utc)
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         logs = await FoodLog.find(
@@ -258,8 +257,6 @@ async def log_food_voice(
         }
 
     if intent["intent"] == "read_today":
-        from datetime import datetime, timezone
-
         now = datetime.now(timezone.utc)
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         logs = await FoodLog.find(
@@ -269,7 +266,7 @@ async def log_food_voice(
         return {"message": f"Today you ate: {names}", "transcription": raw_input}
 
     # default — treat as food log
-    parsed = await parse_food_input(raw_input, history)
+    parsed = await parse_food_input(raw_input, history, user_id=user_id)  # NEW: user_id
     if "error" in parsed:
         return {
             "error": parsed.get("error", "unparseable"),
@@ -277,6 +274,10 @@ async def log_food_voice(
             "transcription": raw_input,
         }
 
+    # NOTE: "blocked" already falls through here correctly, since it's not
+    # "high" — the frontend receives parsed.reasoning (the safety message)
+    # via the normal clarification-style response and speaks it. No extra
+    # branch needed on the voice path, unlike POST /food above.
     if parsed.get("confidence") != "high":
         return {"transcription": raw_input, "parsed": parsed}
 
@@ -295,11 +296,9 @@ async def text_to_speech(request: TTSRequest):
 async def get_today_food(user_id: str):
     now = datetime.now(timezone.utc)
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
     logs = await FoodLog.find(
         FoodLog.user_id == user_id, FoodLog.logged_at >= start_of_day
     ).to_list()
-
     return logs
 
 
@@ -307,11 +306,9 @@ async def get_today_food(user_id: str):
 async def get_daily_summary(user_id: str):
     now = datetime.now(timezone.utc)
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
     logs = await FoodLog.find(
         FoodLog.user_id == user_id, FoodLog.logged_at >= start_of_day
     ).to_list()
-
     return {
         "calories": sum(log.calories or 0 for log in logs),
         "protein": sum(log.protein or 0 for log in logs),
@@ -348,11 +345,17 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     if not food_log:
         raise HTTPException(status_code=404, detail="Food log not found")
 
-    parsed = await parse_food_input(request.raw_input)
+    parsed = await parse_food_input(request.raw_input, user_id=request.user_id)  # NEW: user_id
     if "error" in parsed:
         raise HTTPException(
             status_code=422, detail=f"Could not parse food input: {parsed}"
         )
+
+    # NOTE (2026-08-04): unlike POST /food, this PATCH path does not yet
+    # explicitly refuse a "blocked" result — editing an existing log into
+    # something that trips the user's allergy filter is a rare edge case,
+    # and the right product behavior (reject the edit? save with a warning?)
+    # wasn't obvious from this file alone. Flagging as an open gap.
 
     food_changed = food_log.food_name.lower() != parsed["food"].lower()
     quantity_changed = food_log.quantity != parsed.get("serving_size")
@@ -396,7 +399,6 @@ async def get_weekly_summary(user_id: str):
     start_of_week = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
         days=6
     )
-
     logs = await FoodLog.find(
         FoodLog.user_id == user_id, FoodLog.logged_at >= start_of_week
     ).to_list()
