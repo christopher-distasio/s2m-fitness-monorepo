@@ -3,21 +3,27 @@ import os
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from pinecone import Pinecone
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qmodels
 
 from backend.services.query_match_rank import (
     effective_calories_per_100g,
     is_zero_calorie_query,
     rerank_matches_by_query,
 )
-# import httpx  # kept for potential future use — see commented fallback block below
+from backend.services.dietary_filters import (
+    build_tier_1_filter,
+    has_active_allergen_constraint,
+    relax_non_allergen_constraints,
+    apply_tier_2_boosts,
+)
+from backend.models import DietaryPreferences
 
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY").strip()
-USDA_API_KEY = os.getenv("USDA_API_KEY")  # unused now, kept for the commented fallback below
-INDEX_NAME = "food-index"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+COLLECTION_NAME = "food-vectors"
 EMBEDDING_MODEL = "text-embedding-3-large"
 SCORE_THRESHOLD = 0.3
 # Alternatives can be slightly weaker matches than the primary result — we
@@ -34,63 +40,85 @@ RETRIEVAL_TOP_K = 25
 
 # Brand-vs-generic disambiguation. When the user tells us whether they want a
 # specific brand or a general item, we restrict retrieval to the matching
-# `source` values stored at embed time. "generic" spans SR Legacy and (once
-# embedded) FNDDS; "brand" is the branded-foods dataset. Applied as a Pinecone
-# metadata filter so the candidate/portion list is built from a single, clean
-# source — not a mixed pile of brands, generics, and substitutes.
+# `source` values stored at embed time.
+#
+# NOTE (2026-08-04): these values were updated to match what the Qdrant
+# embedding script (embed_all_to_qdrant.py) actually wrote to the `source`
+# payload field -- "sr_legacy" / "fndds" / "branded_foods", not the
+# "usda_"-prefixed names the old Pinecone-era code used. Worth a live
+# spot-check against real payload data (e.g. via lookup_single_fdc_id.py)
+# before trusting this in production -- this is reconstructed from memory
+# of the embedding script, not verified against a live query here.
 SOURCE_GROUPS = {
-    "generic": ["usda_sr_legacy", "usda_fndds"],
-    "brand": ["usda_branded_foods", "usda_restaurant_brand"],
+    "generic": ["sr_legacy", "fndds"],
+    "brand": ["branded_foods"],
 }
-
-
-def _source_pinecone_filter(source_filter: str | None) -> dict | None:
-    sources = SOURCE_GROUPS.get((source_filter or "").lower())
-    return {"source": {"$in": sources}} if sources else None
-
 
 NONE_MODIFIER = "NONE"
 
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+qdrant_client = QdrantClient(url=QDRANT_URL, timeout=30)
 
-def _modifiers_pinecone_filter(modifiers: dict | None) -> dict | None:
-    """Build a Pinecone metadata filter from extracted modifiers.
 
-    Only non-NONE values become hard filters (e.g. skin_status=SKIN_OFF).
-    Returns None when nothing usable was provided, so retrieval is unrestricted.
-    """
-    if not modifiers:
+# ============================================================================
+# QDRANT FILTER BUILDERS
+# (replaces the old _source_pinecone_filter / _modifiers_pinecone_filter /
+#  _combine_pinecone_filters — same job, native Qdrant syntax instead of the
+#  Pinecone/MongoDB-style $and/$in dicts, which are invalid against Qdrant)
+# ============================================================================
+
+def _source_qdrant_condition(source_filter: str | None) -> qmodels.FieldCondition | None:
+    sources = SOURCE_GROUPS.get((source_filter or "").lower())
+    if not sources:
         return None
-    clauses = [
-        {category: {"$eq": value}}
+    return qmodels.FieldCondition(key="source", match=qmodels.MatchAny(any=sources))
+
+
+def _modifiers_qdrant_conditions(modifiers: dict | None) -> list[qmodels.FieldCondition]:
+    """Build Qdrant FieldConditions from the 13 extracted query modifiers
+    (cooking_method, skin_status, sodium_level, etc). Only non-NONE values
+    become hard filters."""
+    if not modifiers:
+        return []
+    return [
+        qmodels.FieldCondition(key=category, match=qmodels.MatchValue(value=value))
         for category, value in modifiers.items()
         if value and value != NONE_MODIFIER
     ]
-    if not clauses:
-        return None
-    if len(clauses) == 1:
-        return clauses[0]
-    return {"$and": clauses}
 
 
-def _combine_pinecone_filters(*filters: dict | None) -> dict | None:
-    """Merge independent Pinecone filter dicts with $and when needed.
-
-    Flattens nested `$and` lists so combining a multi-modifier clause with a
-    source clause yields a single flat `$and`, not `$and` of `$and`.
+def _combine_filters(
+    source_condition: qmodels.FieldCondition | None,
+    modifier_conditions: list[qmodels.FieldCondition],
+    tier_1_filter: qmodels.Filter | None,
+) -> qmodels.Filter | None:
     """
-    parts: list[dict] = []
-    for f in filters:
-        if not f:
-            continue
-        if set(f.keys()) == {"$and"} and isinstance(f["$and"], list):
-            parts.extend(f["$and"])
-        else:
-            parts.append(f)
-    if not parts:
+    Merge source + modifier conditions (both simple `must` clauses) with the
+    Tier 1 dietary filter (which may carry its own must_not clauses for
+    allergen exclusion). Qdrant filters combine by merging must/must_not
+    lists, not by nesting Filter objects inside each other.
+    """
+    must: list = []
+    must_not: list = []
+
+    if source_condition:
+        must.append(source_condition)
+    must.extend(modifier_conditions)
+
+    if tier_1_filter:
+        if tier_1_filter.must:
+            must.extend(tier_1_filter.must)
+        if tier_1_filter.must_not:
+            must_not.extend(tier_1_filter.must_not)
+
+    if not must and not must_not:
         return None
-    if len(parts) == 1:
-        return parts[0]
-    return {"$and": parts}
+
+    return qmodels.Filter(
+        must=must if must else None,
+        must_not=must_not if must_not else None,
+    )
+
 
 # --- Resolver tuning -------------------------------------------------------
 # A food is "resolved" when its plausible interpretations agree on calories
@@ -100,10 +128,6 @@ def _combine_pinecone_filters(*filters: dict | None) -> dict | None:
 CALORIE_CONVERGENCE_RATIO = 0.20   # 20% spread between cheapest and priciest
 CALORIE_CONVERGENCE_ABS = 20       # ...but never bother over gaps under 20 cal
 RESOLVER_SAMPLE_SIZE = 4           # how many top candidate foods to weigh
-
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(INDEX_NAME)
 
 # Phrases that indicate a food's serving size = the whole container, not a
 # single portion (e.g. "PER CAN"). Affects ~0.6% of branded foods — rare, but
@@ -187,7 +211,7 @@ def get_serving_size_g(metadata: dict) -> tuple[float, str]:
 
 
 def scale_nutrients(metadata: dict, serving_size_g: float) -> dict:
-    """Pinecone stores nutrient values per 100g. Scale them to the given
+    """Qdrant stores nutrient values per 100g. Scale them to the given
     serving size in grams. Central helper so the primary result, the
     candidate list, and each portion option all compute calories the exact
     same way.
@@ -237,7 +261,7 @@ def get_brand(metadata: dict) -> str:
 def format_branded_name(name: str | None, brand: str | None) -> str:
     """Join brand + name for display/speech without duplicating brand.
 
-    Pinecone branded `name` often already starts with brand_name (e.g.
+    Branded `name` often already starts with brand_name (e.g.
     'GREAT VALUE POTATO CHIPS'). Callers that also have a separate `brand`
     field must not prepend again — that produces 'Great Value Great Value…'.
     Comparison is case-insensitive substring, matching process_branded.py.
@@ -326,9 +350,9 @@ def build_portion_options(metadata: dict) -> list[dict]:
 
 
 def summarize_match(match: dict) -> dict:
-    """Turn a raw Pinecone match into a grounded, loggable candidate: real
-    name, brand, serving label, and calories/macros scaled to its default
-    serving. This is what powers data-driven 'Did you mean?' alternatives."""
+    """Turn a raw match into a grounded, loggable candidate: real name,
+    brand, serving label, and calories/macros scaled to its default serving.
+    This is what powers data-driven 'Did you mean?' alternatives."""
     metadata = match.get("metadata", {})
     serving_size_g, serving_source = get_serving_size_g(metadata)
     macros = scale_nutrients(metadata, serving_size_g)
@@ -386,14 +410,12 @@ def assess_resolution(
 
     It compares only calories (the number the user actually logs) and stops as
     soon as the remaining spread wouldn't change that number. Fully
-    deterministic — no extra model call. (A future optional LLM step could
-    *name* the diverging axis more naturally; that would slot in right here.)
+    deterministic — no extra model call.
     """
     sample = candidates[:RESOLVER_SAMPLE_SIZE]
     identity = _calorie_spread([c.get("calories") for c in sample])
     amount = _calorie_spread([p.get("calories") for p in portion_options])
 
-    # If both axes diverge, ask about the bigger calorie swing first.
     identity_gap = identity["max"] - identity["min"]
     amount_gap = amount["max"] - amount["min"]
 
@@ -468,9 +490,7 @@ def _singularize(word: str) -> str:
 def _number_variants(query: str) -> list[str]:
     """Original query plus its grammatical-number toggle, applied to the head
     noun (the LAST word, e.g. 'chicken breast' -> 'chicken breasts'). Returns
-    [original] or [original, toggled]. We verified embedding similarity is
-    sensitive to singular/plural — 'bananas' matches the SR name 'Bananas,
-    raw' better than 'banana' does — so we try both and keep the better."""
+    [original] or [original, toggled]."""
     query = query.strip()
     if not query:
         return [query]
@@ -485,15 +505,37 @@ def _number_variants(query: str) -> list[str]:
     return [query]
 
 
+def _qdrant_results_to_matches(results) -> list[dict]:
+    """
+    Convert Qdrant ScoredPoint objects into the {id, score, metadata} dict
+    shape the rest of this file already expects. This is the ONE place that
+    bridges Qdrant's object-attribute API to the existing dict-based logic,
+    so summarize_match / assess_resolution / etc. needed zero changes.
+
+    Uses payload["qdrant_id"] (the original fdc_id, stored at embed time) as
+    "id" — NOT Qdrant's internal point id, which is meaningless outside Qdrant.
+    """
+    matches = []
+    for point in results:
+        payload = point.payload or {}
+        matches.append({
+            "id": payload.get("qdrant_id"),
+            "score": point.score,
+            "metadata": payload,
+        })
+    return matches
+
+
 async def _retrieve_best(
-    query: str, pinecone_filter: dict | None = None
-) -> tuple[list, str]:
+    query: str, qdrant_filter: qmodels.Filter | None = None
+) -> tuple[list[dict], str]:
     """Try the query and its number variant, and keep whichever one's TOP
     match scores highest. Both variants are embedded in a SINGLE batched
-    OpenAI call (input accepts a list), so this adds Pinecone queries but not
+    OpenAI call (input accepts a list), so this adds Qdrant queries but not
     extra embedding round-trips. Taking the max score means a bad variant can
-    only be ignored, never degrade the result. `pinecone_filter` (optional)
-    restricts results by metadata, e.g. brand-vs-generic source."""
+    only be ignored, never degrade the result. `qdrant_filter` (optional)
+    restricts results by payload, e.g. brand-vs-generic source, dietary
+    constraints."""
     variants = _number_variants(query)
 
     embedding_response = await openai_client.embeddings.create(
@@ -502,18 +544,24 @@ async def _retrieve_best(
     )
     vectors = [item.embedding for item in embedding_response.data]
 
-    best_matches: list = []
+    best_matches: list[dict] = []
     best_score = -1.0
     best_variant = query
     for variant, vector in zip(variants, vectors):
-        results = index.query(
-            vector=vector,
-            top_k=RETRIEVAL_TOP_K,
-            include_metadata=True,
-            filter=pinecone_filter,
+        # NOTE (2026-08-05): qdrant_client.search() was renamed to
+        # query_points() in this client version -- .search() doesn't exist
+        # at all here, confirmed against a real AttributeError during the
+        # first live end-to-end test. query_points() returns a QueryResponse
+        # object with a .points attribute (not a bare list like .search() did).
+        response = qdrant_client.query_points(
+            collection_name=COLLECTION_NAME,
+            query=vector,
+            limit=RETRIEVAL_TOP_K,
+            query_filter=qdrant_filter,
+            with_payload=True,
         )
-        matches = results.get("matches", [])
-        top_score = matches[0].get("score", 0) if matches else 0
+        matches = _qdrant_results_to_matches(response.points)
+        top_score = matches[0]["score"] if matches else 0
         if top_score > best_score:
             best_score = top_score
             best_matches = matches
@@ -526,17 +574,49 @@ async def lookup_food(
     query: str,
     source_filter: str | None = None,
     modifiers: dict | None = None,
+    dietary_preferences: DietaryPreferences | None = None,
 ) -> dict | None:
+    """
+    dietary_preferences is passed in by the caller (route layer), already
+    fetched from the user's UserProfile — this function stays DB-agnostic
+    and testable without a live Mongo connection.
+    """
     print("RAG query:", query, "| source_filter:", source_filter)
 
-    source_clause = _source_pinecone_filter(source_filter)
-    modifier_clause = _modifiers_pinecone_filter(modifiers)
-    pinecone_filter = _combine_pinecone_filters(source_clause, modifier_clause)
-    print("RAG modifier filter:", modifier_clause)
-    print("RAG pinecone filter:", pinecone_filter)
+    tier_1 = dietary_preferences.tier_1 if dietary_preferences else None
+    tier_2 = dietary_preferences.tier_2 if dietary_preferences else None
 
-    # Embed → then Pinecone query with metadata filter (see _retrieve_best).
-    matches, winning_variant = await _retrieve_best(query, pinecone_filter)
+    source_condition = _source_qdrant_condition(source_filter)
+    modifier_conditions = _modifiers_qdrant_conditions(modifiers)
+    tier_1_filter = build_tier_1_filter(tier_1)
+    combined_filter = _combine_filters(source_condition, modifier_conditions, tier_1_filter)
+
+    print("RAG tier_1 filter:", tier_1_filter)
+    print("RAG combined filter:", combined_filter)
+
+    matches, winning_variant = await _retrieve_best(query, combined_filter)
+
+    # Zero results: only fall back if it's SAFE to. If any allergen is
+    # active, never relax -- tell the caller explicitly rather than silently
+    # retrying with a weaker filter. This is the exact failure mode the
+    # allergen extraction work tonight was scoped to prevent.
+    used_fallback = False
+    if not matches:
+        if has_active_allergen_constraint(tier_1):
+            return {
+                "blocked_by_allergy": True,
+                "message": "I couldn't find any options matching your allergy requirements. "
+                           "I've withheld unsafe options for your safety.",
+            }
+        if tier_1 is not None:
+            relaxed_tier_1 = relax_non_allergen_constraints(tier_1)
+            if relaxed_tier_1 is not None:
+                relaxed_filter = _combine_filters(
+                    source_condition, modifier_conditions, build_tier_1_filter(relaxed_tier_1)
+                )
+                matches, winning_variant = await _retrieve_best(query, relaxed_filter)
+                used_fallback = True
+
     if not matches:
         return None
 
@@ -548,6 +628,11 @@ async def lookup_food(
     # what the user said (plus a small near-zero-kcal demotion for caloric
     # foods) before picking the primary + candidate list.
     matches = rerank_matches_by_query(query, matches)
+
+    # Tier 2 soft preferences (organic, keto, grass-fed, ...) get the final
+    # polish pass -- boosts ranking within the semantically/name relevant
+    # set, never overrides it (capped multiplicative boost).
+    matches = apply_tier_2_boosts(matches, tier_2)
 
     match = _pick_match_with_usable_calories(query, matches)
     if match is None or match.get("score", 0) < SCORE_THRESHOLD:
@@ -561,9 +646,6 @@ async def lookup_food(
         f"(after query-match re-rank)"
     )
 
-    # Pinecone stores nutrient values per 100g. serving_size_g (branded) or
-    # a default portion's gram_weight (SR Legacy) tells us the actual amount
-    # to scale to, instead of returning raw per-100g values.
     serving_size_g, serving_source = get_serving_size_g(metadata)
     macros = scale_nutrients(metadata, serving_size_g)
     calories = macros["calories"]
@@ -571,58 +653,19 @@ async def lookup_food(
     carbs = macros["carbs"]
     fat = macros["fat"]
 
-    # --- Previous live-USDA-API fallback (replaced by the metadata-based
-    # math above, now that serving_size_g is stored at embed time). Left here
-    # commented out, not deleted, in case a live lookup is ever needed again
-    # (e.g. for a food that predates the serving_size_g fix, or a field this
-    # embed doesn't carry yet).
-    #
-    # try:
-    #     async with httpx.AsyncClient(timeout=10) as http_client:
-    #         usda_response = await http_client.get(
-    #             f"https://api.nal.usda.gov/fdc/v1/food/{fdc_id}",
-    #             params={"api_key": USDA_API_KEY},
-    #         )
-    #         usda_response.raise_for_status()
-    #         response = usda_response.json()
-    #
-    #     label = response.get("labelNutrients", {})
-    #     if label.get("calories"):
-    #         calories = label.get("calories", {}).get("value")
-    #         protein = label.get("protein", {}).get("value")
-    #         carbs = label.get("carbohydrates", {}).get("value")
-    #         fat = label.get("fat", {}).get("value")
-    #     else:
-    #         serving_size = response.get("servingSize") or 100
-    #         unit = response.get("servingSizeUnit", "g")
-    #         if unit in ["oz", "OZ"]:
-    #             serving_size *= 28.3495
-    #         multiplier = serving_size / 100
-    #         calories = (metadata.get("calories") or 0) * multiplier
-    #         protein = (metadata.get("protein") or 0) * multiplier
-    #         carbs = (metadata.get("carbs") or 0) * multiplier
-    #         fat = (metadata.get("fat") or 0) * multiplier
-    # except Exception as e:
-    #     print(f"USDA lookup failed for fdc_id {fdc_id}: {e}")
-
     print(f"fdc_id: {fdc_id}, serving_size_g: {serving_size_g} (source: {serving_source}), calories: {calories}")
 
     household_serving_fulltext = metadata.get("household_serving_fulltext", "")
     whole_container = is_whole_container_serving(household_serving_fulltext)
 
-    # Grounded alternatives, straight from the vector search — real foods the
-    # user might have meant (identity axis), each priced with its own serving.
     candidates = [
         summarize_match(m)
         for m in matches
         if m.get("score", 0) >= CANDIDATE_SCORE_FLOOR
     ][:MAX_CANDIDATES]
 
-    # Grounded portion choices for the chosen food (amount axis) — this is
-    # what lets "banana" offer medium/large/cup instead of guessing one.
     portion_options = build_portion_options(metadata)
 
-    # One consolidated decision: is this resolved, or worth one question?
     resolution = assess_resolution(metadata.get("name"), candidates, portion_options)
     print(
         f"resolution: {resolution['status']}"
@@ -644,4 +687,5 @@ async def lookup_food(
         "candidates": candidates,
         "portion_options": portion_options,
         "resolution": resolution,
+        "used_dietary_fallback": used_fallback,
     }
