@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from backend.services.nutrition_service import format_branded_name, lookup_food
 from backend.services.query_match_rank import is_zero_calorie_query
 from backend.services.parse_query_modifiers import parse_query_modifiers
+from backend.models import UserProfile
 
 load_dotenv()
 
@@ -162,10 +163,28 @@ def _build_grounded_alternatives(parsed: dict, nutrition: dict) -> list[str]:
     return alternatives
 
 
+async def _fetch_dietary_preferences(user_id: str | None):
+    """
+    NEW (2026-08-04): look up the user's saved dietary preferences so
+    lookup_food() can apply Tier 1 hard filters (allergens, vegan, etc.) and
+    Tier 2 soft boosts (organic, keto, etc.). Returns None when no user_id is
+    given or no profile exists yet — lookup_food() treats None the same as
+    "no dietary constraints," so this fails open to unrestricted search
+    rather than failing closed / erroring.
+    """
+    if not user_id:
+        return None
+    user_profile = await UserProfile.find_one(UserProfile.user_id == user_id)
+    if not user_profile:
+        return None
+    return user_profile.dietary_preferences
+
+
 async def parse_food_input(
     raw_input: str,
     conversation_history: list = [],
     source_filter: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     # If this is a clarification, combine with previous food
     if conversation_history:
@@ -206,13 +225,12 @@ async def parse_food_input(
 
     parsed = _apply_confidence_guards(parsed, raw_input)
 
-    # ===== NEW: Extract modifiers from the user's raw input =====
-    # This is independent of GPT's parsing — it uses word-boundary matching
-    # on the same 13 categories as the database-side extractor uses.
+    # Extract modifiers from the user's raw input — independent of GPT's
+    # parsing, word-boundary matching on the same 13 categories as the
+    # database-side extractor.
     modifiers = parse_query_modifiers(raw_input)
     parsed["modifiers"] = modifiers
-    
-    # Log extracted modifiers for debugging
+
     non_none_mods = {k: v for k, v in modifiers.items() if v != "NONE"}
     if non_none_mods:
         print(f"Extracted modifiers: {non_none_mods}")
@@ -224,11 +242,38 @@ async def parse_food_input(
     if effective_source is None and stated_brand:
         effective_source = "brand"
 
-    # Step 2 — Current food data source looks up accurate nutrition data
-    food_query = parsed['food']    
+    # NEW (2026-08-04): fetch the user's dietary preferences (allergens,
+    # vegan/kosher/etc, organic/keto/etc) so lookup_food can apply them.
+    dietary_preferences = await _fetch_dietary_preferences(user_id)
+
+    food_query = parsed['food']
     print("calling lookup_food with:", food_query, "| source:", effective_source, "| modifiers:", non_none_mods)
-    # ===== NEW: Pass modifiers to lookup_food =====
-    nutrition = await lookup_food(food_query, source_filter=effective_source, modifiers=modifiers)
+    nutrition = await lookup_food(
+        food_query,
+        source_filter=effective_source,
+        modifiers=modifiers,
+        dietary_preferences=dietary_preferences,
+    )
+
+    # NEW (2026-08-04): lookup_food returns a distinct shape when a severe
+    # allergen constraint produced zero safe results — no calories/candidates
+    # to process, just a safety message. Handle this BEFORE the normal
+    # `if nutrition:` branch, which assumes standard nutrition fields exist.
+    #
+    # NOTE: introduces a 4th confidence-like state, "blocked", alongside the
+    # existing high/medium/low. If the frontend/voice layer only branches on
+    # those three values, it will need a small update to handle this state
+    # explicitly — not verified against that code from here.
+    if nutrition and nutrition.get("blocked_by_allergy"):
+        parsed["confidence"] = "blocked"
+        parsed["calories"] = None
+        parsed["macronutrients"] = {"carbohydrates": None, "protein": None, "fats": None}
+        parsed["data_source"] = "allergy_block"
+        parsed["reasoning"] = nutrition.get("message")
+        parsed["candidates"] = []
+        parsed["portion_options"] = []
+        parsed["alternatives"] = []
+        return parsed
 
     if nutrition:
         # Use Current food data source data
@@ -249,6 +294,13 @@ async def parse_food_input(
         # frontend can offer accurate, priced alternatives instead of guesses.
         parsed["candidates"] = nutrition.get("candidates", [])
         parsed["portion_options"] = nutrition.get("portion_options", [])
+
+        # NEW (2026-08-04): surface whether a non-allergen Tier 1 constraint
+        # (vegan, kosher, etc.) had to be relaxed to find any results, so the
+        # voice/UI layer can say something like "no vegan options found,
+        # here's what I found instead" rather than presenting a silently
+        # relaxed result as an exact match.
+        parsed["used_dietary_fallback"] = nutrition.get("used_dietary_fallback", False)
 
         # Scale per-serving nutrition by the parsed quantity (e.g. "2" eggs).
         quantity_str = parsed.get("serving_size", "1")
