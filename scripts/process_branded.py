@@ -1,6 +1,8 @@
 """
 Process USDA Branded Foods CSV into clean JSON for embedding.
-Filters: US market only, complete nutrition data, deduplicates by name.
+Filters: US market only, foods with calorie data.
+One entry per fdc_id (no description-based dedup — Qdrant already has
+one searchable vector per fdc_id, including same-description UPC siblings).
 Output: data/processed/branded_clean.json
 
 Run from repo root:
@@ -243,34 +245,23 @@ with open(get_file("food_nutrient.csv"), newline="", encoding="utf-8") as f:
 print(f"Loaded {nutrient_count:,} nutrient values")
 
 # Step 4 - Filter to foods with calorie data
+# No description-based dedup: Qdrant already has one vector per fdc_id
+# (including same-description / different-UPC siblings), so collapsing here
+# would leave those "loser" points with no nutrition payload forever.
 with_calories = [f for f in foods.values() if f["calories"] is not None]
 print(f"Foods with calorie data: {len(with_calories):,}")
 
-# Step 5 - Deduplicate by normalized name, keep most recently modified
-print("Step 5: Deduplicating by name...")
-seen = {}
+# Step 5 - Remove internal-only fields before saving (keep description now — useful metadata)
 for food in with_calories:
-    key = food["description"].lower().strip()
-    if key not in seen:
-        seen[key] = food
-    else:
-        if food["modified_date"] > seen[key]["modified_date"]:
-            seen[key] = food
-
-clean = list(seen.values())
-print(f"After deduplication: {len(clean):,} foods")
-
-# Step 6 - Remove internal-only fields before saving (keep description now — useful metadata)
-for food in clean:
     food.pop("modified_date", None)
 
-# Step 7 - Save
+# Step 6 - Save
 print(f"Saving to {OUTPUT_PATH}...")
 with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-    json.dump(clean, f)
+    json.dump(with_calories, f)
 
-print(f"\nDone. {len(clean):,} US branded foods saved to {OUTPUT_PATH}")
+print(f"\nDone. {len(with_calories):,} US branded foods saved to {OUTPUT_PATH}")
 print("\nSample foods:")
-for food in clean[:5]:
+for food in with_calories[:5]:
     print(f"  {food['name']}: {food['calories']} kcal, {food['protein']}g protein, "
           f"serving_size_g={food['serving_size_g']}, ingredients={food['ingredients'][:40]!r}...")
