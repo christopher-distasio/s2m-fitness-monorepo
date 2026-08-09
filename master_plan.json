@@ -13,10 +13,49 @@
       ]
     },
     "nutrition_payload_backfill": {
-      "status": "not_started",
+      "status": "in_progress - full backfill running",
       "description": "No calories/protein/carbs/fat/serving/brand data in Qdrant payloads across any of the ~2.02M records (SR Legacy, FNDDS, branded_foods)",
       "field_audit": "complete - 4/4 items resolved (last: wweia_food_category, branded_food_category)",
-      "next_step": "write enrichment/backfill script, run against all 2.02M records"
+      "fndds_nutrient_mapping": "validated - diagnostic/validate_fndds_nutrient_mapping.py confirmed all 65 legacy nutrient_nbr IDs resolve cleanly via nutrient.nutrient_nbr join, 0 mismatches vs modern equivalents, 2026-08-09",
+      "qdrant_point_counts_confirmed_2026-08-09": {
+        "branded_foods": 1999864,
+        "sr_legacy": 7793,
+        "fndds": 5432,
+        "total": 2013089
+      },
+      "schema_decisions": {
+        "shape": "dataset-specific schemas, not unified flat - branded keeps brand/label fields, SR Legacy + FNDDS keep portions_json, only 39 nutrient fields + fdc_id/name/description are shared",
+        "fndds_output": "mirrors SR Legacy exactly - portions_json, no brand fields, output to fndds_clean.json",
+        "sr_legacy_file_to_use": "sr_legacy_full_clean.json (39 nutrients + portions_json) - NOT sr_legacy_clean.json (macros-only, deprecated)",
+        "backfill_script_target": "new file scripts/backfill_nutrition_to_qdrant.py - do not modify embed_foods.py, patch_missing.py depends on it for Pinecone",
+        "fndds_known_nulls": "5 of 39 fields always null for FNDDS (trans_fat, vitamin_a_iu, pantothenic_acid, added_sugars, manganese) - expected, not a bug, include for schema parity"
+      },
+      "dedup_removal_2026-08-09": {
+        "finding": "process_branded.py's Step 5 dedup-by-description was silently discarding ~1.39M legitimate distinct products (different UPCs/retailers sharing identical description text) - these were already live/searchable in Qdrant regardless, since dedup only ever applied to the JSON pipeline, never to what got embedded",
+        "action": "removed dedup step from process_branded.py entirely",
+        "result": "branded_clean.json grew from 461,022 -> 1,849,223 records. Remaining ~150k gap vs Qdrant's 1,999,864 branded_foods points fully accounted for by non-US market (~13k) + missing-calorie-data (~137k) filters, confirmed via direct math, not a mystery"
+      },
+      "duplicate_point_bug_2026-08-09": {
+        "finding": "backfill_nutrition_to_qdrant.py's resolve_point_ids used limit=len(batch) with a dict-based id_map - when a qdrant_id had 2+ duplicate Qdrant points, scroll would fill the batch limit with duplicate copies and silently drop other requested IDs entirely (fake ~28% not-found rate in first TEST_MODE run)",
+        "fix": "over-fetch (3x) + paginate until all requested IDs resolved; write payload to every duplicate point, not just one; count not-found by unique fdc_id",
+        "scope_confirmed_via_full_census": "only 50 branded_foods qdrant_ids have duplicates (all exactly 2 copies, 100 points total) out of 1,999,864 - a contiguous early block, not fleet-wide",
+        "allergen_safety_check": "IMPORTANT - checked whether extract_allergens_to_qdrant.py's same dict-based pattern silently under-wrote allergen data on these 50 duplicate-point records. Full census (not sample): 50/50 duplicate groups have IDENTICAL allergen payloads across both copies, 0 mismatches, 0 branded_foods points anywhere with missing/invalid milk field. Allergen data confirmed safe and consistent - no user-facing safety issue.",
+        "followup_not_urgent": "50 branded_foods records still exist as duplicate points (2x each) - cosmetic/search-quality issue (could show up twice in results), not a safety issue. Dedupe to 1 point per qdrant_id is the clean long-term fix, low priority."
+      },
+      "stale_json_note": "RESOLVED - process_branded.py re-run produced fresh branded_clean.json with folate_dfe_mcg (current field name), not the stale folate_food_mcg",
+      "current_run": "full backfill in progress as of 2026-08-09: branded_foods (~1.85M) + sr_legacy (7,793) + fndds (5,431), payload-only writes, no embedding/GPT calls, estimated 30-90 min",
+      "provenance_tagging_2026-08-09": {
+        "vitamin_a": "Do NOT auto-convert IU to RAE with a flat factor - explicitly investigated and rejected in original MAIN2 session (FDA's real conversion has 3 different factors depending on source: 0.3 retinol, 0.6 supplemental beta-carotene, 1.2 other carotenoids - USDA data doesn't indicate source, so any flat factor is wrong for a meaningful share of records). Correct pattern: RAE present -> vitamin_a_rae_mcg + vitamin_a_source:'measured_rae'. Only IU present -> vitamin_a_rae_mcg=null, vitamin_a_source:'unsupported_conversion'. Neither -> both null, vitamin_a_source:'no_data'",
+        "folate": "folate_dfe_mcg preferred (1190), Total (1177) as fallback. folate_source: 'measured_dfe' | 'fallback_from_total' | 'no_data'",
+        "vitamin_d_GAP_FOUND": "MAIN2 built and tested a Vitamin D mcg normalization module (nutrient_normalization.py, fixed 1:40 IU-to-mcg ratio, verified against FDA's own published example 800 IU -> 20 mcg) but NEVER integrated it into any processor script. process_branded.py as of tonight only reads ID 1114 (direct mcg) with no fallback to 1110 (IU). Being fixed as part of tonight's Cursor task: vitamin_d_mcg + vitamin_d_source: 'measured_mcg' | 'converted_from_iu' | 'no_data'",
+        "fndds_additional_description_GAP_FOUND": "MAIN2 investigated food_attribute.csv and found FNDDS's 'Additional Description' attribute type (9,647 rows) contains alternate/translated names (Spanish translations like 'leche fresca', clarifying notes) - resolved as worth capturing for voice-search matching on non-English names, but never implemented. SR Legacy's equivalent (type 'Common Name', 1,074 rows) was explicitly resolved as low-value/skip. Being fixed as part of tonight's Cursor task: new field in fndds_clean.json (e.g. additional_description)"
+      },
+      "fndds_dietary_tags_unresolved_LOW_PRIORITY": "MAIN2 planned (8/2) to sample 500 random FNDDS descriptions for dietary keywords (vegan/gluten-free/etc.) to decide if a full dietary-tag scan was worth building for FNDDS - this sample check was never actually run. FNDDS currently has 0 dietary tags in Qdrant. Reasoning for likely-fine-as-is: FNDDS descriptions are standardized USDA reference text ('Milk, whole'), not marketing copy, so dietary claims are unlikely to appear - but this was never empirically confirmed like the original plan intended. Not blocking, revisit if it ever seems to matter."
+    },
+    "app_integration_followups_SEPARATE_FROM_DATA_PIPELINE": {
+      "status": "not_started - different scope than Qdrant payload backfill, revisit separately",
+      "source_groups_verification": "nutrition_service.py's SOURCE_GROUPS fix (source value 'sr_legacy' not 'usda_sr_legacy') was written from memory during the Qdrant migration, never verified against live data - quick check needed",
+      "dietary_preferences_wiring": "lookup_food() in nutrition_service.py expects the caller to pass dietary_preferences in as a param - it does NOT fetch it from Mongo itself. Whatever calls this function (a route handler) needs a small update to fetch the user's UserProfile.dietary_preferences and pass it through. This wiring was never completed - without it, dietary/allergen filtering isn't actually active end-to-end even though the underlying filter logic exists."
     },
     "branded_foods_embed": {
       "status": "unconfirmed - verify before resuming",
