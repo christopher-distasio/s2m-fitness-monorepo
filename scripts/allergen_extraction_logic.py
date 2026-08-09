@@ -23,6 +23,14 @@ TERM TIERS (per multi-AI review, 2026-08-03):
 SHELLFISH SCOPE: combined crustacean + mollusk under one "shellfish" field. FDA's mandatory labeling law
 only covers crustaceans, but a person setting a "shellfish-free" toggle means both groups colloquially --
 matching the legal definition only would create a silent gap for clam/oyster/mussel/scallop allergies.
+
+WHEAT / PASTA-NOODLE FIX (2026-08-09): spot-check of the SR Legacy + FNDDS allergen run found
+41/113 pasta or noodle records left UNKNOWN for wheat -- "macaroni salad", "flavored pasta",
+generic "noodles" dishes were never matching any wheat term, since the term list only had
+technical/ingredient-label words (semolina, durum, etc.), not the common dish names. Pasta and
+noodles are wheat-based by default in USDA descriptions unless a non-wheat base is explicitly
+named (rice noodle, mung bean noodle, egg noodle w/o wheat, spaghetti squash). Added dish-name
+terms below, with compound exclusions for the confirmed non-wheat cases.
 """
 
 import re
@@ -83,6 +91,12 @@ ALLERGEN_TERMS = {
         "bulgur", "couscous", "graham flour", "matzo",
         "vital wheat gluten", "wheat gluten", "gluten flour",
         "tritordeum", "emmer", "einkorn", "kamut", "triticale", "atta", "maida", "freekeh",
+        # Added 2026-08-09: pasta/noodle is wheat by default unless the description
+        # names a specific non-wheat base (rice, mung bean, egg-only, etc.). Confirmed
+        # gap via spot-check: 41/113 pasta/noodle records were UNKNOWN for wheat.
+        "pasta", "macaroni", "noodle", "noodles", "spaghetti", "linguine",
+        "fettuccine", "penne", "rigatoni", "vermicelli", "lasagna", "ravioli",
+        "tortellini", "orzo", "ziti", "fusilli", "rotini",
     ],
     "soy": [
         "soy", "soybean", "tofu", "edamame", "miso", "tempeh",
@@ -116,6 +130,17 @@ GENERIC_HEAD_NOUN_MODIFIERS = {
     "mayonnaise": ["vegan", "plant-based", "egg-free"],
     "egg": ["vegan", "egg-free", "plant-based"],
     "fish": ["vegan", "fish-free", "plant-based", "fishless"],
+    # Added 2026-08-09: pasta/noodle terms are wheat by default, but these named
+    # non-wheat bases should gate the match, same pattern as almond milk / oat milk.
+    "pasta": ["rice", "mung bean", "chickpea", "lentil", "quinoa", "corn",
+              "shirataki", "konjac", "black bean", "edamame", "zucchini",
+              "spaghetti squash", "gluten-free", "gluten free"],
+    "noodle": ["rice", "mung bean", "chickpea", "lentil", "quinoa", "corn",
+               "shirataki", "konjac", "black bean", "kelp", "glass",
+               "cellophane", "gluten-free", "gluten free"],
+    "noodles": ["rice", "mung bean", "chickpea", "lentil", "quinoa", "corn",
+                "shirataki", "konjac", "black bean", "kelp", "glass",
+                "cellophane", "gluten-free", "gluten free"],
 }
 
 # Fixed compound-noun exclusions -- these are NOT modifier patterns (no space-separated
@@ -129,6 +154,9 @@ COMPOUND_NOUN_EXCLUSIONS = [
     "wheat grass", "wheatgrass",
     "bean curd",  # tofu -- soy, not dairy, despite containing "curd"
     "custard apple",  # fruit, not dairy custard
+    # Added 2026-08-09: spaghetti squash is a vegetable, not pasta -- confirmed
+    # false-hit risk from the new "spaghetti" wheat term.
+    "spaghetti squash",
 ]
 
 CONTAINS_PATTERN = re.compile(r'CONTAINS:?\s+(?!LESS THAN)([A-Z][A-Z,\s]*?)(?:\.|$)', re.IGNORECASE)
@@ -145,7 +173,21 @@ def is_compound_exclusion(text: str, match_start: int, match_end: int) -> bool:
     window_end = min(len(text), match_end + 15)
     window = text[window_start:window_end].lower()
 
-    return any(phrase in window for phrase in COMPOUND_NOUN_EXCLUSIONS)
+    if any(phrase in window for phrase in COMPOUND_NOUN_EXCLUSIONS):
+        return True
+
+    return False
+
+
+def is_spaghetti_squash(text: str, term: str) -> bool:
+    """
+    USDA descriptions are comma-reordered ("Squash, winter, spaghetti, cooked...")
+    so "spaghetti" and "squash" aren't adjacent like a normal compound phrase --
+    the standard window-based compound exclusion above misses it. Catch it
+    directly: if the "spaghetti" wheat-term match came from a description that
+    also contains "squash" anywhere, it's the vegetable, not pasta.
+    """
+    return term == "spaghetti" and "squash" in text
 
 
 def is_modifier_gated_false_positive(text: str, term: str, match_start: int) -> bool:
@@ -216,6 +258,10 @@ def scan_ingredients_for_terms(ingredients_text: str) -> set:
             for m in re.finditer(r'\b' + re.escape(term) + r'\b', text_lower):
                 # Check compound-noun exclusions (crab apple, water chestnut, etc.)
                 if is_compound_exclusion(text_lower, m.start(), m.end()):
+                    continue
+
+                # Check spaghetti-squash special case (comma-reordered USDA naming)
+                if is_spaghetti_squash(text_lower, term):
                     continue
 
                 # Check modifier-gating for generic head nouns (almond milk, peanut butter)
@@ -305,13 +351,20 @@ if __name__ == "__main__":
         "INGREDIENTS: PEANUT BUTTER, SUGAR, PALM OIL. MAY CONTAIN: TREE NUTS.",
         "",
         "INGREDIENTS: SOY LECITHIN, COCOA, SUGAR.",
-        # New tests -- modifier-gating and compound exclusions
+        # Modifier-gating and compound exclusions
         "INGREDIENTS: ALMOND MILK, VANILLA, SEA SALT.",  # should be milk: UNKNOWN, tree_nut: CONTAINS (almond)
         "INGREDIENTS: OAT MILK, OAT FLOUR.",  # milk: UNKNOWN (oat is a modifier, not tree_nut/other allergen)
         "INGREDIENTS: APPLE, CRAB APPLE CONCENTRATE, SUGAR.",  # shellfish: UNKNOWN (compound exclusion)
         "INGREDIENTS: WATER CHESTNUT, SOY SAUCE, GINGER.",  # tree_nut: UNKNOWN (compound exclusion), soy: CONTAINS
         "INGREDIENTS: VEGAN MAYONNAISE (SOY PROTEIN, VINEGAR).",  # egg: UNKNOWN (vegan-gated), soy: CONTAINS
         "INGREDIENTS: SHRIMP, OYSTER SAUCE, GARLIC.",  # shellfish: CONTAINS (both crustacean + mollusk)
+        # New tests -- pasta/noodle wheat fix (2026-08-09)
+        "Macaroni or pasta salad with tuna and egg",  # wheat: CONTAINS, fish: CONTAINS, egg: CONTAINS
+        "Rice noodles, dry",  # wheat: UNKNOWN (rice-gated)
+        "Long rice noodles, made from mung beans, cooked",  # wheat: UNKNOWN (mung bean-gated)
+        "Squash, winter, spaghetti, cooked, boiled, drained, or baked, with salt",  # wheat: UNKNOWN (compound exclusion)
+        "Beef, noodles, and vegetables excluding carrots, broccoli, and dark-green leafy; gravy",  # wheat: CONTAINS
+        "Shrimp and noodles with cream or white sauce",  # wheat: CONTAINS, shellfish: CONTAINS
     ]
 
     for i, text in enumerate(test_cases, 1):
