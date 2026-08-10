@@ -33,8 +33,25 @@ QDRANT_URL = "http://localhost:6333"
 COLLECTION_NAME = "food-vectors"
 BATCH_SIZE = 200
 
-TEST_MODE = True
+TEST_MODE = False
 TEST_LIMIT = 50  # per source file in TEST_MODE
+
+# Extra fdc_ids always included in TEST_MODE so spot-checks cover sugar /
+# provenance / FNDDS category cases (not just the first N CSV-order rows).
+TEST_SPOTCHECK_IDS = {
+    "branded_foods": [
+        "1107490",  # soft peppermint candy — sugar≈100
+        "1106143",  # vitamin_d converted_from_iu (iu=164 → 4.1 mcg)
+        "1106101",  # folate fallback_from_total
+        "1847371",  # vitamin_d measured_mcg (Hershey bar)
+        "2554935",  # vitamin_a measured_rae
+    ],
+    "sr_legacy": [],
+    "fndds": [
+        "2705385",  # additional_description=leche fresca, wweia=Milk, whole
+        "2705394",  # additional_description multi-value (Kefir)
+    ],
+}
 
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 2
@@ -78,19 +95,34 @@ def call_with_retry(func, *args, **kwargs):
 
 def build_payload(food: dict) -> dict:
     """
-    Nutrition/metadata only. Skips preserve keys and None values so we never
-    clobber allergens/dietary tags or write useless nulls.
+    Nutrition/metadata only. Skips preserve keys so we never clobber
+    allergens/dietary tags.
+
+    None values are normally omitted, EXCEPT preferred micronutrient fields
+    that provenance explicitly cleared (so a full re-backfill can overwrite
+    stale non-null values written by the previous schema).
     """
+    force_null_keys = set()
+    if food.get("vitamin_a_source") in ("unsupported_conversion", "no_data"):
+        force_null_keys.add("vitamin_a_rae_mcg")
+    if food.get("folate_source") == "no_data":
+        force_null_keys.add("folate_dfe_mcg")
+    if food.get("vitamin_d_source") == "no_data":
+        force_null_keys.add("vitamin_d_mcg")
+
     payload = {}
     for key, value in food.items():
         if key in PRESERVE_KEYS:
             continue
-        if value is None:
+        if value is None and key not in force_null_keys:
             continue
         if key == "fdc_id":
             payload[key] = str(value)
         else:
             payload[key] = value
+
+    for key in force_null_keys:
+        payload[key] = None
     return payload
 
 
@@ -195,8 +227,26 @@ def process_file(client, label: str, path: Path, totals: dict) -> dict:
         foods = json.load(f)
 
     if TEST_MODE:
-        foods = foods[:TEST_LIMIT]
-        print(f"  TEST_MODE: limiting to first {len(foods)} records")
+        by_id = {str(f.get("fdc_id")): f for f in foods}
+        selected = []
+        seen = set()
+        for fid in TEST_SPOTCHECK_IDS.get(label, []):
+            food = by_id.get(str(fid))
+            if food and str(fid) not in seen:
+                selected.append(food)
+                seen.add(str(fid))
+        for food in foods:
+            fid = str(food.get("fdc_id"))
+            if fid in seen:
+                continue
+            selected.append(food)
+            seen.add(fid)
+            if len(selected) >= TEST_LIMIT + len(TEST_SPOTCHECK_IDS.get(label, [])):
+                break
+        # Cap: spotchecks + first TEST_LIMIT others
+        foods = selected[: TEST_LIMIT + len(TEST_SPOTCHECK_IDS.get(label, []))]
+        print(f"  TEST_MODE: {len(foods)} records "
+              f"(includes {len(TEST_SPOTCHECK_IDS.get(label, []))} spot-check IDs)")
     else:
         print(f"  Loaded {len(foods):,} records")
 

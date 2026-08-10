@@ -1,16 +1,15 @@
 """
 Process USDA FNDDS (survey) foods into clean JSON for embedding/backfill.
-Mirrors process_sr_legacy.py schema: fdc_id, name, description, 39 nutrient
-fields, portions_json. No brand/label fields (FNDDS has none).
+Mirrors process_sr_legacy.py schema: fdc_id, name, description, nutrient
+fields, portions_json — plus FNDDS-only wweia_* and additional_description.
+No brand/label fields (FNDDS has none).
 
 IMPORTANT: FNDDS food_nutrient.csv uses legacy nutrient numbers (203, 204,
 208, …) as its nutrient_id column — NOT the modern FDC surrogate IDs
 (1003, 1004, 1008, …) used by SR Legacy and Branded. Mapping is therefore
 by nutrient_nbr (validated in diagnostic/validate_fndds_nutrient_mapping.py).
 
-Five fields are included for schema parity but are expected to stay null
-because FNDDS does not publish them: trans_fat, vitamin_a_iu,
-pantothenic_acid, added_sugars, manganese.
+Sugar uses legacy nbr 269 (= modern id 2000 Total Sugars), NOT 1063/269.3.
 
 Run from repo root:
     poetry run python scripts/process_fndds.py
@@ -19,7 +18,12 @@ Run from repo root:
 import csv
 import json
 import os
+import sys
+from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from nutrition_provenance import apply_micronutrient_provenance
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 EXTRACT_DIR = str(
@@ -27,16 +31,17 @@ EXTRACT_DIR = str(
 )
 OUTPUT_PATH = str(_REPO_ROOT / "data" / "processed" / "fndds_clean.json")
 
+ADDITIONAL_DESCRIPTION_TYPE_ID = "1001"
+
 # Legacy nutrient_nbr -> field name. Keys match food_nutrient.csv's
 # nutrient_id values in the FNDDS survey dump (legacy numbers themselves).
-# Same 39 field names as process_branded.py / process_sr_legacy.py.
 NUTRIENT_IDS = {
     "208": "calories",
     "203": "protein",
     "204": "fat",
     "205": "carbs",
     "291": "fiber",
-    "269": "sugar",  # FNDDS Total Sugars (modern id 2000); not 1063/269.3
+    "269": "sugar",  # Total Sugars (modern 2000); NOT 1063 / nbr 269.3
     "606": "saturated_fat",
     "605": "trans_fat",  # expected null in FNDDS — included for schema parity
     "307": "sodium",
@@ -50,6 +55,7 @@ NUTRIENT_IDS = {
     "320": "vitamin_a_rae_mcg",
     "401": "vitamin_c",
     "328": "vitamin_d_mcg",
+    "324": "vitamin_d_iu",
     "323": "vitamin_e_mg",
     "430": "vitamin_k",
     "404": "vitamin_b1",
@@ -70,6 +76,11 @@ NUTRIENT_IDS = {
     "315": "manganese",  # expected null in FNDDS
     "317": "selenium",
     "421": "choline",
+    "314": "iodine",
+    "310": "chromium",
+    "316": "molybdenum",
+    "302": "chlorine",
+    "416": "biotin",
 }
 
 # Documented expected-null fields (absent from FNDDS food_nutrient.csv)
@@ -108,7 +119,6 @@ with open(get_file("nutrient.csv"), newline="", encoding="utf-8") as f:
         nbr = _normalize_nbr(row.get("nutrient_nbr"))
         if nbr is None:
             continue
-        # Prefer the first match; later duplicates are rare edge cases
         if nbr not in nutrient_by_nbr:
             nutrient_by_nbr[nbr] = {
                 "id": row.get("id", ""),
@@ -128,14 +138,27 @@ for nid, field_name in NUTRIENT_IDS.items():
             f"({ref['unit_name']}, modern id={ref['id']}){tag}"
         )
 
-# Step 1 - Load FNDDS fdc_ids from survey_fndds_food.csv
-print("\nStep 1: Loading FNDDS food IDs...")
+# Step 1 - Load FNDDS fdc_ids + WWEIA category numbers from survey_fndds_food.csv
+print("\nStep 1: Loading FNDDS food IDs + WWEIA category numbers...")
 fndds_ids = set()
+wweia_by_fdc = {}
 with open(get_file("survey_fndds_food.csv"), newline="", encoding="utf-8") as f:
     reader = csv.DictReader(f)
     for row in reader:
-        fndds_ids.add(row["fdc_id"])
+        fdc_id = row["fdc_id"]
+        fndds_ids.add(fdc_id)
+        wweia_by_fdc[fdc_id] = (row.get("wweia_category_number") or "").strip()
 print(f"Found {len(fndds_ids):,} FNDDS food IDs")
+
+# Step 1b - WWEIA category description lookup
+print("Step 1b: Loading WWEIA category descriptions...")
+wweia_descriptions = {}
+with open(get_file("wweia_food_category.csv"), newline="", encoding="utf-8") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        key = (row.get("wweia_food_category") or "").strip()
+        wweia_descriptions[key] = (row.get("wweia_food_category_description") or "").strip()
+print(f"Loaded {len(wweia_descriptions):,} WWEIA category descriptions")
 
 # Step 2 - Load food names/descriptions
 print("Step 2: Loading food names...")
@@ -147,16 +170,54 @@ with open(get_file("food.csv"), newline="", encoding="utf-8") as f:
         if fdc_id not in fndds_ids:
             continue
         description = row.get("description", "").strip()
+        wweia_num = wweia_by_fdc.get(fdc_id, "")
         food_entry = {
             "fdc_id": fdc_id,
             "name": description,
             "description": description,
+            "wweia_category_number": wweia_num,
+            "wweia_food_category": wweia_descriptions.get(wweia_num, ""),
+            "additional_description": "",  # filled in Step 2b
             "portions": [],
         }
         for field in NUTRIENT_IDS.values():
             food_entry[field] = None
         foods[fdc_id] = food_entry
 print(f"Loaded {len(foods):,} FNDDS food names")
+
+# Step 2b - Additional Description attributes (Spanish alts, clarifying notes)
+print("Step 2b: Loading Additional Description attributes...")
+addl_by_fdc = defaultdict(list)
+with open(get_file("food_attribute.csv"), newline="", encoding="utf-8") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        if row.get("food_attribute_type_id") != ADDITIONAL_DESCRIPTION_TYPE_ID:
+            continue
+        fdc_id = row["fdc_id"]
+        if fdc_id not in foods:
+            continue
+        value = (row.get("value") or "").strip()
+        if not value:
+            continue
+        try:
+            seq = int(row.get("seq_num") or 0)
+        except ValueError:
+            seq = 0
+        addl_by_fdc[fdc_id].append((seq, value))
+
+addl_count = 0
+for fdc_id, pairs in addl_by_fdc.items():
+    pairs.sort(key=lambda x: x[0])
+    # Dedupe while preserving order
+    seen = set()
+    values = []
+    for _, v in pairs:
+        if v not in seen:
+            seen.add(v)
+            values.append(v)
+    foods[fdc_id]["additional_description"] = " | ".join(values)
+    addl_count += 1
+print(f"Attached additional_description on {addl_count:,} foods")
 
 # Step 3 - Load measure unit names
 print("Step 3: Loading measure units...")
@@ -241,8 +302,13 @@ for field in sorted(EXPECTED_NULL_FIELDS):
     status = "OK" if non_null == 0 else "UNEXPECTED"
     print(f"  {field}: {non_null:,} non-null  [{status}]")
 
+# Step 6b - Vitamin A / Folate / Vitamin D provenance
+print("\nStep 6b: Applying micronutrient provenance rules...")
+for food in with_calories:
+    apply_micronutrient_provenance(food)
+
 # Step 7 - Serialize portions as JSON string (same as SR Legacy)
-print("\nStep 7: Serializing portions...")
+print("Step 7: Serializing portions...")
 for food in with_calories:
     food["portions_json"] = json.dumps(food["portions"])
     del food["portions"]
@@ -257,5 +323,8 @@ print("\nSample foods:")
 for food in with_calories[:3]:
     print(
         f"  {food['name']}: {food['calories']} kcal, "
-        f"protein={food['protein']}, portions_json={food['portions_json'][:100]}..."
+        f"wweia={food['wweia_food_category']!r}, "
+        f"addl={food['additional_description'][:60]!r}, "
+        f"vitA_src={food['vitamin_a_source']}, folate_src={food['folate_source']}, "
+        f"vitD_src={food['vitamin_d_source']}"
     )

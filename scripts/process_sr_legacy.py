@@ -11,7 +11,11 @@ Run from repo root:
 import csv
 import json
 import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from nutrition_provenance import apply_micronutrient_provenance
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 EXTRACT_DIR = str(
@@ -28,7 +32,8 @@ NUTRIENT_IDS = {
     "1004": "fat",
     "1005": "carbs",
     "1079": "fiber",
-    "1063": "sugar",
+    # 2000 = Total Sugars (SR Legacy has ~6,007 rows). NOT 1063.
+    "2000": "sugar",
     "1258": "saturated_fat",
     "1257": "trans_fat",
     "1093": "sodium",
@@ -42,6 +47,7 @@ NUTRIENT_IDS = {
     "1106": "vitamin_a_rae_mcg",
     "1162": "vitamin_c",
     "1114": "vitamin_d_mcg",
+    "1110": "vitamin_d_iu",
     "1109": "vitamin_e_mg",
     "1185": "vitamin_k",
     "1165": "vitamin_b1",
@@ -62,6 +68,11 @@ NUTRIENT_IDS = {
     "1101": "manganese",
     "1103": "selenium",
     "1180": "choline",
+    "1100": "iodine",
+    "1096": "chromium",
+    "1102": "molybdenum",
+    "1088": "chlorine",
+    "1176": "biotin",
 }
 
 
@@ -197,6 +208,11 @@ print(f"Loaded {nutrient_count:,} nutrient values")
 # Step 6 - Filter to foods with at least calorie data
 with_calories = [f for f in foods.values() if f["calories"] is not None]
 print(f"Foods with calorie data: {len(with_calories):,}")
+
+# Step 6b - Vitamin A / Folate / Vitamin D provenance
+print("Step 6b: Applying micronutrient provenance rules...")
+for food in with_calories:
+    apply_micronutrient_provenance(food)
 
 # Step 7 - Serialize portions as JSON string (Pinecone metadata can't hold
 # nested objects/lists of numbers — only strings, numbers, booleans, and
