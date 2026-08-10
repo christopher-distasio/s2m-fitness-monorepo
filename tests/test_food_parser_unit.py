@@ -119,13 +119,59 @@ async def test_high_confidence_returns_correct_shape():
 
 @pytest.mark.asyncio
 async def test_parse_stuff_low_confidence():
-    result = await parse_food_input("stuff")
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "unknown",
+            "serving_size": "unknown",
+            "confidence": "low",
+            "alternatives": [],
+            "reasoning": "input too vague",
+        })
+        return mock_response
+
+    with patch("backend.services.food_parser.client.chat.completions.create", side_effect=fake_create):
+        with patch("backend.services.food_parser.lookup_food", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = None
+            result = await parse_food_input("stuff", conversation_history=[])
     assert result.get("confidence") == "low" or "error" in result
 
 
 @pytest.mark.asyncio
 async def test_medium_confidence_alternatives_are_nonempty_strings():
-    result = await parse_food_input("some pasta")
+    """Medium confidence must surface nonempty string alternatives (mocked)."""
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "pasta",
+            "serving_size": "some",
+            "confidence": "medium",
+            "alternatives": [
+                "a small bowl of pasta",
+                "a medium bowl of pasta",
+                "a large bowl of pasta",
+            ],
+            "reasoning": "quantity vague",
+        })
+        return mock_response
+
+    with patch("backend.services.food_parser.client.chat.completions.create", side_effect=fake_create):
+        with patch("backend.services.food_parser.lookup_food", new_callable=AsyncMock) as mock_lookup:
+            # No brand-choice gate — that path clears alternatives intentionally.
+            mock_lookup.return_value = {
+                "calories": 200,
+                "carbs": 40,
+                "protein": 7,
+                "fat": 1,
+                "candidates": [
+                    {"description": "Pasta, cooked", "calories": 200},
+                    {"description": "Pasta, dry", "calories": 371},
+                ],
+                "portion_options": [],
+                "resolution": {"status": "ok"},
+            }
+            result = await parse_food_input("some pasta", conversation_history=[])
+
     alternatives = result.get("alternatives") or []
     assert len(alternatives) > 0
     assert all(isinstance(a, str) and len(a) > 0 for a in alternatives)
@@ -133,6 +179,20 @@ async def test_medium_confidence_alternatives_are_nonempty_strings():
 
 @pytest.mark.asyncio
 async def test_low_confidence_unknown_food_has_empty_alternatives():
-    result = await parse_food_input("asdfgh")
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "asdfgh",
+            "serving_size": "unknown",
+            "confidence": "low",
+            "alternatives": [],
+            "reasoning": "unrecognized food",
+        })
+        return mock_response
+
+    with patch("backend.services.food_parser.client.chat.completions.create", side_effect=fake_create):
+        with patch("backend.services.food_parser.lookup_food", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = None
+            result = await parse_food_input("asdfgh", conversation_history=[])
     alternatives = result.get("alternatives") or []
     assert alternatives == []

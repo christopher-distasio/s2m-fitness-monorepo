@@ -1,5 +1,7 @@
 import pytest
 
+pytestmark = pytest.mark.live
+
 USER_ID = "test_user"
 
 @pytest.mark.asyncio

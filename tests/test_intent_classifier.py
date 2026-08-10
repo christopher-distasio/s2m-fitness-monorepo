@@ -1,6 +1,8 @@
 import pytest
 from backend.services.intent_classifier import classify_intent
 
+pytestmark = pytest.mark.live
+
 
 @pytest.mark.asyncio
 async def test_log_intent():

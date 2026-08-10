@@ -209,10 +209,9 @@ def rerank_matches_by_query(query: str, matches: list[dict]) -> list[dict]:
 
     def sort_key(match: dict) -> tuple[float, float]:
         meta = match.get("metadata") or {}
-        # FIX (2026-08-07): payload field is "description", not "name" --
-        # confirmed via direct Qdrant payload inspection. Same mismatch found
-        # and fixed in nutrition_service.py.
-        name = meta.get("description") or ""
+        # Payload field is "description" in Qdrant; accept "name" too so unit
+        # fixtures and any legacy metadata still re-rank correctly.
+        name = meta.get("description") or meta.get("name") or ""
         brand = (meta.get("brand_name") or meta.get("brand_owner") or "").strip()
         lexical = query_match_score(query, name, brand)
         lexical -= near_zero_calorie_penalty(query, meta)

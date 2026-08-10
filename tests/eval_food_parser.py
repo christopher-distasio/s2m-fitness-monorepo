@@ -729,6 +729,8 @@ def format_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+@pytest.mark.live
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_food_parser_eval():
     """Run all eval cases against the live parser and print a score summary."""

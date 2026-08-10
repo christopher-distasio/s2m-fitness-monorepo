@@ -22,11 +22,14 @@ from tests.test_brand_name_dedupe import (
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-pytestmark = pytest.mark.skipif(
-    not (os.getenv("PINECONE_API_KEY") or "").strip()
-    or not (os.getenv("OPENAI_API_KEY") or "").strip(),
-    reason="requires PINECONE_API_KEY and OPENAI_API_KEY",
-)
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        not (os.getenv("PINECONE_API_KEY") or "").strip()
+        or not (os.getenv("OPENAI_API_KEY") or "").strip(),
+        reason="requires PINECONE_API_KEY and OPENAI_API_KEY",
+    ),
+]
 
 # Known Great Value fdc_ids observed during the original diagnosis (names
 # already started with GREAT VALUE; live prepend was the audible bug).
