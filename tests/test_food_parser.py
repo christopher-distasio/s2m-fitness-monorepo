@@ -2,6 +2,8 @@ import pytest
 
 from backend.services.food_parser import parse_food_input
 
+pytestmark = [pytest.mark.live, pytest.mark.slow]
+
 
 @pytest.mark.asyncio
 async def test_parse_two_scrambled_eggs_high_confidence():

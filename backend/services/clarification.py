@@ -165,6 +165,20 @@ def parse_clarification_command(text: str) -> dict | None:
     )
     if trailing:
         token = trailing.group(1)
+        # "the raisin bran one" is a food/brand shorthand, not list index 1.
+        # ("the third one" is already handled above by _WORD_NUMBER_RE.)
+        food_one = re.fullmatch(r"the\s+(.+)\s+one", t)
+        if food_one and token in ("one", "1"):
+            middle_toks = food_one.group(1).split()
+            _INDEX_CUES = frozenset({"number", "option", "choice", "item"})
+            if any(
+                tok not in _WORD_NUMBERS
+                and tok not in whisper_nums
+                and not tok.isdigit()
+                and tok not in _INDEX_CUES
+                for tok in middle_toks
+            ):
+                return None
         if token.isdigit():
             n = int(token)
             return {"type": "select", "index": n} if 1 <= n <= 20 else None

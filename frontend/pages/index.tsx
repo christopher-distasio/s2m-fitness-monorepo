@@ -1058,6 +1058,7 @@ export default function Home() {
         body: JSON.stringify({
           raw_input: textInput,
           conversation_history: conversationHistory,
+          user_id: uid,
         }),
       });
       const parsed = await res.json();
@@ -1657,7 +1658,7 @@ export default function Home() {
       const res = await fetch(`${API_BASE}/food/parse`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ raw_input: originalInput, source_filter: source }),
+        body: JSON.stringify({ raw_input: originalInput, source_filter: source, user_id: uid }),
       });
       const parsed = (await res.json()) as ParsedResult & { error?: string };
 

@@ -14,106 +14,27 @@ from __future__ import annotations
 
 import re
 
-# Descriptors that refine a food without changing its identity. Having these
-# in the USDA name should NOT push a match below a differently-product name.
 _SOFT_MODIFIERS = {
-    "raw",
-    "fresh",
-    "plain",
-    "cooked",
-    "boiled",
-    "baked",
-    "roasted",
-    "fried",
-    "grilled",
-    "steamed",
-    "whole",
-    "mature",
-    "immature",
-    "ripe",
-    "green",
-    "yellow",
-    "white",
-    "peeled",
-    "unpeeled",
-    "flesh",
-    "only",
-    "meat",
-    "skin",
-    "nfs",
-    "ns",
-    "as",
-    "to",
-    "from",
-    "with",
-    "without",
-    "and",
-    "or",
-    "the",
-    "a",
-    "an",
-    "of",
-    "in",
-    "for",
-    "all",
-    "grades",
-    "choice",
-    "select",
-    "commercial",
-    "retail",
-    "frozen",
-    "canned",
-    "drained",
-    "solids",
-    "liquids",
+    "raw", "fresh", "plain", "cooked", "boiled", "baked", "roasted", "fried",
+    "grilled", "steamed", "whole", "mature", "immature", "ripe", "green",
+    "yellow", "white", "peeled", "unpeeled", "flesh", "only", "meat", "skin",
+    "nfs", "ns", "as", "to", "from", "with", "without", "and", "or", "the",
+    "a", "an", "of", "in", "for", "all", "grades", "choice", "select",
+    "commercial", "retail", "frozen", "canned", "drained", "solids", "liquids",
 }
 
-# Per-100g (or stored) kcal at/under this is "near zero" for the small penalty.
 _NEAR_ZERO_KCAL = 5.0
-# Exact/missing zeros are usually bad USDA/brand rows, not real diet foods.
 _DEGENERATE_ZERO_KCAL = 0.5
-# Subtracted from the lexical score — ~one hard-extra / brand bump, enough to
-# break near-ties without burying a dominant name match.
 _NEAR_ZERO_CAL_PENALTY = 0.25
 
-# Query tokens that usually mean a real zero/near-zero drink (no penalty).
-_ZERO_CAL_ANCHORS = frozenset({
-    "water",
-    "seltzer",
-    "espresso",
-    "americano",
-    "tea",
-})
+_ZERO_CAL_ANCHORS = frozenset({"water", "seltzer", "espresso", "americano", "tea"})
 _COFFEE_CALORIE_CONFLICTS = frozenset({
-    "latte",
-    "cappuccino",
-    "mocha",
-    "macchiato",
-    "frappe",
-    "frappuccino",
-    "milk",
-    "cream",
-    "sugar",
-    "syrup",
-    "cake",
+    "latte", "cappuccino", "mocha", "macchiato", "frappe", "frappuccino",
+    "milk", "cream", "sugar", "syrup", "cake",
 })
-_WATER_CALORIE_CONFLICTS = frozenset({
-    "coconut",
-    "flavor",
-    "flavored",
-    "juice",
-    "tonic",
-    "vitamin",
-})
+_WATER_CALORIE_CONFLICTS = frozenset({"coconut", "flavor", "flavored", "juice", "tonic", "vitamin"})
 _TEA_CALORIE_CONFLICTS = frozenset({
-    "sweet",
-    "sweetened",
-    "milk",
-    "sugar",
-    "honey",
-    "boba",
-    "chai",
-    "latte",
+    "sweet", "sweetened", "milk", "sugar", "honey", "boba", "chai", "latte",
 })
 _DIET_MARKERS = frozenset({"diet", "zero"})
 _SODA_TOKENS = frozenset({"soda", "coke", "pepsi", "cola", "pop"})
@@ -148,7 +69,6 @@ def _pluralize(word: str) -> str:
 
 
 def _expand_forms(tokens: set[str]) -> set[str]:
-    """Query tokens plus singular/plural variants so 'banana' matches 'bananas'."""
     expanded = set(tokens)
     for t in tokens:
         expanded.add(_singularize(t))
@@ -157,8 +77,6 @@ def _expand_forms(tokens: set[str]) -> set[str]:
 
 
 def _is_related_extra(token: str, q_forms: set[str]) -> bool:
-    """True when an 'extra' token is still about the same food (numbers,
-    compounds that embed a query word like 'milkfat', etc.)."""
     if token.isdigit():
         return True
     for q in q_forms:
@@ -168,17 +86,12 @@ def _is_related_extra(token: str, q_forms: set[str]) -> bool:
 
 
 def is_zero_calorie_query(query: str) -> bool:
-    """True when the user is asking for a food that can legitimately be ~0 kcal.
-
-    Those queries must NOT trigger the near-zero candidate penalty.
-    """
     tokens = _tokenize(query)
     if not tokens:
         return False
     if "water" in tokens:
         return not bool(tokens & _WATER_CALORIE_CONFLICTS)
     if "coffee" in tokens:
-        # Plain / black coffee is ~0; latte/mocha/cake are not.
         return not bool(tokens & _COFFEE_CALORIE_CONFLICTS)
     if "tea" in tokens:
         return not bool(tokens & _TEA_CALORIE_CONFLICTS)
@@ -210,11 +123,6 @@ def _metadata_macro(meta: dict, key: str) -> float:
 
 
 def effective_calories_per_100g(metadata: dict | None) -> float | None:
-    """Stored kcal/100g, or Atwater estimate when the calorie field is missing/0.
-
-    Many branded USDA rows have protein/fat filled in but calories left at 0.
-    Using 4P+4C+9F keeps the right product selectable without logging 0 kcal.
-    """
     meta = metadata or {}
     cal = _metadata_calories(meta)
     if cal is not None and cal > _DEGENERATE_ZERO_KCAL:
@@ -231,14 +139,6 @@ def effective_calories_per_100g(metadata: dict | None) -> float | None:
 
 
 def near_zero_calorie_penalty(query: str, metadata: dict | None) -> float:
-    """Additive penalty (≥0) for near-zero kcal rows on caloric queries.
-
-    Returned value is subtracted from the lexical rank score. Small on purpose:
-    breaks near-ties. Degenerate exact-zero tops are corrected separately in
-    rerank_matches_by_query when a real-calorie alternative exists.
-    Uses effective calories (Atwater fallback) so macro-complete 0-kcal rows
-    are not treated as empty.
-    """
     if is_zero_calorie_query(query):
         return 0.0
     cal = effective_calories_per_100g(metadata)
@@ -250,11 +150,6 @@ def near_zero_calorie_penalty(query: str, metadata: dict | None) -> float:
 
 
 def _promote_caloric_alternative(query: str, ranked: list[dict]) -> list[dict]:
-    """If #1 is a degenerate ~0 kcal row for a caloric query, prefer a real one.
-
-    Only runs when some later hit has meaningful calories — otherwise leave the
-    zero in place (all bad, or genuinely missing data).
-    """
     if not ranked or is_zero_calorie_query(query):
         return ranked
     top_cal = effective_calories_per_100g(ranked[0].get("metadata") or {})
@@ -270,13 +165,6 @@ def _promote_caloric_alternative(query: str, ranked: list[dict]) -> list[dict]:
 
 
 def query_match_score(query: str, name: str, brand: str = "") -> float:
-    """Higher = closer lexical match to what the user said.
-
-    Coverage of query tokens in the name is rewarded. Extra *identity-changing*
-    tokens (chips, bread, cereal, …) and an explicit brand are penalized, so
-    short generic SR names like "Bananas, raw" beat "Banana chips" even when
-    the vector score is slightly lower.
-    """
     q = _tokenize(query)
     if not q:
         return 0.0
@@ -294,8 +182,6 @@ def query_match_score(query: str, name: str, brand: str = "") -> float:
             covered += 1
     coverage = covered / len(q)
 
-    # Tokens in the name that aren't the query and aren't soft descriptors —
-    # these usually mean a different product (chips, bread, juice, …).
     hard_extras = {
         t
         for t in (n - q_forms - _SOFT_MODIFIERS)
@@ -305,10 +191,8 @@ def query_match_score(query: str, name: str, brand: str = "") -> float:
 
     brand_penalty = 0.35 if (brand or "").strip() else 0.0
 
-    # Prefer the everyday short name when coverage is otherwise equal.
     length_penalty = min(len(name or ""), 100) / 250.0
 
-    # Name headed by a query token ("Bananas, raw") beats buried mentions.
     name_tokens_ordered = _TOKEN_RE.findall((name or "").lower())
     head = name_tokens_ordered[0] if name_tokens_ordered else ""
     head_bonus = 0.4 if head and head in q_forms else 0.0
@@ -325,7 +209,9 @@ def rerank_matches_by_query(query: str, matches: list[dict]) -> list[dict]:
 
     def sort_key(match: dict) -> tuple[float, float]:
         meta = match.get("metadata") or {}
-        name = meta.get("name") or ""
+        # Payload field is "description" in Qdrant; accept "name" too so unit
+        # fixtures and any legacy metadata still re-rank correctly.
+        name = meta.get("description") or meta.get("name") or ""
         brand = (meta.get("brand_name") or meta.get("brand_owner") or "").strip()
         lexical = query_match_score(query, name, brand)
         lexical -= near_zero_calorie_penalty(query, meta)

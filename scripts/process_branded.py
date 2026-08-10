@@ -1,6 +1,8 @@
 """
 Process USDA Branded Foods CSV into clean JSON for embedding.
-Filters: US market only, complete nutrition data, deduplicates by name.
+Filters: US market only, foods with calorie data.
+One entry per fdc_id (no description-based dedup — Qdrant already has
+one searchable vector per fdc_id, including same-description UPC siblings).
 Output: data/processed/branded_clean.json
 
 Run from repo root:
@@ -13,8 +15,12 @@ Or extracted files in: data/raw/FoodData_Central_branded_food_csv_2026-04-30/
 import csv
 import json
 import os
+import sys
 import zipfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from nutrition_provenance import apply_micronutrient_provenance
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RAW = _REPO_ROOT / "data" / "raw"
@@ -30,7 +36,9 @@ NUTRIENT_IDS = {
     "1004": "fat",
     "1005": "carbs",
     "1079": "fiber",
-    "1063": "sugar",
+    # 2000 = Total Sugars (~1.79M branded rows). NOT 1063 (Sugars, Total) which
+    # has only ~698 branded rows and left sugar null for ~99.96% of foods.
+    "2000": "sugar",
     "1258": "saturated_fat",
     "1257": "trans_fat",
     "1093": "sodium",
@@ -44,6 +52,7 @@ NUTRIENT_IDS = {
     "1106": "vitamin_a_rae_mcg",
     "1162": "vitamin_c",
     "1114": "vitamin_d_mcg",
+    "1110": "vitamin_d_iu",  # raw IU; provenance may convert into vitamin_d_mcg
     "1109": "vitamin_e_mg",
     "1185": "vitamin_k",
     "1165": "vitamin_b1",
@@ -64,6 +73,12 @@ NUTRIENT_IDS = {
     "1101": "manganese",
     "1103": "selenium",
     "1180": "choline",
+    # Trace minerals / related (low label coverage, still legitimate)
+    "1100": "iodine",
+    "1096": "chromium",
+    "1102": "molybdenum",
+    "1088": "chlorine",
+    "1176": "biotin",
 }
 
 def get_file(filename):
@@ -243,34 +258,28 @@ with open(get_file("food_nutrient.csv"), newline="", encoding="utf-8") as f:
 print(f"Loaded {nutrient_count:,} nutrient values")
 
 # Step 4 - Filter to foods with calorie data
+# No description-based dedup: Qdrant already has one vector per fdc_id
+# (including same-description / different-UPC siblings), so collapsing here
+# would leave those "loser" points with no nutrition payload forever.
 with_calories = [f for f in foods.values() if f["calories"] is not None]
 print(f"Foods with calorie data: {len(with_calories):,}")
 
-# Step 5 - Deduplicate by normalized name, keep most recently modified
-print("Step 5: Deduplicating by name...")
-seen = {}
+# Step 4b - Vitamin A / Folate / Vitamin D provenance tags + allowed fallbacks
+print("Step 4b: Applying micronutrient provenance rules...")
 for food in with_calories:
-    key = food["description"].lower().strip()
-    if key not in seen:
-        seen[key] = food
-    else:
-        if food["modified_date"] > seen[key]["modified_date"]:
-            seen[key] = food
+    apply_micronutrient_provenance(food)
 
-clean = list(seen.values())
-print(f"After deduplication: {len(clean):,} foods")
-
-# Step 6 - Remove internal-only fields before saving (keep description now — useful metadata)
-for food in clean:
+# Step 5 - Remove internal-only fields before saving (keep description now — useful metadata)
+for food in with_calories:
     food.pop("modified_date", None)
 
-# Step 7 - Save
+# Step 6 - Save
 print(f"Saving to {OUTPUT_PATH}...")
 with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-    json.dump(clean, f)
+    json.dump(with_calories, f)
 
-print(f"\nDone. {len(clean):,} US branded foods saved to {OUTPUT_PATH}")
+print(f"\nDone. {len(with_calories):,} US branded foods saved to {OUTPUT_PATH}")
 print("\nSample foods:")
-for food in clean[:5]:
+for food in with_calories[:5]:
     print(f"  {food['name']}: {food['calories']} kcal, {food['protein']}g protein, "
           f"serving_size_g={food['serving_size_g']}, ingredients={food['ingredients'][:40]!r}...")
