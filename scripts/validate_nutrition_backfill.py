@@ -36,8 +36,21 @@ SOURCES = ["branded_foods", "sr_legacy", "fndds"]
 
 # A handful of records with a well-known expected nutrition profile, spanning
 # all three sources and several of tonight's fixes (sugar, vitamin D, vitamin A).
+# These are records Cursor already validated during TEST_MODE -- re-checking
+# them here confirms the FULL production run landed the same correct values,
+# not just the small test batch.
 KNOWN_VALUE_CHECKS = [
-    # (qdrant_id, description_contains, field, expectation)
+    ("1107490", "peppermint candy", "sugar", "100.0"),
+    ("1847371", "Hershey bar", "sugar", "55.81"),
+    ("1847371", "Hershey bar", "vitamin_d_source", "measured_mcg"),
+    ("1106143", "Moose Tracks", "vitamin_a_source", "unsupported_conversion (IU=820, rae=null expected)"),
+    ("1106143", "Moose Tracks", "vitamin_d_source", "converted_from_iu (IU=164 -> mcg=4.1)"),
+    ("1106101", "almond crackers", "folate_source", "fallback_from_total (total=160 -> dfe=160)"),
+    ("2554935", "Otis muffin", "vitamin_a_source", "measured_rae (rae=0.0, a true zero, not missing)"),
+    ("2705385", "FNDDS Milk, whole", "wweia_food_category", "Milk, whole"),
+    ("2705385", "FNDDS Milk, whole", "additional_description", "leche fresca"),
+    ("2705394", "FNDDS Kefir", "wweia_food_category", "Milk, lowfat"),
+    ("2705394", "FNDDS Kefir", "additional_description", "fermented milk drink | all types"),
 ]
 
 
