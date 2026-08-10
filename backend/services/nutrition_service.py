@@ -12,6 +12,7 @@ from backend.services.query_match_rank import (
     rerank_matches_by_query,
 )
 from backend.services.dietary_filters import (
+    FDA_ALLERGENS,
     build_tier_1_filter,
     has_active_allergen_constraint,
     relax_non_allergen_constraints,
@@ -672,6 +673,18 @@ async def lookup_food(
         + (f" (ask about {resolution['axis']})" if resolution["axis"] else "")
     )
 
+    # Allergen tags for the route-layer severe/moderate gate (create + PATCH).
+    # CONTAINS → listed in allergens; per-allergen state keys kept so UNKNOWN
+    # can still drive a moderate warning without blocking.
+    allergens_present = [
+        name for name in FDA_ALLERGENS if metadata.get(name) == "CONTAINS"
+    ]
+    allergen_states = {
+        name: metadata.get(name)
+        for name in FDA_ALLERGENS
+        if metadata.get(name) in ("CONTAINS", "FREE", "UNKNOWN")
+    }
+
     return {
         "food_name": metadata.get("name"),
         "brand": get_brand(metadata),
@@ -688,4 +701,6 @@ async def lookup_food(
         "portion_options": portion_options,
         "resolution": resolution,
         "used_dietary_fallback": used_fallback,
+        "allergens": allergens_present,
+        **allergen_states,
     }

@@ -1,7 +1,9 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 from typing import Optional
-from backend.models import UserProfile
+from backend.models import UserProfile, DietaryPreferences
 
 
 router = APIRouter()
@@ -34,3 +36,27 @@ async def update_profile(user_id: str, updates: UpdateProfile = Body(...)):
         setattr(profile, key, value)
     await profile.save()
     return profile
+
+
+@router.get("/user/{user_id}/dietary-preferences")
+async def get_dietary_preferences(user_id: str):
+    """Return saved dietary preferences, or an empty default object if unset."""
+    profile = await UserProfile.find_one(UserProfile.user_id == user_id)
+    if not profile:
+        return DietaryPreferences()
+    return profile.dietary_preferences
+
+
+@router.put("/user/{user_id}/dietary-preferences")
+async def put_dietary_preferences(user_id: str, prefs: DietaryPreferences = Body(...)):
+    """Replace dietary preferences wholesale (full-object PUT, not partial PATCH)."""
+    profile = await UserProfile.find_one(UserProfile.user_id == user_id)
+    if not profile:
+        profile = UserProfile(user_id=user_id)
+        await profile.insert()
+
+    prefs.updated_at = datetime.now(timezone.utc)
+    profile.dietary_preferences = prefs
+    profile.updated_at = datetime.now(timezone.utc)
+    await profile.save()
+    return profile.dietary_preferences

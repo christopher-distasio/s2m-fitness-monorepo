@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from backend.services.nutrition_service import format_branded_name, lookup_food
 from backend.services.query_match_rank import is_zero_calorie_query
 from backend.services.parse_query_modifiers import parse_query_modifiers
+from backend.services.dietary_filters import FDA_ALLERGENS
 from backend.models import UserProfile
 
 load_dotenv()
@@ -301,6 +302,12 @@ async def parse_food_input(
         # here's what I found instead" rather than presenting a silently
         # relaxed result as an exact match.
         parsed["used_dietary_fallback"] = nutrition.get("used_dietary_fallback", False)
+
+        # Allergen tags for POST/PATCH allergy gate (severe block / moderate warn).
+        parsed["allergens"] = nutrition.get("allergens") or []
+        for allergen_name in FDA_ALLERGENS:
+            if allergen_name in nutrition:
+                parsed[allergen_name] = nutrition[allergen_name]
 
         # Scale per-serving nutrition by the parsed quantity (e.g. "2" eggs).
         quantity_str = parsed.get("serving_size", "1")
