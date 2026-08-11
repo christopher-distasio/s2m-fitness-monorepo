@@ -6,6 +6,13 @@ import { supabase } from "../lib/supabaseClient";
 import { speak as _speak, stopSpeaking, onSpeakingChange, isSpeaking } from "../lib/speak";
 import { speakWithBargeIn } from "../lib/bargeIn";
 import { formatBrandedName } from "../lib/foodName";
+import {
+  defaultDietaryPreferences,
+  dietaryPreferencesPayload,
+  normalizeDietaryPreferences,
+  type DietaryPreferences,
+} from "../lib/dietaryPreferences";
+import { DietaryPreferencesPanel } from "../components/DietaryPreferencesPanel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -522,6 +529,14 @@ export default function Home() {
   const chunksRef = useRef<Blob[]>([]);
   const [calorieGoal, setCalorieGoal] = useState(2000);
   const [goalInput, setGoalInput] = useState("");
+  const [dietaryPrefs, setDietaryPrefs] = useState<DietaryPreferences>(
+    () => defaultDietaryPreferences(),
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [savingDietaryPrefs, setSavingDietaryPrefs] = useState(false);
+  const [dietaryPrefsStatus, setDietaryPrefsStatus] = useState("");
+  const settingsDetailsRef = useRef<HTMLDetailsElement>(null);
+  const dietaryHeadingRef = useRef<HTMLHeadingElement>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const confidenceSectionRef = useRef<HTMLElement | null>(null);
@@ -663,6 +678,23 @@ export default function Home() {
     const data = await res.json();
     setCalorieGoal(data.calorie_goal);
     return data as { calorie_goal: number };
+  }, []);
+
+  const fetchDietaryPrefs = useCallback(async (uid?: string) => {
+    const id =
+      uid ??
+      (
+        await supabase.auth.getSession()
+      ).data.session?.user.id;
+    if (!id) return;
+    try {
+      const res = await fetch(`${API_BASE}/user/${id}/dietary-preferences`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setDietaryPrefs(normalizeDietaryPreferences(data));
+    } catch {
+      // Keep defaults if preferences endpoint is unreachable.
+    }
   }, []);
 
   const GUEST_USER_ID = "c0daaa18-4a82-4022-be8e-e21224683f88";
@@ -862,6 +894,7 @@ export default function Home() {
       const [summaryData] = await Promise.all([
         fetchSummary(userId),
         fetchProfile(userId),
+        fetchDietaryPrefs(userId),
       ]);
       if (cancelled || hasOnOpenSpokenRef.current || !summaryData) return;
 
@@ -895,6 +928,7 @@ export default function Home() {
     fetchLogs,
     fetchSummary,
     fetchProfile,
+    fetchDietaryPrefs,
     greetOnOpen,
     summaryOnOpen,
     wantsVoiceOnOpen,
@@ -1574,6 +1608,52 @@ export default function Home() {
     setCalorieGoal(Number.parseFloat(goalInput));
     setGoalInput("");
     speak(`Calorie goal set to ${goalInput} calories`);
+  }
+
+  async function saveDietaryPrefs() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const uid = session?.user.id ?? userId;
+    if (!uid) {
+      setDietaryPrefsStatus("Sign in to save preferences");
+      return;
+    }
+    setSavingDietaryPrefs(true);
+    setDietaryPrefsStatus("");
+    try {
+      const res = await fetch(`${API_BASE}/user/${uid}/dietary-preferences`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(dietaryPreferencesPayload(dietaryPrefs)),
+      });
+      if (!res.ok) {
+        setDietaryPrefsStatus("Could not save — try again");
+        return;
+      }
+      const data = await res.json();
+      setDietaryPrefs(normalizeDietaryPreferences(data));
+      setDietaryPrefsStatus("Saved");
+      speak("Dietary preferences saved");
+    } catch {
+      setDietaryPrefsStatus("Could not save — try again");
+    } finally {
+      setSavingDietaryPrefs(false);
+    }
+  }
+
+  function openDietarySettings() {
+    setMenuOpen(false);
+    setHowItWorksOpen(false);
+    setModeAndPersist("see");
+    setSettingsOpen(true);
+    window.setTimeout(() => {
+      settingsDetailsRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      dietaryHeadingRef.current?.focus();
+    }, 80);
   }
 
   async function confirmLog(uid: string, raw_input: string) {
@@ -2349,6 +2429,14 @@ export default function Home() {
                 <button
                   type="button"
                   role="menuitem"
+                  onClick={openDietarySettings}
+                  className="w-full px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-white/10 focus:outline-none focus:bg-white/10"
+                >
+                  Dietary preferences…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   onClick={signOut}
                   className="w-full px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-white/10 focus:outline-none focus:bg-white/10"
                 >
@@ -2700,7 +2788,15 @@ export default function Home() {
                 </button>
 
                 {/* Settings — collapsible */}
-                <details className="group">
+                <details
+                  ref={settingsDetailsRef}
+                  id="settings-panel"
+                  className="group"
+                  open={settingsOpen}
+                  onToggle={(e) => {
+                    setSettingsOpen((e.currentTarget as HTMLDetailsElement).open);
+                  }}
+                >
                   <summary className="cursor-pointer text-xs text-white hover:text-white transition-colors list-none flex items-center gap-1 select-none">
                     <svg
                       width="12"
@@ -2720,7 +2816,7 @@ export default function Home() {
                     </svg>
                     Settings
                   </summary>
-                  <div className="mt-3 flex flex-col gap-4 border-t border-white/20 pt-4">
+                  <div className="mt-3 flex flex-col gap-6 border-t border-white/20 pt-4">
                     <fieldset>
                       <legend className="text-sm font-medium text-white mb-2">
                         Update calorie goal
@@ -2749,6 +2845,15 @@ export default function Home() {
                         </button>
                       </div>
                     </fieldset>
+
+                    <DietaryPreferencesPanel
+                      value={dietaryPrefs}
+                      onChange={setDietaryPrefs}
+                      onSave={saveDietaryPrefs}
+                      saving={savingDietaryPrefs}
+                      statusMessage={dietaryPrefsStatus}
+                      headingRef={dietaryHeadingRef}
+                    />
                   </div>
                 </details>
               </section>
