@@ -18,6 +18,7 @@ from backend.services.dietary_filters import (
     relax_non_allergen_constraints,
     apply_tier_2_boosts,
 )
+from backend.services.nutrient_fields import extras_from_scaled, scale_extra_nutrients
 from backend.models import DietaryPreferences
 
 load_dotenv()
@@ -219,18 +220,22 @@ def scale_nutrients(metadata: dict, serving_size_g: float) -> dict:
 
     When the calorie field is missing/0 but macros are present (common in
     branded USDA rows), calories are estimated with Atwater (4P+4C+9F).
+    Also scales fiber/sugar/micros into the same dict for logging/summary.
     """
     multiplier = serving_size_g / 100
     calories_100 = effective_calories_per_100g(metadata)
     protein_100 = float(metadata.get("protein") or 0)
     carbs_100 = float(metadata.get("carbs") or 0)
     fat_100 = float(metadata.get("fat") or 0)
-    return {
+    scaled = {
         "calories": round((calories_100 or 0) * multiplier, 2),
         "protein": round(protein_100 * multiplier, 2),
         "carbs": round(carbs_100 * multiplier, 2),
         "fat": round(fat_100 * multiplier, 2),
     }
+    scaled.update(scale_extra_nutrients(metadata, serving_size_g))
+    return scaled
+
 
 
 def _pick_match_with_usable_calories(query: str, matches: list[dict]) -> dict | None:
@@ -653,6 +658,7 @@ async def lookup_food(
     protein = macros["protein"]
     carbs = macros["carbs"]
     fat = macros["fat"]
+    nutrients = extras_from_scaled(macros)
 
     print(f"fdc_id: {fdc_id}, serving_size_g: {serving_size_g} (source: {serving_source}), calories: {calories}")
 
@@ -701,6 +707,7 @@ async def lookup_food(
         "portion_options": portion_options,
         "resolution": resolution,
         "used_dietary_fallback": used_fallback,
+        "nutrients": nutrients,
         "allergens": allergens_present,
         **allergen_states,
     }

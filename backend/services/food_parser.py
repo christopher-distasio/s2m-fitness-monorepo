@@ -303,6 +303,9 @@ async def parse_food_input(
         # relaxed result as an exact match.
         parsed["used_dietary_fallback"] = nutrition.get("used_dietary_fallback", False)
 
+        # Extra macros/micros scaled to serving (fiber, sodium, vitamins, …).
+        parsed["nutrients"] = dict(nutrition.get("nutrients") or {})
+
         # Allergen tags for POST/PATCH allergy gate (severe block / moderate warn).
         parsed["allergens"] = nutrition.get("allergens") or []
         for allergen_name in FDA_ALLERGENS:
@@ -323,6 +326,14 @@ async def parse_food_input(
             for macro_key in ("protein", "carbohydrates", "fats"):
                 if macros.get(macro_key) is not None:
                     macros[macro_key] = round(macros[macro_key] * quantity, 1)
+            nutrients = parsed.get("nutrients") or {}
+            for nk, nv in list(nutrients.items()):
+                if nv is not None:
+                    try:
+                        nutrients[nk] = round(float(nv) * quantity, 2)
+                    except (TypeError, ValueError):
+                        pass
+            parsed["nutrients"] = nutrients
 
         parsed["quantity_used"] = quantity
         print(f"quantity: {quantity}, calories after: {parsed['calories']}")

@@ -57,6 +57,7 @@ class FoodLogRequest(BaseModel):
     protein: Optional[float] = None
     carbs: Optional[float] = None
     fat: Optional[float] = None
+    nutrients: Optional[dict[str, float]] = None
     quantity: Optional[str] = None
 
 
@@ -95,6 +96,7 @@ def build_food_log(
     user_id: str, raw_input: str, parsed: dict, food_name: Optional[str] = None
 ) -> FoodLog:
     macros = parsed.get("macronutrients", {})
+    extras = parsed.get("nutrients") or {}
     return FoodLog(
         user_id=user_id,
         raw_input=raw_input,
@@ -103,6 +105,7 @@ def build_food_log(
         protein=macros.get("protein"),
         carbs=macros.get("carbohydrates"),
         fat=macros.get("fats"),
+        extra_nutrients=extras or None,
         quantity=parsed.get("serving_size"),
         confidence=parsed.get("confidence"),
         reasoning=parsed.get("reasoning"),
@@ -156,6 +159,7 @@ async def log_food(request: FoodLogRequest):
             protein=request.protein,
             carbs=request.carbs,
             fat=request.fat,
+            extra_nutrients=request.nutrients or None,
             quantity=request.quantity,
             confidence="high",
         )
@@ -331,11 +335,18 @@ async def get_daily_summary(user_id: str):
     logs = await FoodLog.find(
         FoodLog.user_id == user_id, FoodLog.logged_at >= start_of_day
     ).to_list()
+    nutrients: dict[str, float] = {}
+    for log in logs:
+        for key, val in (log.extra_nutrients or {}).items():
+            if val is None:
+                continue
+            nutrients[key] = nutrients.get(key, 0.0) + float(val)
     return {
         "calories": sum(log.calories or 0 for log in logs),
         "protein": sum(log.protein or 0 for log in logs),
         "carbs": sum(log.carbs or 0 for log in logs),
         "fat": sum(log.fat or 0 for log in logs),
+        "nutrients": {k: round(v, 2) for k, v in nutrients.items()},
         "entry_count": len(logs),
     }
 
@@ -407,6 +418,7 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     food_log.protein = macros.get("protein")
     food_log.carbs = macros.get("carbohydrates")
     food_log.fat = macros.get("fats")
+    food_log.extra_nutrients = parsed.get("nutrients") or None
     food_log.quantity = parsed.get("serving_size")
     food_log.modified_at = datetime.now(timezone.utc)
 

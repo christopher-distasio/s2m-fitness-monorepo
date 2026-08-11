@@ -13,6 +13,15 @@ import {
   type DietaryPreferences,
 } from "../lib/dietaryPreferences";
 import { DietaryPreferencesPanel } from "../components/DietaryPreferencesPanel";
+import {
+  MACRO_DISPLAY_KEYS,
+  MICRO_KEYS,
+  NUTRIENT_META,
+  extrasFromNutrientPick,
+  persistShowNutrients,
+  readStoredShowNutrients,
+  type ShowNutrientsState,
+} from "../lib/nutrientDisplay";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -278,6 +287,7 @@ interface ParsedResult {
     fats: number;
     sugar: number;
   };
+  nutrients?: Record<string, number>;
   confidence?: "high" | "medium" | "low";
   reasoning?: string;
   alternatives?: string[];
@@ -320,6 +330,7 @@ interface ClarifyOption {
     protein?: number;
     carbs?: number;
     fat?: number;
+    nutrients?: Record<string, number>;
     quantity?: string;
     raw_input: string;
   };
@@ -385,6 +396,9 @@ function allClarifyOptions(
         protein: c.protein,
         carbs: c.carbs,
         fat: c.fat,
+        nutrients: extrasFromNutrientPick(
+          c as unknown as Record<string, unknown>,
+        ),
         quantity: c.serving_label,
         raw_input: rawInput,
       },
@@ -403,6 +417,9 @@ function allClarifyOptions(
         protein: p.protein,
         carbs: p.carbs,
         fat: p.fat,
+        nutrients: extrasFromNutrientPick(
+          p as unknown as Record<string, unknown>,
+        ),
         quantity: p.label,
         raw_input: rawInput,
       },
@@ -521,6 +538,7 @@ export default function Home() {
     protein: 0,
     carbs: 0,
     fat: 0,
+    nutrients: {} as Record<string, number>,
     entry_count: 0,
   });
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -569,11 +587,14 @@ export default function Home() {
     (options?: { fromAutoListen?: boolean }) => Promise<void>
   >(async () => {});
   const [muted, setMuted] = useState(false);
-  const [showNutrients, setShowNutrients] = useState({
-    protein: false,
-    carbs: false,
-    fat: false,
-  });
+  const [showNutrients, setShowNutrients] = useState<ShowNutrientsState>(() =>
+    readStoredShowNutrients(),
+  );
+  /** Which nutrient picker is open: macros, micros, or neither. */
+  const [nutrientMenuOpen, setNutrientMenuOpen] = useState<
+    null | "macro" | "micro"
+  >(null);
+  const nutrientMenusRef = useRef<HTMLDivElement>(null);
   const [conversationHistory, setConversationHistory] = useState<
     Array<{ role: "user" | "assistant"; content: string }>
   >([]);
@@ -661,8 +682,16 @@ export default function Home() {
       if (!id) return;
       const res = await fetch(`${API_BASE}/food/${id}/summary`);
       const data = await res.json();
-      setSummary(data);
-      return data as typeof summary;
+      const next = {
+        calories: data.calories ?? 0,
+        protein: data.protein ?? 0,
+        carbs: data.carbs ?? 0,
+        fat: data.fat ?? 0,
+        nutrients: (data.nutrients ?? {}) as Record<string, number>,
+        entry_count: data.entry_count ?? 0,
+      };
+      setSummary(next);
+      return next;
     },
     [userId],
   );
@@ -1012,6 +1041,27 @@ export default function Home() {
       document.removeEventListener("keydown", handleEscape);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!nutrientMenuOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (
+        nutrientMenusRef.current &&
+        !nutrientMenusRef.current.contains(e.target as Node)
+      ) {
+        setNutrientMenuOpen(null);
+      }
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") setNutrientMenuOpen(null);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [nutrientMenuOpen]);
 
   useEffect(() => {
     if (!userId) return;
@@ -1684,6 +1734,7 @@ export default function Home() {
       protein?: number;
       carbs?: number;
       fat?: number;
+      nutrients?: Record<string, number>;
       quantity?: string;
       raw_input: string;
     },
@@ -1702,6 +1753,7 @@ export default function Home() {
           protein: pick.protein,
           carbs: pick.carbs,
           fat: pick.fat,
+          nutrients: pick.nutrients,
           quantity: pick.quantity,
         }),
       });
@@ -1756,6 +1808,7 @@ export default function Home() {
           protein: parsed.macronutrients?.protein,
           carbs: parsed.macronutrients?.carbohydrates,
           fat: parsed.macronutrients?.fats,
+          nutrients: parsed.nutrients,
           quantity: parsed.serving_size,
           raw_input: originalInput,
         });
@@ -2614,102 +2667,214 @@ export default function Home() {
                   Today&apos;s Summary
                 </h2>
 
-                <div className="flex gap-3 mb-3">
-                  <div className="rounded-lg bg-blue-950 border border-blue-800/80 p-3 text-center min-w-[100px]">
-                    <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-stretch sm:gap-4">
+                  {/* Primary metric — roomy calories block */}
+                  <div className="flex flex-col justify-center rounded-xl bg-blue-950 border border-blue-800/80 px-5 py-5 text-center sm:min-w-[11rem] sm:flex-1 sm:max-w-[16rem]">
+                    <p className="text-xs text-blue-50 uppercase tracking-wide font-medium mb-1">
                       Calories
                     </p>
                     <p
-                      className="text-2xl font-bold text-white"
+                      className="text-4xl sm:text-5xl font-bold text-white leading-none tracking-tight"
                       aria-label={`${summary.calories} of ${calorieGoal} calories`}
                     >
                       {Math.round(summary.calories)}
-                      <span className="text-sm font-normal text-blue-100">
-                        /{calorieGoal}
-                      </span>
+                    </p>
+                    <p className="mt-2 text-sm text-blue-100/90">
+                      of{" "}
+                      <span className="font-semibold text-white">
+                        {calorieGoal}
+                      </span>{" "}
+                      goal
                     </p>
                   </div>
 
-                  <div className="flex flex-col gap-2 flex-1">
-                    <div className="flex gap-3">
-                      {(["protein", "carbs", "fat"] as const).map((key) => {
-                        const pressed = showNutrients[key];
-                        return (
-                          <label
-                            key={key}
-                            className="flex flex-col items-center gap-1 cursor-pointer"
+                  {/* Show Macronutrients / Show Micronutrients pickers */}
+                  <div
+                    ref={nutrientMenusRef}
+                    className="flex flex-1 flex-col gap-2 justify-center min-w-0"
+                  >
+                    {(
+                      [
+                        {
+                          id: "macro" as const,
+                          label: "Show Macronutrients",
+                          menuId: "macronutrients-menu",
+                          keys: MACRO_DISPLAY_KEYS,
+                        },
+                        {
+                          id: "micro" as const,
+                          label: "Show Micronutrients",
+                          menuId: "micronutrients-menu",
+                          keys: MICRO_KEYS,
+                        },
+                      ] as const
+                    ).map(({ id, label, menuId, keys }) => {
+                      const open = nutrientMenuOpen === id;
+                      const selectedCount = keys.filter(
+                        (k) => showNutrients[k],
+                      ).length;
+                      return (
+                        <div key={id} className="relative">
+                          <button
+                            type="button"
+                            aria-expanded={open}
+                            aria-haspopup="true"
+                            aria-controls={menuId}
+                            onClick={() =>
+                              setNutrientMenuOpen((cur) =>
+                                cur === id ? null : id,
+                              )
+                            }
+                            className={`flex w-full items-center justify-between gap-2 rounded-xl border px-3.5 py-3 text-left text-sm font-medium text-white transition-colors focus:outline-none focus:ring-2 focus:ring-white ${
+                              selectedCount > 0
+                                ? "border-green-400/70 bg-green-500/25 hover:bg-green-500/35"
+                                : "border-white/25 bg-white/10 hover:bg-white/15"
+                            }`}
                           >
-                            <span className="text-xs text-white">
-                              {key.charAt(0).toUpperCase() + key.slice(1)}
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className="truncate">{label}</span>
+                              {selectedCount > 0 ? (
+                                <span className="shrink-0 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white">
+                                  {selectedCount}
+                                </span>
+                              ) : null}
                             </span>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={pressed ? "true" : "false"}
-                              aria-label={`Toggle ${key} in summary`}
-                              onClick={() =>
-                                setShowNutrients((prev) => ({
-                                  ...prev,
-                                  [key]: !prev[key],
-                                }))
-                              }
-                              className={`relative w-10 h-5 rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-white ${pressed ? "bg-green-500 border-green-400" : "bg-white/10 border-white/20"}`}
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 12 12"
+                              fill="none"
+                              aria-hidden="true"
+                              className={`shrink-0 opacity-80 transition-transform ${open ? "rotate-180" : ""}`}
                             >
-                              <span
-                                aria-hidden="true"
-                                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${pressed ? "translate-x-5" : "translate-x-0"}`}
+                              <path
+                                d="M3 4.5l3 3 3-3"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
                               />
-                            </button>
-                          </label>
-                        );
-                      })}
-                    </div>
+                            </svg>
+                          </button>
 
-                    {Object.values(showNutrients).some(Boolean) && (
-                      <div className="flex gap-2">
-                        {showNutrients.protein && (
-                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
-                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
-                              Protein
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.protein).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-100">
-                                g
-                              </span>
-                            </p>
-                          </div>
-                        )}
-                        {showNutrients.carbs && (
-                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
-                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
-                              Carbs
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.carbs).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-100">
-                                g
-                              </span>
-                            </p>
-                          </div>
-                        )}
-                        {showNutrients.fat && (
-                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
-                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
-                              Fat
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.fat).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-100">
-                                g
-                              </span>
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                          {open && (
+                            <div
+                              id={menuId}
+                              role="menu"
+                              aria-label={`${label} choices`}
+                              className="absolute left-0 right-0 z-40 mt-1.5 max-h-72 overflow-y-auto rounded-xl border border-white/25 bg-blue-950 py-1.5 shadow-xl"
+                            >
+                              <div className="flex items-center justify-between gap-2 border-b border-white/15 px-3 pb-2 pt-1">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-white/45">
+                                  Tap to show or hide
+                                </p>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={selectedCount === 0}
+                                  onClick={() => {
+                                    setShowNutrients((prev) => {
+                                      const next = { ...prev };
+                                      for (const key of keys) {
+                                        next[key] = false;
+                                      }
+                                      persistShowNutrients(next);
+                                      return next;
+                                    });
+                                  }}
+                                  className="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-white/90 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                                >
+                                  Clear all
+                                </button>
+                              </div>
+                              {keys.map((key) => {
+                                const meta = NUTRIENT_META[key];
+                                const pressed = showNutrients[key];
+                                return (
+                                  <button
+                                    key={key}
+                                    type="button"
+                                    role="menuitemcheckbox"
+                                    aria-checked={pressed}
+                                    onClick={() => {
+                                      setShowNutrients((prev) => {
+                                        const next = {
+                                          ...prev,
+                                          [key]: !prev[key],
+                                        };
+                                        persistShowNutrients(next);
+                                        return next;
+                                      });
+                                    }}
+                                    className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus:bg-white/10"
+                                  >
+                                    <span className="min-w-0">
+                                      <span className="block font-medium leading-snug">
+                                        {meta.label}
+                                      </span>
+                                      <span className="text-[11px] text-white/45">
+                                        {meta.unit}
+                                      </span>
+                                    </span>
+                                    <span
+                                      aria-hidden="true"
+                                      className={`relative h-5 w-9 shrink-0 rounded-full border transition-colors ${
+                                        pressed
+                                          ? "border-green-400 bg-green-500"
+                                          : "border-white/30 bg-white/15"
+                                      }`}
+                                    >
+                                      <span
+                                        className={`absolute top-0.5 size-4 rounded-full bg-white shadow-sm transition-[left,right] ${
+                                          pressed
+                                            ? "right-0.5 left-auto"
+                                            : "left-0.5 right-auto"
+                                        }`}
+                                      />
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
+
+                {(MACRO_DISPLAY_KEYS.some((k) => showNutrients[k]) ||
+                  MICRO_KEYS.some((k) => showNutrients[k])) && (
+                  <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+                    {[...MACRO_DISPLAY_KEYS, ...MICRO_KEYS]
+                      .filter((key) => showNutrients[key])
+                      .map((key) => {
+                        const meta = NUTRIENT_META[key];
+                        const raw =
+                          key === "protein" ||
+                          key === "carbs" ||
+                          key === "fat"
+                            ? Number(summary[key] ?? 0)
+                            : Number(summary.nutrients?.[key] ?? 0);
+                        return (
+                          <div
+                            key={key}
+                            className="rounded-lg bg-blue-950/90 border border-blue-800/70 px-3 py-2.5 text-center"
+                          >
+                            <p className="text-[11px] text-blue-50/90 uppercase tracking-wide font-medium leading-tight">
+                              {meta.label}
+                            </p>
+                            <p className="mt-0.5 text-lg font-bold text-white tabular-nums">
+                              {raw.toFixed(raw >= 100 ? 0 : 1)}
+                              <span className="ml-0.5 text-xs font-normal text-blue-100">
+                                {meta.unit}
+                              </span>
+                            </p>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
 
                 {/* Progress bar */}
                 <div className="mb-4">

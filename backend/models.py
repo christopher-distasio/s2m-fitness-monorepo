@@ -93,6 +93,8 @@ class FoodLog(Document):
     protein: Optional[float] = None
     carbs: Optional[float] = None
     fat: Optional[float] = None
+    # Fiber, sugar, micros, etc. — keys from nutrient_fields.EXTRA_NUTRIENT_FIELDS
+    extra_nutrients: Optional[Dict[str, float]] = None
     quantity: Optional[str] = None
     confidence: Optional[str] = None       # "high" | "medium" | "low"
     reasoning: Optional[str] = None
