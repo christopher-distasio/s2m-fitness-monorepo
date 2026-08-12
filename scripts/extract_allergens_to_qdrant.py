@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from allergen_extraction_logic import extract_allergen_states, extract_explicit_statement, MAY_CONTAIN_PATTERN
 
 CSV_PATH = "data/raw/FoodData_Central_branded_food_csv_2026-04-30/branded_food.csv"
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 
 CHUNK_SIZE = 5000          # rows read from CSV per chunk (memory efficiency)

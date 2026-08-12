@@ -5,7 +5,7 @@ affects whether SOURCE_GROUPS in nutrition_service.py will match anything.
 """
 from qdrant_client import QdrantClient
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 
 client = QdrantClient(url=QDRANT_URL)

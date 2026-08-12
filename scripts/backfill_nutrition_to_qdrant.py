@@ -29,7 +29,7 @@ from qdrant_client.http import models
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PROCESSED = _REPO_ROOT / "data" / "processed"
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 BATCH_SIZE = 200
 

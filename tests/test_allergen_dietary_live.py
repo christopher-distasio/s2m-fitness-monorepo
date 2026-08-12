@@ -24,7 +24,7 @@ def ensure_qdrant():
     try:
         from qdrant_client import QdrantClient
 
-        client = QdrantClient(url="http://localhost:6333", timeout=10)
+        client = QdrantClient(url="http://192.168.1.227:6333", timeout=10)
         client.get_collection("food-vectors")
     except Exception as exc:
         pytest.skip(f"Qdrant not available: {exc}")

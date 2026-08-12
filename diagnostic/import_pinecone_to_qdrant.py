@@ -8,7 +8,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
 PINECONE_EXPORT = "diagnostic/pinecone_export.json"
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 QDRANT_API_KEY = None  # Set if you added one to docker-compose.yml
 COLLECTION_NAME = "food-vectors"
 VECTOR_DIM = 3072  # text-embedding-3-large dimension
