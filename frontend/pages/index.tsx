@@ -1657,6 +1657,15 @@ export default function Home() {
     setStatus("");
   }
 
+  /** Card tap / Yes-log-it must beat barge-in and auto-listen, or Speak mode
+   * keeps the mic open and the voice loop overwrites the choice. */
+  function abortVoiceForUiChoice() {
+    suppressAutoListenRef.current = true;
+    cancelBargeInRef.current?.();
+    stopSpeaking();
+    cancelListeningSilent();
+  }
+
   async function saveGoal() {
     if (!goalInput) return;
     const {
@@ -1721,6 +1730,7 @@ export default function Home() {
   }
 
   async function confirmLog(uid: string, raw_input: string) {
+    abortVoiceForUiChoice();
     const res = await fetch(`${API_BASE}/food`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1753,6 +1763,7 @@ export default function Home() {
       raw_input: string;
     },
   ) {
+    abortVoiceForUiChoice();
     setLoadingBoth(true);
     try {
       const res = await fetch(`${API_BASE}/food`, {
@@ -1799,6 +1810,7 @@ export default function Home() {
     originalInput: string,
     source: "generic" | "brand",
   ): Promise<boolean> {
+    abortVoiceForUiChoice();
     setLoadingBoth(true);
     try {
       const res = await fetch(`${API_BASE}/food/parse`, {
@@ -1857,6 +1869,7 @@ export default function Home() {
   }
 
   function dismissPending() {
+    abortVoiceForUiChoice();
     setPendingParse(null);
     pendingParseRef.current = null;
     setStatus("");
