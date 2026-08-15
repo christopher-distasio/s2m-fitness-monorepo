@@ -381,28 +381,31 @@ async def parse_food_input(
             and resolution.get("status") == "needs_clarification"
         ):
             parsed["confidence"] = "medium"
+            brand_reason = (
+                "Could be a specific brand or a general item — the calories "
+                "differ a lot."
+            )
             parsed["resolution"] = {
                 "status": "needs_brand_choice",
                 "axis": "brand",
-                "reason": (
-                    "Could be a specific brand or a general item — the calories "
-                    "differ a lot."
-                ),
+                "reason": brand_reason,
                 "question": BRAND_CHOICE_QUESTION,
             }
+            parsed["reasoning"] = brand_reason
             # Withhold the mixed list; the filtered follow-up query builds it.
             parsed["candidates"] = []
             parsed["portion_options"] = []
             parsed["alternatives"] = []
             return _apply_confidence_guards(parsed, raw_input)
 
-        if (
-            resolution.get("status") == "needs_clarification"
-            and parsed.get("confidence") == "high"
-        ):
-            parsed["confidence"] = "medium"
-            if not parsed.get("reasoning"):
-                parsed["reasoning"] = resolution.get("reason")
+        if resolution.get("status") == "needs_clarification":
+            if parsed.get("confidence") == "high":
+                parsed["confidence"] = "medium"
+            # Prefer the data-driven reason over GPT "food is clear…" copy so
+            # the Less Sure card matches why we're asking.
+            data_reason = resolution.get("reason")
+            if data_reason:
+                parsed["reasoning"] = data_reason
 
         # For medium/low confidence, prefer data-grounded alternatives over the
         # model's free-text guesses: real, priced options the user can pick.

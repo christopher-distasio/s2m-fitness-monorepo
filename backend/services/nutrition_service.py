@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -281,25 +282,141 @@ def format_branded_name(name: str | None, brand: str | None) -> str:
     return f"{brand} {name}"
 
 
+# Serving-size-looking strings that are not real food names (e.g. "100 g").
+_PLACEHOLDER_FOOD_NAME_RE = re.compile(
+    r"^\d+(\.\d+)?\s*(g|gram|grams|oz|onz|ounce|ounces|ml|l|cup|cups|piece|pieces)?\.?$",
+    re.IGNORECASE,
+)
+
+
+def _candidate_display_name(c: dict) -> str:
+    return format_branded_name(c.get("name"), c.get("brand")).strip()
+
+
+def _candidate_calories_int(c: dict) -> int:
+    try:
+        return int(round(float(c.get("calories") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _candidate_dedupe_key(c: dict) -> str:
+    """Same product + same logged calories → one clarification row."""
+    name = _candidate_display_name(c).lower()
+    serving = (c.get("serving_label") or "").strip().lower()
+    return f"{name}|{serving}|{_candidate_calories_int(c)}"
+
+
+def _candidate_soft_dedupe_key(c: dict) -> str:
+    """Collapse SKU clones that only differ on serving label wording."""
+    name = _candidate_display_name(c).lower()
+    return f"{name}|{_candidate_calories_int(c)}"
+
+
+def _is_junk_clarification_candidate(c: dict, *, allow_zero_cal: bool) -> bool:
+    name = (c.get("name") or "").strip()
+    display = _candidate_display_name(c)
+    if not name or not display:
+        return True
+    if _PLACEHOLDER_FOOD_NAME_RE.match(name) or _PLACEHOLDER_FOOD_NAME_RE.match(display):
+        return True
+    if len(display) < 2:
+        return True
+    if not allow_zero_cal and _candidate_calories_int(c) <= 0:
+        return True
+    return False
+
+
+def clean_clarification_candidates(
+    candidates: list[dict],
+    *,
+    primary: dict | None = None,
+    query: str = "",
+) -> list[dict]:
+    """Drop junk/0-cal rows, exclude the primary pick, and dedupe display clones.
+
+    Used before assess_resolution and returned to the client so identity
+    clarification is not a wall of identical branded SKUs.
+    """
+    allow_zero = is_zero_calorie_query(query)
+    primary_id = None
+    primary_key = None
+    primary_soft = None
+    if primary:
+        if primary.get("fdc_id") is not None:
+            primary_id = str(primary["fdc_id"])
+        primary_key = _candidate_dedupe_key(primary)
+        primary_soft = _candidate_soft_dedupe_key(primary)
+
+    seen_full: set[str] = set()
+    seen_soft: set[str] = set()
+    out: list[dict] = []
+    for c in candidates:
+        if primary_id is not None and str(c.get("fdc_id")) == primary_id:
+            continue
+        if _is_junk_clarification_candidate(c, allow_zero_cal=allow_zero):
+            continue
+        full_key = _candidate_dedupe_key(c)
+        soft_key = _candidate_soft_dedupe_key(c)
+        if primary_key and full_key == primary_key:
+            continue
+        if primary_soft and soft_key == primary_soft:
+            continue
+        if full_key in seen_full or soft_key in seen_soft:
+            continue
+        seen_full.add(full_key)
+        seen_soft.add(soft_key)
+        out.append(c)
+    return out
+
+
+_NUMERIC_PORTION_TOKEN_RE = re.compile(r"^\d+$")
+_UNUSABLE_PORTION_DESC = {"quantity not specified", "not specified", ""}
+
+
+def _is_numeric_portion_token(value: str) -> bool:
+    """FNDDS stores measure-unit *codes* in modifier (e.g. '60343')."""
+    return bool(_NUMERIC_PORTION_TOKEN_RE.match((value or "").strip()))
+
+
+def _portion_description_usable(description: str) -> bool:
+    return description.strip().lower() not in _UNUSABLE_PORTION_DESC
+
+
 def _format_portion_label(portion: dict) -> str:
-    """Build a human-readable label from an SR Legacy portion row, e.g.
-    '1 cup, mashed' or '1 medium (7" to 7-7/8" long)'. Falls back through
-    modifier -> unit -> description -> 'serving' so we always say something."""
-    amount = portion.get("amount") or 1
+    """Build a human-readable label from a portion row.
+
+    Dataset shapes differ:
+    - SR Legacy: amount + text modifier ('cup, mashed') → '1 cup, mashed'
+    - FNDDS: description is already the full phrase ('1 banana'); modifier is
+      a numeric measure code and must NOT be shown as the unit.
+    """
     modifier = (portion.get("modifier") or "").strip()
     unit = (portion.get("unit") or "").strip()
     description = (portion.get("description") or "").strip()
 
-    if modifier:
+    # Survey/FNDDS rows: prefer the ready-made household phrase.
+    if _portion_description_usable(description):
+        return description
+
+    if modifier and not _is_numeric_portion_token(modifier):
         unit_part = modifier
     elif unit and unit.lower() != "undetermined":
         unit_part = unit
-    elif description:
-        unit_part = description
     else:
         unit_part = "serving"
 
-    return f"{amount:g} {unit_part}".strip()
+    try:
+        amount_f = float(portion.get("amount")) if portion.get("amount") is not None else 1.0
+    except (TypeError, ValueError):
+        amount_f = 1.0
+    if amount_f <= 0:
+        amount_f = 1.0
+
+    # Avoid "1 1 cup" if a description slipped through without the early return.
+    if re.match(r"^\d", unit_part):
+        return unit_part
+    return f"{amount_f:g} {unit_part}".strip()
 
 
 def build_serving_label(metadata: dict, serving_size_g: float, serving_source: str) -> str:
@@ -314,8 +431,13 @@ def build_serving_label(metadata: dict, serving_size_g: float, serving_source: s
 
     if serving_source == "sr_legacy_default_portion":
         for portion in _parse_portions(metadata):
-            if portion.get("gram_weight"):
-                return _format_portion_label(portion)
+            if not portion.get("gram_weight"):
+                continue
+            description = (portion.get("description") or "").strip()
+            # Skip FNDDS placeholder rows when a real named portion exists later.
+            if description and not _portion_description_usable(description):
+                continue
+            return _format_portion_label(portion)
 
     return f"{serving_size_g:g} g"
 
@@ -334,10 +456,17 @@ def build_portion_options(metadata: dict) -> list[dict]:
             grams = portion.get("gram_weight")
             if not grams or grams in seen_grams:
                 continue
+            description = (portion.get("description") or "").strip()
+            if description and not _portion_description_usable(description):
+                continue
+            label = _format_portion_label(portion)
+            # Never offer measure-code leftovers like "1 60343".
+            if _is_numeric_portion_token(label.split()[-1] if label else ""):
+                continue
             seen_grams.add(grams)
             macros = scale_nutrients(metadata, grams)
             options.append({
-                "label": _format_portion_label(portion),
+                "label": label,
                 "gram_weight": grams,
                 **macros,
             })
@@ -665,11 +794,27 @@ async def lookup_food(
     household_serving_fulltext = metadata.get("household_serving_fulltext", "")
     whole_container = is_whole_container_serving(household_serving_fulltext)
 
-    candidates = [
+    serving_label = build_serving_label(metadata, serving_size_g, serving_source)
+    primary_summary = {
+        "fdc_id": fdc_id,
+        "name": metadata.get("name"),
+        "brand": get_brand(metadata),
+        "serving_label": serving_label,
+        "calories": calories,
+    }
+
+    # Over-fetch then clean: branded indexes often return several SKUs that
+    # collapse to the same display name/calories after formatting.
+    raw_candidates = [
         summarize_match(m)
         for m in matches
         if m.get("score", 0) >= CANDIDATE_SCORE_FLOOR
-    ][:MAX_CANDIDATES]
+    ][: MAX_CANDIDATES * 4]
+    candidates = clean_clarification_candidates(
+        raw_candidates,
+        primary=primary_summary,
+        query=query,
+    )[:MAX_CANDIDATES]
 
     portion_options = build_portion_options(metadata)
 
@@ -700,7 +845,7 @@ async def lookup_food(
         "fat": fat,
         "serving_size_g": serving_size_g,
         "serving_source": serving_source,
-        "serving_label": build_serving_label(metadata, serving_size_g, serving_source),
+        "serving_label": serving_label,
         "serving_note": "This serving size represents the entire container." if whole_container else None,
         "source": "usda_rag",
         "candidates": candidates,
