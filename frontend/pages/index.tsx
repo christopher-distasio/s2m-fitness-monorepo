@@ -6,6 +6,22 @@ import { supabase } from "../lib/supabaseClient";
 import { speak as _speak, stopSpeaking, onSpeakingChange, isSpeaking } from "../lib/speak";
 import { speakWithBargeIn } from "../lib/bargeIn";
 import { formatBrandedName } from "../lib/foodName";
+import {
+  defaultDietaryPreferences,
+  dietaryPreferencesPayload,
+  normalizeDietaryPreferences,
+  type DietaryPreferences,
+} from "../lib/dietaryPreferences";
+import { DietaryPreferencesPanel } from "../components/DietaryPreferencesPanel";
+import {
+  MACRO_DISPLAY_KEYS,
+  MICRO_KEYS,
+  NUTRIENT_META,
+  extrasFromNutrientPick,
+  persistShowNutrients,
+  readStoredShowNutrients,
+  type ShowNutrientsState,
+} from "../lib/nutrientDisplay";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -105,6 +121,8 @@ const MIN_RECORDING_BYTES = 8000;
 // yes → listen another 8s; no → stop. Not the old "say that again / be more specific".
 const MORE_TIME_MESSAGE = "Do you need more time?";
 const SAY_NUMBER_OR_WORD = "Say the number or the word.";
+const SAY_LOG_IT_OR_OPTIONS =
+  "Say log it to confirm, or say options to hear other matches.";
 
 function readStoredBoolean(key: string, defaultValue: boolean) {
   if (typeof window === "undefined") return defaultValue;
@@ -271,6 +289,7 @@ interface ParsedResult {
     fats: number;
     sugar: number;
   };
+  nutrients?: Record<string, number>;
   confidence?: "high" | "medium" | "low";
   reasoning?: string;
   alternatives?: string[];
@@ -313,6 +332,7 @@ interface ClarifyOption {
     protein?: number;
     carbs?: number;
     fat?: number;
+    nutrients?: Record<string, number>;
     quantity?: string;
     raw_input: string;
   };
@@ -349,6 +369,20 @@ function speakPortion(foodName: string, p: PortionOption): string {
   return parts.join(", ");
 }
 
+/** Payload for "Yes, log it": the headline match already shown on the card. */
+function headlineLogPick(parsed: ParsedResult, rawInput: string) {
+  return {
+    food_name: formatBrandedName(parsed.food, parsed.brand),
+    calories: parsed.calories,
+    protein: parsed.macronutrients?.protein,
+    carbs: parsed.macronutrients?.carbohydrates,
+    fat: parsed.macronutrients?.fats,
+    nutrients: parsed.nutrients,
+    quantity: parsed.serving_label || parsed.serving_size,
+    raw_input: rawInput,
+  };
+}
+
 /**
  * The FULL flat, ordered list of selectable options: candidates first, then
  * portions — same top-to-bottom order the card renders and voice speaks. Each
@@ -378,6 +412,9 @@ function allClarifyOptions(
         protein: c.protein,
         carbs: c.carbs,
         fat: c.fat,
+        nutrients: extrasFromNutrientPick(
+          c as unknown as Record<string, unknown>,
+        ),
         quantity: c.serving_label,
         raw_input: rawInput,
       },
@@ -396,6 +433,9 @@ function allClarifyOptions(
         protein: p.protein,
         carbs: p.carbs,
         fat: p.fat,
+        nutrients: extrasFromNutrientPick(
+          p as unknown as Record<string, unknown>,
+        ),
         quantity: p.label,
         raw_input: rawInput,
       },
@@ -431,6 +471,19 @@ function withNumberCue(body: string, offerMore = false): string {
   let msg = `${SAY_NUMBER_OR_WORD} ${body}`;
   if (offerMore) msg += " Or say more to hear the rest.";
   return msg;
+}
+
+function buildHeadlineConfirmSpeech(parsed: ParsedResult): string {
+  const name = formatBrandedName(parsed.food, parsed.brand);
+  const serving = (parsed.serving_label || parsed.serving_size || "").trim();
+  const cal =
+    parsed.calories != null && Number.isFinite(Number(parsed.calories))
+      ? `${Math.round(Number(parsed.calories))} calories`
+      : "";
+  const lead = ["I think this is " + name, serving, cal]
+    .filter(Boolean)
+    .join(", ");
+  return `${lead}. ${SAY_LOG_IT_OR_OPTIONS}`;
 }
 
 function buildNumberedClarificationSpeech(
@@ -514,6 +567,7 @@ export default function Home() {
     protein: 0,
     carbs: 0,
     fat: 0,
+    nutrients: {} as Record<string, number>,
     entry_count: 0,
   });
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -522,6 +576,14 @@ export default function Home() {
   const chunksRef = useRef<Blob[]>([]);
   const [calorieGoal, setCalorieGoal] = useState(2000);
   const [goalInput, setGoalInput] = useState("");
+  const [dietaryPrefs, setDietaryPrefs] = useState<DietaryPreferences>(
+    () => defaultDietaryPreferences(),
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [savingDietaryPrefs, setSavingDietaryPrefs] = useState(false);
+  const [dietaryPrefsStatus, setDietaryPrefsStatus] = useState("");
+  const settingsDetailsRef = useRef<HTMLDetailsElement>(null);
+  const dietaryHeadingRef = useRef<HTMLHeadingElement>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const confidenceSectionRef = useRef<HTMLElement | null>(null);
@@ -554,11 +616,14 @@ export default function Home() {
     (options?: { fromAutoListen?: boolean }) => Promise<void>
   >(async () => {});
   const [muted, setMuted] = useState(false);
-  const [showNutrients, setShowNutrients] = useState({
-    protein: false,
-    carbs: false,
-    fat: false,
-  });
+  const [showNutrients, setShowNutrients] = useState<ShowNutrientsState>(() =>
+    readStoredShowNutrients(),
+  );
+  /** Which nutrient picker is open: macros, micros, or neither. */
+  const [nutrientMenuOpen, setNutrientMenuOpen] = useState<
+    null | "macro" | "micro"
+  >(null);
+  const nutrientMenusRef = useRef<HTMLDivElement>(null);
   const [conversationHistory, setConversationHistory] = useState<
     Array<{ role: "user" | "assistant"; content: string }>
   >([]);
@@ -605,11 +670,13 @@ export default function Home() {
   // consistent with the full expanded set. Owned by the frontend (not
   // conversation_history / clarification.py); those only classify the reply.
   const spokenClarifyOptionsRef = useRef<ClarifyOption[]>([]);
+  const spokenListAloudRef = useRef(false);
   const rememberSpokenClarifyOptions = (options: ClarifyOption[]) => {
     spokenClarifyOptionsRef.current = options;
   };
   const clearSpokenClarifyOptions = () => {
     spokenClarifyOptionsRef.current = [];
+    spokenListAloudRef.current = false;
   };
   // Set when we just asked MORE_TIME_MESSAGE; the next voice reply is yes/no
   // (or a normal answer that falls through). Applies to every mic session.
@@ -618,6 +685,8 @@ export default function Home() {
   const cancelRecordingRef = useRef(false);
   // User cut TTS with the Speak button — don't auto-open the mic afterward.
   const suppressAutoListenRef = useRef(false);
+  // Card tap / Yes-log-it / dismiss — interrupt THIS prompt's listen only.
+  const uiChoiceInFlightRef = useRef(false);
   // Active barge-in session: Speak/Stop sets this to discard the mic clip.
   const cancelBargeInRef = useRef<(() => void) | null>(null);
   const processVoiceBlobRef = useRef<
@@ -646,8 +715,16 @@ export default function Home() {
       if (!id) return;
       const res = await fetch(`${API_BASE}/food/${id}/summary`);
       const data = await res.json();
-      setSummary(data);
-      return data as typeof summary;
+      const next = {
+        calories: data.calories ?? 0,
+        protein: data.protein ?? 0,
+        carbs: data.carbs ?? 0,
+        fat: data.fat ?? 0,
+        nutrients: (data.nutrients ?? {}) as Record<string, number>,
+        entry_count: data.entry_count ?? 0,
+      };
+      setSummary(next);
+      return next;
     },
     [userId],
   );
@@ -665,6 +742,23 @@ export default function Home() {
     return data as { calorie_goal: number };
   }, []);
 
+  const fetchDietaryPrefs = useCallback(async (uid?: string) => {
+    const id =
+      uid ??
+      (
+        await supabase.auth.getSession()
+      ).data.session?.user.id;
+    if (!id) return;
+    try {
+      const res = await fetch(`${API_BASE}/user/${id}/dietary-preferences`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setDietaryPrefs(normalizeDietaryPreferences(data));
+    } catch {
+      // Keep defaults if preferences endpoint is unreachable.
+    }
+  }, []);
+
   const GUEST_USER_ID = "c0daaa18-4a82-4022-be8e-e21224683f88";
   const isGuest = userId === GUEST_USER_ID;
 
@@ -679,10 +773,10 @@ export default function Home() {
   );
 
   /**
-   * Numbered clarification TTS with mic open for barge-in. Returns true when a
-   * barge-in clip was handled (or Stop discarded it) — caller should skip
-   * maybeAutoListen. Works in See and Speak (mic exists in both); muted falls
-   * back to plain speak.
+   * Speak the numbered choices with the mic open (barge-in). Caller auto-listens
+   * afterward if this returns false — that is the "wait for a spoken choice"
+   * loop. Returns true only when barge-in already handled the reply, or a card
+   * tap consumed this prompt (do not open the mic again).
    */
   async function speakClarificationWithBargeIn(
     msg: string,
@@ -692,6 +786,10 @@ export default function Home() {
       await speak(msg);
       return false;
     }
+    // New prompt: always speak and listen. A leftover tap/stop flag from an
+    // earlier card must not cancel this readback or skip the follow-up listen.
+    uiChoiceInFlightRef.current = false;
+    suppressAutoListenRef.current = false;
     let cancelled = false;
     cancelBargeInRef.current = () => {
       cancelled = true;
@@ -703,16 +801,19 @@ export default function Home() {
       {
         onMicReady: () => setRecordingBoth(true),
         onBargeIn: () => setStatus("Listening..."),
-        shouldCancel: () => cancelled || suppressAutoListenRef.current,
+        shouldCancel: () => cancelled,
       },
     );
     cancelBargeInRef.current = null;
-    // Flush so follow-on maybeAutoListen / startRecording see mic free.
     flushSync(() => {
       setRecordingBoth(false);
       setAutoListening(false);
     });
 
+    if (uiChoiceInFlightRef.current) {
+      suppressAutoListenRef.current = false;
+      return true;
+    }
     if (suppressAutoListenRef.current) {
       suppressAutoListenRef.current = false;
       return true;
@@ -752,6 +853,18 @@ export default function Home() {
   }, [wantsVoiceOnOpen]);
 
   const maybeAutoListen = useCallback(async () => {
+    if (uiChoiceInFlightRef.current) {
+      return;
+    }
+    const awaitingClarification = pendingParseRef.current !== null;
+    // While a Less Sure card is up, always listen for "log it" / "options" /
+    // a number. Do not let a leftover suppress flag skip that wait.
+    if (awaitingClarification) {
+      if (recordingRef.current) return;
+      flushSync(() => setLoadingBoth(false));
+      await startRecordingRef.current({ fromAutoListen: true });
+      return;
+    }
     if (suppressAutoListenRef.current) {
       suppressAutoListenRef.current = false;
       return;
@@ -759,14 +872,7 @@ export default function Home() {
     if (muted || loadingRef.current || recordingRef.current) {
       return;
     }
-    const awaitingClarification = pendingParseRef.current !== null;
     const awaitingPostLogin = postLoginVoiceSessionRef.current;
-    // Clarification answers re-open the mic in BOTH See and Speak — the Speak
-    // button exists in both modes and must keep listening after choices.
-    if (awaitingClarification) {
-      await startRecordingRef.current({ fromAutoListen: true });
-      return;
-    }
     // Post-login greet auto-listen stays Speak-mode + pref gated.
     if (mode !== "speak" || !autoListen || !awaitingPostLogin) return;
     await startRecordingRef.current({ fromAutoListen: true });
@@ -862,6 +968,7 @@ export default function Home() {
       const [summaryData] = await Promise.all([
         fetchSummary(userId),
         fetchProfile(userId),
+        fetchDietaryPrefs(userId),
       ]);
       if (cancelled || hasOnOpenSpokenRef.current || !summaryData) return;
 
@@ -895,6 +1002,7 @@ export default function Home() {
     fetchLogs,
     fetchSummary,
     fetchProfile,
+    fetchDietaryPrefs,
     greetOnOpen,
     summaryOnOpen,
     wantsVoiceOnOpen,
@@ -910,7 +1018,17 @@ export default function Home() {
     conversationHistoryRef.current = conversationHistory;
   }, [conversationHistory]);
 
-  useEffect(() => onSpeakingChange(setSpeaking), []);
+  useEffect(() => {
+    return onSpeakingChange((next) => {
+      setSpeaking(next);
+      if (next) return;
+      if (uiChoiceInFlightRef.current) return;
+      if (suppressAutoListenRef.current) return;
+      if (!pendingParseRef.current) return;
+      if (recordingRef.current) return;
+      void startRecordingRef.current({ fromAutoListen: true });
+    });
+  }, []);
 
   useEffect(() => {
     if (!status) return;
@@ -978,6 +1096,27 @@ export default function Home() {
       document.removeEventListener("keydown", handleEscape);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!nutrientMenuOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (
+        nutrientMenusRef.current &&
+        !nutrientMenusRef.current.contains(e.target as Node)
+      ) {
+        setNutrientMenuOpen(null);
+      }
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") setNutrientMenuOpen(null);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [nutrientMenuOpen]);
 
   useEffect(() => {
     if (!userId) return;
@@ -1094,18 +1233,23 @@ export default function Home() {
           rememberSpokenClarifyOptions(
             clarifyOptions(parsed, textInput, false),
           );
-          msg = buildNumberedClarificationSpeech(parsed, textInput, false);
+          spokenListAloudRef.current = false;
+          msg = buildHeadlineConfirmSpeech(parsed);
         }
         setStatus(msg);
         setTextInput("");
-        const numberedClarify =
-          isBrandChoice(parsed) || parsed.confidence !== "low";
-        if (numberedClarify) {
+        if (isBrandChoice(parsed)) {
           const barged = await speakClarificationWithBargeIn(msg, uid);
-          if (!barged) shouldAutoListen = true;
+          if (uiChoiceInFlightRef.current) {
+            shouldAutoListen = false;
+          } else if (!barged) {
+            shouldAutoListen = true;
+          }
         } else {
-          shouldAutoListen = true;
           await speak(msg);
+          flushSync(() => setLoadingBoth(false));
+          shouldAutoListen =
+            !uiChoiceInFlightRef.current && pendingParseRef.current != null;
         }
       }
     } catch {
@@ -1115,7 +1259,12 @@ export default function Home() {
     } finally {
       flushSync(() => setLoadingBoth(false));
     }
-    if (shouldAutoListen) await maybeAutoListen();
+    if (
+      shouldAutoListen ||
+      (pendingParseRef.current != null && !uiChoiceInFlightRef.current)
+    ) {
+      await maybeAutoListen();
+    }
   }
 
   async function deleteLog(id: string) {
@@ -1202,6 +1351,7 @@ export default function Home() {
         clarification?: {
           type:
             | "select"
+            | "confirm"
             | "repeat"
             | "more"
             | "brand_choice"
@@ -1264,6 +1414,12 @@ export default function Home() {
               cmd.value,
             );
             if (!barged) shouldAutoListen = true;
+          } else if (cmd.type === "confirm") {
+            await logResolved(
+              pending.uid,
+              headlineLogPick(pending.parsed, pending.raw_input),
+            );
+            return;
           } else if (cmd.type === "select" && cmd.index != null) {
             // Resolve against the list most recently spoken (trimmed default,
             // or full expanded set after "more") — no re-parse. Fall back to
@@ -1292,18 +1448,24 @@ export default function Home() {
             );
             if (!barged) shouldAutoListen = true;
           } else if (cmd.type === "more") {
-            // Speak only the trimmed-off items, then append them to the
-            // tracked spoken list so later number/repeat use the full set.
             const all = allClarifyOptions(
               pending.parsed,
               pending.raw_input,
             );
             setClarifyExpandedBoth(true);
             rememberSpokenClarifyOptions(all);
-            const msg = buildMoreClarificationSpeech(
-              pending.parsed,
-              pending.raw_input,
-            );
+            const firstRead = !spokenListAloudRef.current;
+            spokenListAloudRef.current = true;
+            const msg = firstRead
+              ? buildNumberedClarificationSpeech(
+                  pending.parsed,
+                  pending.raw_input,
+                  false,
+                )
+              : buildMoreClarificationSpeech(
+                  pending.parsed,
+                  pending.raw_input,
+                );
             setStatus(msg);
             const barged = await speakClarificationWithBargeIn(
               msg,
@@ -1311,11 +1473,33 @@ export default function Home() {
             );
             if (!barged) shouldAutoListen = true;
           } else if (cmd.type === "unrecognized") {
-            // Missed the number — re-ask without re-parsing food (that looped
-            // the same list). Brand gate gets the brand prompt again.
             const msg = isBrandChoice(pending.parsed)
               ? `I didn't catch that. ${BRAND_CHOICE_SPEECH}`
-              : (() => {
+              : spokenListAloudRef.current
+                ? (() => {
+                    const options =
+                      spokenClarifyOptionsRef.current.length > 0
+                        ? spokenClarifyOptionsRef.current
+                        : clarifyOptions(
+                            pending.parsed,
+                            pending.raw_input,
+                            clarifyExpandedRef.current,
+                          );
+                    const offerMore =
+                      allClarifyOptions(pending.parsed, pending.raw_input)
+                        .length > options.length;
+                    return `I didn't catch a number. ${buildSpeechFromSpokenOptions(pending.parsed, options, offerMore)}`;
+                  })()
+                : `I didn't catch that. ${buildHeadlineConfirmSpeech(pending.parsed)}`;
+            setStatus(msg);
+            const barged = await speakClarificationWithBargeIn(
+              msg,
+              pending.uid,
+            );
+            if (!barged) shouldAutoListen = true;
+          } else {
+            const msg = spokenListAloudRef.current
+              ? (() => {
                   const options =
                     spokenClarifyOptionsRef.current.length > 0
                       ? spokenClarifyOptionsRef.current
@@ -1327,32 +1511,13 @@ export default function Home() {
                   const offerMore =
                     allClarifyOptions(pending.parsed, pending.raw_input)
                       .length > options.length;
-                  return `I didn't catch a number. ${buildSpeechFromSpokenOptions(pending.parsed, options, offerMore)}`;
-                })();
-            setStatus(msg);
-            const barged = await speakClarificationWithBargeIn(
-              msg,
-              pending.uid,
-            );
-            if (!barged) shouldAutoListen = true;
-          } else {
-            // "repeat" — exact list most recently spoken (same items/order).
-            const options =
-              spokenClarifyOptionsRef.current.length > 0
-                ? spokenClarifyOptionsRef.current
-                : clarifyOptions(
+                  return buildSpeechFromSpokenOptions(
                     pending.parsed,
-                    pending.raw_input,
-                    clarifyExpandedRef.current,
+                    options,
+                    offerMore,
                   );
-            const offerMore =
-              allClarifyOptions(pending.parsed, pending.raw_input).length >
-              options.length;
-            const msg = buildSpeechFromSpokenOptions(
-              pending.parsed,
-              options,
-              offerMore,
-            );
+                })()
+              : buildHeadlineConfirmSpeech(pending.parsed);
             setStatus(msg);
             const barged = await speakClarificationWithBargeIn(
               msg,
@@ -1418,10 +1583,8 @@ export default function Home() {
             { role: "user", content: data.transcription ?? "" },
             { role: "assistant", content: JSON.stringify(data.parsed) },
           ]);
-          // Brand-vs-generic gate comes first; otherwise a numbered list so
-          // the user can answer "one", "two"… (even at low confidence, as
-          // long as there are grounded options — the builder falls back to a
-          // "be more specific" prompt only when there's genuinely nothing).
+          // Headline first so the user can say "log it" before hearing
+          // alternates. Brand-vs-generic still comes first when needed.
           let msg: string;
           if (isBrandChoice(data.parsed)) {
             clearSpokenClarifyOptions();
@@ -1433,15 +1596,23 @@ export default function Home() {
               false,
             );
             rememberSpokenClarifyOptions(spoken);
-            msg = buildNumberedClarificationSpeech(
-              data.parsed,
-              data.transcription ?? "",
-              false,
-            );
+            spokenListAloudRef.current = false;
+            msg = buildHeadlineConfirmSpeech(data.parsed);
           }
           setStatus(msg);
-          const barged = await speakClarificationWithBargeIn(msg, uid);
-          if (!barged) shouldAutoListen = true;
+          if (isBrandChoice(data.parsed)) {
+            const barged = await speakClarificationWithBargeIn(msg, uid);
+            if (uiChoiceInFlightRef.current) {
+              shouldAutoListen = false;
+            } else if (!barged) {
+              shouldAutoListen = true;
+            }
+          } else {
+            await speak(msg);
+            flushSync(() => setLoadingBoth(false));
+            shouldAutoListen =
+              !uiChoiceInFlightRef.current && pendingParseRef.current != null;
+          }
         }
       }
     } catch (err) {
@@ -1457,12 +1628,23 @@ export default function Home() {
     } finally {
       flushSync(() => setLoadingBoth(false));
     }
-    if (shouldAutoListen) await maybeAutoListen();
+    if (
+      shouldAutoListen ||
+      (pendingParseRef.current != null && !uiChoiceInFlightRef.current)
+    ) {
+      await maybeAutoListen();
+    }
   }
   processVoiceBlobRef.current = processVoiceBlob;
 
   async function startRecording(options?: { fromAutoListen?: boolean }) {
-    if (recordingRef.current || loadingRef.current) return;
+    if (options?.fromAutoListen) {
+      flushSync(() => setAutoListening(true));
+    }
+    if (recordingRef.current) return;
+    // Clarification follow-up listen must not be blocked by a leftover loading
+    // flag from the parse/TTS request that just finished.
+    if (loadingRef.current && !options?.fromAutoListen) return;
     // Unlock audio context for Safari
     const AudioContext =
       window.AudioContext || (window as any).webkitAudioContext;
@@ -1531,7 +1713,16 @@ export default function Home() {
     mediaRecorderRef.current = recorder;
     recorder.start();
     setRecordingBoth(true);
-    setStatus("Recording...");
+    if (pendingParseRef.current) {
+      setAutoListening(true);
+      setStatus((prev) =>
+        prev.includes("Listening")
+          ? prev
+          : `${prev} Listening now — say log it or options.`.trim(),
+      );
+    } else {
+      setStatus("Recording...");
+    }
     recordingTimedOutRef.current = false;
     clearRecordingTimeout();
     recordingTimeoutIdRef.current = setTimeout(() => {
@@ -1559,6 +1750,16 @@ export default function Home() {
     setStatus("");
   }
 
+  /** Interrupt in-progress speech/listen for a card tap only — does not disable
+   * speak-then-listen for the next (or current unfinished) clarification. */
+  function abortVoiceForUiChoice() {
+    uiChoiceInFlightRef.current = true;
+    suppressAutoListenRef.current = true;
+    cancelBargeInRef.current?.();
+    stopSpeaking();
+    cancelListeningSilent();
+  }
+
   async function saveGoal() {
     if (!goalInput) return;
     const {
@@ -1576,7 +1777,54 @@ export default function Home() {
     speak(`Calorie goal set to ${goalInput} calories`);
   }
 
+  async function saveDietaryPrefs() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const uid = session?.user.id ?? userId;
+    if (!uid) {
+      setDietaryPrefsStatus("Sign in to save preferences");
+      return;
+    }
+    setSavingDietaryPrefs(true);
+    setDietaryPrefsStatus("");
+    try {
+      const res = await fetch(`${API_BASE}/user/${uid}/dietary-preferences`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(dietaryPreferencesPayload(dietaryPrefs)),
+      });
+      if (!res.ok) {
+        setDietaryPrefsStatus("Could not save — try again");
+        return;
+      }
+      const data = await res.json();
+      setDietaryPrefs(normalizeDietaryPreferences(data));
+      setDietaryPrefsStatus("Saved");
+      speak("Dietary preferences saved");
+    } catch {
+      setDietaryPrefsStatus("Could not save — try again");
+    } finally {
+      setSavingDietaryPrefs(false);
+    }
+  }
+
+  function openDietarySettings() {
+    setMenuOpen(false);
+    setHowItWorksOpen(false);
+    setModeAndPersist("see");
+    setSettingsOpen(true);
+    window.setTimeout(() => {
+      settingsDetailsRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      dietaryHeadingRef.current?.focus();
+    }, 80);
+  }
+
   async function confirmLog(uid: string, raw_input: string) {
+    abortVoiceForUiChoice();
     const res = await fetch(`${API_BASE}/food`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1604,10 +1852,12 @@ export default function Home() {
       protein?: number;
       carbs?: number;
       fat?: number;
+      nutrients?: Record<string, number>;
       quantity?: string;
       raw_input: string;
     },
   ) {
+    abortVoiceForUiChoice();
     setLoadingBoth(true);
     try {
       const res = await fetch(`${API_BASE}/food`, {
@@ -1622,6 +1872,7 @@ export default function Home() {
           protein: pick.protein,
           carbs: pick.carbs,
           fat: pick.fat,
+          nutrients: pick.nutrients,
           quantity: pick.quantity,
         }),
       });
@@ -1653,6 +1904,7 @@ export default function Home() {
     originalInput: string,
     source: "generic" | "brand",
   ): Promise<boolean> {
+    abortVoiceForUiChoice();
     setLoadingBoth(true);
     try {
       const res = await fetch(`${API_BASE}/food/parse`, {
@@ -1676,6 +1928,7 @@ export default function Home() {
           protein: parsed.macronutrients?.protein,
           carbs: parsed.macronutrients?.carbohydrates,
           fat: parsed.macronutrients?.fats,
+          nutrients: parsed.nutrients,
           quantity: parsed.serving_size,
           raw_input: originalInput,
         });
@@ -1697,19 +1950,20 @@ export default function Home() {
       rememberSpokenClarifyOptions(
         clarifyOptions(parsed, originalInput, false),
       );
-      const msg = buildNumberedClarificationSpeech(
-        parsed,
-        originalInput,
-        false,
-      );
+      spokenListAloudRef.current = false;
+      const msg = buildHeadlineConfirmSpeech(parsed);
       setStatus(msg);
-      return await speakClarificationWithBargeIn(msg, uid);
+      uiChoiceInFlightRef.current = false;
+      suppressAutoListenRef.current = false;
+      await speak(msg);
+      return false;
     } finally {
       flushSync(() => setLoadingBoth(false));
     }
   }
 
   function dismissPending() {
+    abortVoiceForUiChoice();
     setPendingParse(null);
     pendingParseRef.current = null;
     setStatus("");
@@ -1759,6 +2013,15 @@ export default function Home() {
             <span className="text-[10px] leading-tight">Tap to dismiss</span>
           </button>
         </div>
+        {autoListening && !brandChoice && (
+          <p
+            role="status"
+            className="mb-3 flex items-center gap-2 text-sm font-medium text-amber-200"
+          >
+            <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-amber-300" />
+            Listening — say log it or options
+          </p>
+        )}
         {!brandChoice && (
           <>
             <p className="text-white text-sm mb-1">
@@ -2015,7 +2278,10 @@ export default function Home() {
             <button
               type="button"
               onClick={() =>
-                confirmLog(pendingParse.uid, pendingParse.raw_input)
+                logResolved(
+                  pendingParse.uid,
+                  headlineLogPick(parsed, pendingParse.raw_input),
+                )
               }
               className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
               aria-label={`Confirm and log ${parsed.food}`}
@@ -2349,6 +2615,14 @@ export default function Home() {
                 <button
                   type="button"
                   role="menuitem"
+                  onClick={openDietarySettings}
+                  className="w-full px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-white/10 focus:outline-none focus:bg-white/10"
+                >
+                  Dietary preferences…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   onClick={signOut}
                   className="w-full px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-white/10 focus:outline-none focus:bg-white/10"
                 >
@@ -2469,8 +2743,8 @@ export default function Home() {
               )}
 
               <p className="text-white/80 text-xs mt-4 max-w-xs text-center">
-                If I'm not sure what you said, I'll ask you to clarify — just
-                click "Speak to me" again and then speak the missing detail.
+                After I guess a food, I&apos;ll listen for &ldquo;log it&rdquo; or
+                &ldquo;options.&rdquo; You can also tap a choice on the card.
               </p>
 
               <div className="mt-8 max-w-xs">
@@ -2526,102 +2800,214 @@ export default function Home() {
                   Today&apos;s Summary
                 </h2>
 
-                <div className="flex gap-3 mb-3">
-                  <div className="rounded-lg bg-blue-950 border border-blue-800/80 p-3 text-center min-w-[100px]">
-                    <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-stretch sm:gap-4">
+                  {/* Primary metric — roomy calories block */}
+                  <div className="flex flex-col justify-center rounded-xl bg-blue-950 border border-blue-800/80 px-5 py-5 text-center sm:min-w-[11rem] sm:flex-1 sm:max-w-[16rem]">
+                    <p className="text-xs text-blue-50 uppercase tracking-wide font-medium mb-1">
                       Calories
                     </p>
                     <p
-                      className="text-2xl font-bold text-white"
+                      className="text-4xl sm:text-5xl font-bold text-white leading-none tracking-tight"
                       aria-label={`${summary.calories} of ${calorieGoal} calories`}
                     >
                       {Math.round(summary.calories)}
-                      <span className="text-sm font-normal text-blue-100">
-                        /{calorieGoal}
-                      </span>
+                    </p>
+                    <p className="mt-2 text-sm text-blue-100/90">
+                      of{" "}
+                      <span className="font-semibold text-white">
+                        {calorieGoal}
+                      </span>{" "}
+                      goal
                     </p>
                   </div>
 
-                  <div className="flex flex-col gap-2 flex-1">
-                    <div className="flex gap-3">
-                      {(["protein", "carbs", "fat"] as const).map((key) => {
-                        const pressed = showNutrients[key];
-                        return (
-                          <label
-                            key={key}
-                            className="flex flex-col items-center gap-1 cursor-pointer"
+                  {/* Show Macronutrients / Show Micronutrients pickers */}
+                  <div
+                    ref={nutrientMenusRef}
+                    className="flex flex-1 flex-col gap-2 justify-center min-w-0"
+                  >
+                    {(
+                      [
+                        {
+                          id: "macro" as const,
+                          label: "Show Macronutrients",
+                          menuId: "macronutrients-menu",
+                          keys: MACRO_DISPLAY_KEYS,
+                        },
+                        {
+                          id: "micro" as const,
+                          label: "Show Micronutrients",
+                          menuId: "micronutrients-menu",
+                          keys: MICRO_KEYS,
+                        },
+                      ] as const
+                    ).map(({ id, label, menuId, keys }) => {
+                      const open = nutrientMenuOpen === id;
+                      const selectedCount = keys.filter(
+                        (k) => showNutrients[k],
+                      ).length;
+                      return (
+                        <div key={id} className="relative">
+                          <button
+                            type="button"
+                            aria-expanded={open}
+                            aria-haspopup="true"
+                            aria-controls={menuId}
+                            onClick={() =>
+                              setNutrientMenuOpen((cur) =>
+                                cur === id ? null : id,
+                              )
+                            }
+                            className={`flex w-full items-center justify-between gap-2 rounded-xl border px-3.5 py-3 text-left text-sm font-medium text-white transition-colors focus:outline-none focus:ring-2 focus:ring-white ${
+                              selectedCount > 0
+                                ? "border-green-400/70 bg-green-500/25 hover:bg-green-500/35"
+                                : "border-white/25 bg-white/10 hover:bg-white/15"
+                            }`}
                           >
-                            <span className="text-xs text-white">
-                              {key.charAt(0).toUpperCase() + key.slice(1)}
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className="truncate">{label}</span>
+                              {selectedCount > 0 ? (
+                                <span className="shrink-0 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white">
+                                  {selectedCount}
+                                </span>
+                              ) : null}
                             </span>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={pressed ? "true" : "false"}
-                              aria-label={`Toggle ${key} in summary`}
-                              onClick={() =>
-                                setShowNutrients((prev) => ({
-                                  ...prev,
-                                  [key]: !prev[key],
-                                }))
-                              }
-                              className={`relative w-10 h-5 rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-white ${pressed ? "bg-green-500 border-green-400" : "bg-white/10 border-white/20"}`}
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 12 12"
+                              fill="none"
+                              aria-hidden="true"
+                              className={`shrink-0 opacity-80 transition-transform ${open ? "rotate-180" : ""}`}
                             >
-                              <span
-                                aria-hidden="true"
-                                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${pressed ? "translate-x-5" : "translate-x-0"}`}
+                              <path
+                                d="M3 4.5l3 3 3-3"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
                               />
-                            </button>
-                          </label>
-                        );
-                      })}
-                    </div>
+                            </svg>
+                          </button>
 
-                    {Object.values(showNutrients).some(Boolean) && (
-                      <div className="flex gap-2">
-                        {showNutrients.protein && (
-                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
-                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
-                              Protein
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.protein).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-100">
-                                g
-                              </span>
-                            </p>
-                          </div>
-                        )}
-                        {showNutrients.carbs && (
-                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
-                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
-                              Carbs
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.carbs).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-100">
-                                g
-                              </span>
-                            </p>
-                          </div>
-                        )}
-                        {showNutrients.fat && (
-                          <div className="rounded-lg bg-blue-950 border border-blue-800/70 p-2 text-center flex-1">
-                            <p className="text-xs text-blue-50 uppercase tracking-wide font-medium">
-                              Fat
-                            </p>
-                            <p className="text-base font-bold text-white">
-                              {Number(summary.fat).toFixed(1)}
-                              <span className="text-xs font-normal text-blue-100">
-                                g
-                              </span>
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                          {open && (
+                            <div
+                              id={menuId}
+                              role="menu"
+                              aria-label={`${label} choices`}
+                              className="absolute left-0 right-0 z-40 mt-1.5 max-h-72 overflow-y-auto rounded-xl border border-white/25 bg-blue-950 py-1.5 shadow-xl"
+                            >
+                              <div className="flex items-center justify-between gap-2 border-b border-white/15 px-3 pb-2 pt-1">
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-white/45">
+                                  Tap to show or hide
+                                </p>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={selectedCount === 0}
+                                  onClick={() => {
+                                    setShowNutrients((prev) => {
+                                      const next = { ...prev };
+                                      for (const key of keys) {
+                                        next[key] = false;
+                                      }
+                                      persistShowNutrients(next);
+                                      return next;
+                                    });
+                                  }}
+                                  className="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-white/90 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                                >
+                                  Clear all
+                                </button>
+                              </div>
+                              {keys.map((key) => {
+                                const meta = NUTRIENT_META[key];
+                                const pressed = showNutrients[key];
+                                return (
+                                  <button
+                                    key={key}
+                                    type="button"
+                                    role="menuitemcheckbox"
+                                    aria-checked={pressed}
+                                    onClick={() => {
+                                      setShowNutrients((prev) => {
+                                        const next = {
+                                          ...prev,
+                                          [key]: !prev[key],
+                                        };
+                                        persistShowNutrients(next);
+                                        return next;
+                                      });
+                                    }}
+                                    className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus:bg-white/10"
+                                  >
+                                    <span className="min-w-0">
+                                      <span className="block font-medium leading-snug">
+                                        {meta.label}
+                                      </span>
+                                      <span className="text-[11px] text-white/45">
+                                        {meta.unit}
+                                      </span>
+                                    </span>
+                                    <span
+                                      aria-hidden="true"
+                                      className={`relative h-5 w-9 shrink-0 rounded-full border transition-colors ${
+                                        pressed
+                                          ? "border-green-400 bg-green-500"
+                                          : "border-white/30 bg-white/15"
+                                      }`}
+                                    >
+                                      <span
+                                        className={`absolute top-0.5 size-4 rounded-full bg-white shadow-sm transition-[left,right] ${
+                                          pressed
+                                            ? "right-0.5 left-auto"
+                                            : "left-0.5 right-auto"
+                                        }`}
+                                      />
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
+
+                {(MACRO_DISPLAY_KEYS.some((k) => showNutrients[k]) ||
+                  MICRO_KEYS.some((k) => showNutrients[k])) && (
+                  <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+                    {[...MACRO_DISPLAY_KEYS, ...MICRO_KEYS]
+                      .filter((key) => showNutrients[key])
+                      .map((key) => {
+                        const meta = NUTRIENT_META[key];
+                        const raw =
+                          key === "protein" ||
+                          key === "carbs" ||
+                          key === "fat"
+                            ? Number(summary[key] ?? 0)
+                            : Number(summary.nutrients?.[key] ?? 0);
+                        return (
+                          <div
+                            key={key}
+                            className="rounded-lg bg-blue-950/90 border border-blue-800/70 px-3 py-2.5 text-center"
+                          >
+                            <p className="text-[11px] text-blue-50/90 uppercase tracking-wide font-medium leading-tight">
+                              {meta.label}
+                            </p>
+                            <p className="mt-0.5 text-lg font-bold text-white tabular-nums">
+                              {raw.toFixed(raw >= 100 ? 0 : 1)}
+                              <span className="ml-0.5 text-xs font-normal text-blue-100">
+                                {meta.unit}
+                              </span>
+                            </p>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
 
                 {/* Progress bar */}
                 <div className="mb-4">
@@ -2700,7 +3086,15 @@ export default function Home() {
                 </button>
 
                 {/* Settings — collapsible */}
-                <details className="group">
+                <details
+                  ref={settingsDetailsRef}
+                  id="settings-panel"
+                  className="group"
+                  open={settingsOpen}
+                  onToggle={(e) => {
+                    setSettingsOpen((e.currentTarget as HTMLDetailsElement).open);
+                  }}
+                >
                   <summary className="cursor-pointer text-xs text-white hover:text-white transition-colors list-none flex items-center gap-1 select-none">
                     <svg
                       width="12"
@@ -2720,7 +3114,7 @@ export default function Home() {
                     </svg>
                     Settings
                   </summary>
-                  <div className="mt-3 flex flex-col gap-4 border-t border-white/20 pt-4">
+                  <div className="mt-3 flex flex-col gap-6 border-t border-white/20 pt-4">
                     <fieldset>
                       <legend className="text-sm font-medium text-white mb-2">
                         Update calorie goal
@@ -2749,6 +3143,15 @@ export default function Home() {
                         </button>
                       </div>
                     </fieldset>
+
+                    <DietaryPreferencesPanel
+                      value={dietaryPrefs}
+                      onChange={setDietaryPrefs}
+                      onSave={saveDietaryPrefs}
+                      saving={savingDietaryPrefs}
+                      statusMessage={dietaryPrefsStatus}
+                      headingRef={dietaryHeadingRef}
+                    />
                   </div>
                 </details>
               </section>

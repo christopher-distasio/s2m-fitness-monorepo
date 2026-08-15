@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from backend.services.nutrition_service import format_branded_name, lookup_food
 from backend.services.query_match_rank import is_zero_calorie_query
 from backend.services.parse_query_modifiers import parse_query_modifiers
+from backend.services.dietary_filters import FDA_ALLERGENS
 from backend.models import UserProfile
 
 load_dotenv()
@@ -302,6 +303,15 @@ async def parse_food_input(
         # relaxed result as an exact match.
         parsed["used_dietary_fallback"] = nutrition.get("used_dietary_fallback", False)
 
+        # Extra macros/micros scaled to serving (fiber, sodium, vitamins, …).
+        parsed["nutrients"] = dict(nutrition.get("nutrients") or {})
+
+        # Allergen tags for POST/PATCH allergy gate (severe block / moderate warn).
+        parsed["allergens"] = nutrition.get("allergens") or []
+        for allergen_name in FDA_ALLERGENS:
+            if allergen_name in nutrition:
+                parsed[allergen_name] = nutrition[allergen_name]
+
         # Scale per-serving nutrition by the parsed quantity (e.g. "2" eggs).
         quantity_str = parsed.get("serving_size", "1")
         try:
@@ -316,6 +326,14 @@ async def parse_food_input(
             for macro_key in ("protein", "carbohydrates", "fats"):
                 if macros.get(macro_key) is not None:
                     macros[macro_key] = round(macros[macro_key] * quantity, 1)
+            nutrients = parsed.get("nutrients") or {}
+            for nk, nv in list(nutrients.items()):
+                if nv is not None:
+                    try:
+                        nutrients[nk] = round(float(nv) * quantity, 2)
+                    except (TypeError, ValueError):
+                        pass
+            parsed["nutrients"] = nutrients
 
         parsed["quantity_used"] = quantity
         print(f"quantity: {quantity}, calories after: {parsed['calories']}")
@@ -363,28 +381,31 @@ async def parse_food_input(
             and resolution.get("status") == "needs_clarification"
         ):
             parsed["confidence"] = "medium"
+            brand_reason = (
+                "Could be a specific brand or a general item — the calories "
+                "differ a lot."
+            )
             parsed["resolution"] = {
                 "status": "needs_brand_choice",
                 "axis": "brand",
-                "reason": (
-                    "Could be a specific brand or a general item — the calories "
-                    "differ a lot."
-                ),
+                "reason": brand_reason,
                 "question": BRAND_CHOICE_QUESTION,
             }
+            parsed["reasoning"] = brand_reason
             # Withhold the mixed list; the filtered follow-up query builds it.
             parsed["candidates"] = []
             parsed["portion_options"] = []
             parsed["alternatives"] = []
             return _apply_confidence_guards(parsed, raw_input)
 
-        if (
-            resolution.get("status") == "needs_clarification"
-            and parsed.get("confidence") == "high"
-        ):
-            parsed["confidence"] = "medium"
-            if not parsed.get("reasoning"):
-                parsed["reasoning"] = resolution.get("reason")
+        if resolution.get("status") == "needs_clarification":
+            if parsed.get("confidence") == "high":
+                parsed["confidence"] = "medium"
+            # Prefer the data-driven reason over GPT "food is clear…" copy so
+            # the Less Sure card matches why we're asking.
+            data_reason = resolution.get("reason")
+            if data_reason:
+                parsed["reasoning"] = data_reason
 
         # For medium/low confidence, prefer data-grounded alternatives over the
         # model's free-text guesses: real, priced options the user can pick.

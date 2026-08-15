@@ -30,6 +30,17 @@ _MORE_PHRASES = {
     "more", "hear more", "show more", "see more", "tell me more",
     "the rest", "others", "other options", "more options", "what else",
     "more please", "hear the rest",
+    "options", "the options", "hear options", "read options",
+    "other matches", "alternatives",
+}
+_CONFIRM_HEADLINE_PHRASES = {
+    "log it", "log that", "log this", "log",
+    "yes log it", "yeah log it", "yep log it", "yup log it",
+    "ok log it", "okay log it", "sure log it",
+    "yes", "yeah", "yep", "yup",
+    "that's it", "thats it", "that's right", "thats right",
+    "that's the one", "thats the one", "that one",
+    "confirm", "yes confirm",
 }
 _YES_MORE_TIME_PHRASES = {
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay",
@@ -94,6 +105,7 @@ _GENERAL_TOKENS = frozenset({"general", "generic", "plain", "regular", "unbrande
 
 def _normalize(text: str) -> str:
     t = (text or "").strip().lower()
+    t = t.replace("'", "")
     t = re.sub(r"[^\w\s#]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     for trailer in (" please", " thanks", " thank you"):
@@ -126,10 +138,13 @@ def parse_clarification_command(text: str) -> dict | None:
       {"type": "select", "index": <1-based int>}
       {"type": "repeat"}
       {"type": "more"}
+      {"type": "confirm"}
     """
     t = _normalize(text)
     if not t:
         return None
+    if t in _CONFIRM_HEADLINE_PHRASES:
+        return {"type": "confirm"}
     if t in _REPEAT_PHRASES:
         return {"type": "repeat"}
     if t in _MORE_PHRASES:

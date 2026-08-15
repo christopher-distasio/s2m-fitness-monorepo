@@ -62,12 +62,21 @@ def test_select_trailing_number_in_longer_transcript():
     assert parse_clarification_command("it's one") == {"type": "select", "index": 1}
 
 
+def test_confirm_headline():
+    assert parse_clarification_command("log it") == {"type": "confirm"}
+    assert parse_clarification_command("yes, log it") == {"type": "confirm"}
+    assert parse_clarification_command("yes") == {"type": "confirm"}
+    assert parse_clarification_command("that's it") == {"type": "confirm"}
+    assert parse_clarification_command("confirm") == {"type": "confirm"}
+
+
 def test_repeat_and_more():
     assert parse_clarification_command("repeat") == {"type": "repeat"}
     assert parse_clarification_command("say it again") == {"type": "repeat"}
     assert parse_clarification_command("more") == {"type": "more"}
     assert parse_clarification_command("hear more") == {"type": "more"}
     assert parse_clarification_command("what else") == {"type": "more"}
+    assert parse_clarification_command("options") == {"type": "more"}
 
 
 def test_food_names_fall_through_not_commands():

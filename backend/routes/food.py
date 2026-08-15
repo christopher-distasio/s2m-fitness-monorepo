@@ -1,9 +1,10 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional
-from backend.models import FoodLog, Correction
+from backend.models import FoodLog, Correction, UserProfile, DietaryPreferences
 from backend.services.food_parser import parse_food_input
 from backend.services.transcriber import transcribe_audio
+from backend.services.allergy_check import check_allergy_block, moderate_allergy_warnings
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
 from backend.services.intent_classifier import classify_intent
@@ -21,6 +22,32 @@ import json
 router = APIRouter()
 
 
+async def _load_dietary_preferences(user_id: str | None) -> DietaryPreferences | None:
+    if not user_id:
+        return None
+    profile = await UserProfile.find_one(UserProfile.user_id == user_id)
+    if not profile:
+        return None
+    return profile.dietary_preferences
+
+
+def _apply_allergy_gate(parsed: dict, user_prefs: DietaryPreferences | None) -> list[str]:
+    """Raise 403 on severe block; return moderate warnings for the response."""
+    is_blocked, reason = check_allergy_block(parsed, user_prefs)
+    if is_blocked:
+        raise HTTPException(
+            status_code=403,
+            detail=reason or "Blocked by dietary safety filter",
+        )
+    return moderate_allergy_warnings(parsed, user_prefs)
+
+
+def _with_allergy_warning(response: dict, warnings: list[str]) -> dict:
+    if warnings:
+        response["allergy_warning"] = warnings
+    return response
+
+
 class FoodLogRequest(BaseModel):
     user_id: str
     raw_input: str
@@ -30,6 +57,7 @@ class FoodLogRequest(BaseModel):
     protein: Optional[float] = None
     carbs: Optional[float] = None
     fat: Optional[float] = None
+    nutrients: Optional[dict[str, float]] = None
     quantity: Optional[str] = None
 
 
@@ -68,6 +96,7 @@ def build_food_log(
     user_id: str, raw_input: str, parsed: dict, food_name: Optional[str] = None
 ) -> FoodLog:
     macros = parsed.get("macronutrients", {})
+    extras = parsed.get("nutrients") or {}
     return FoodLog(
         user_id=user_id,
         raw_input=raw_input,
@@ -76,6 +105,7 @@ def build_food_log(
         protein=macros.get("protein"),
         carbs=macros.get("carbohydrates"),
         fat=macros.get("fats"),
+        extra_nutrients=extras or None,
         quantity=parsed.get("serving_size"),
         confidence=parsed.get("confidence"),
         reasoning=parsed.get("reasoning"),
@@ -129,6 +159,7 @@ async def log_food(request: FoodLogRequest):
             protein=request.protein,
             carbs=request.carbs,
             fat=request.fat,
+            extra_nutrients=request.nutrients or None,
             quantity=request.quantity,
             confidence="high",
         )
@@ -153,22 +184,17 @@ async def log_food(request: FoodLogRequest):
             status_code=422, detail=f"Could not parse food input: {parsed}"
         )
 
-    # NEW (2026-08-04): a severe allergen constraint produced zero safe
-    # results. This is not a food log — refuse rather than insert a
-    # calories=None record that would look like a logging bug, not a
-    # deliberate safety refusal.
-    if parsed.get("confidence") == "blocked":
-        raise HTTPException(
-            status_code=403,
-            detail=parsed.get("reasoning") or "Blocked by dietary safety filter",
-        )
+    # Severe allergen refusal (lookup zero-safe-results or explicit allergen
+    # match). Shared with PATCH so create/edit stay consistent.
+    user_prefs = await _load_dietary_preferences(request.user_id)
+    warnings = _apply_allergy_gate(parsed, user_prefs)
 
     food_log = build_food_log(
         request.user_id, request.raw_input, parsed, request.food_name
     )
     await food_log.insert()
 
-    return build_response(food_log, parsed)
+    return _with_allergy_warning(build_response(food_log, parsed), warnings)
 
 
 @router.post("/food/voice")
@@ -309,11 +335,18 @@ async def get_daily_summary(user_id: str):
     logs = await FoodLog.find(
         FoodLog.user_id == user_id, FoodLog.logged_at >= start_of_day
     ).to_list()
+    nutrients: dict[str, float] = {}
+    for log in logs:
+        for key, val in (log.extra_nutrients or {}).items():
+            if val is None:
+                continue
+            nutrients[key] = nutrients.get(key, 0.0) + float(val)
     return {
         "calories": sum(log.calories or 0 for log in logs),
         "protein": sum(log.protein or 0 for log in logs),
         "carbs": sum(log.carbs or 0 for log in logs),
         "fat": sum(log.fat or 0 for log in logs),
+        "nutrients": {k: round(v, 2) for k, v in nutrients.items()},
         "entry_count": len(logs),
     }
 
@@ -351,11 +384,10 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
             status_code=422, detail=f"Could not parse food input: {parsed}"
         )
 
-    # NOTE (2026-08-04): unlike POST /food, this PATCH path does not yet
-    # explicitly refuse a "blocked" result — editing an existing log into
-    # something that trips the user's allergy filter is a rare edge case,
-    # and the right product behavior (reject the edit? save with a warning?)
-    # wasn't obvious from this file alone. Flagging as an open gap.
+    # Same severe-allergen gate as POST /food — refuse the edit before any
+    # Correction / FoodLog write commits.
+    user_prefs = await _load_dietary_preferences(request.user_id)
+    warnings = _apply_allergy_gate(parsed, user_prefs)
 
     food_changed = food_log.food_name.lower() != parsed["food"].lower()
     quantity_changed = food_log.quantity != parsed.get("serving_size")
@@ -386,11 +418,12 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     food_log.protein = macros.get("protein")
     food_log.carbs = macros.get("carbohydrates")
     food_log.fat = macros.get("fats")
+    food_log.extra_nutrients = parsed.get("nutrients") or None
     food_log.quantity = parsed.get("serving_size")
     food_log.modified_at = datetime.now(timezone.utc)
 
     await food_log.save()
-    return build_response(food_log, parsed)
+    return _with_allergy_warning(build_response(food_log, parsed), warnings)
 
 
 @router.get("/food/{user_id}/weekly")
