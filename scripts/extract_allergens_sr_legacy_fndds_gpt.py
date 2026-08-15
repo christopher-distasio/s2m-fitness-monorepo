@@ -48,7 +48,7 @@ from allergen_extraction_logic import scan_ingredients_for_terms, ALLERGEN_TERMS
 
 load_dotenv()
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 OPENAI_MODEL = "gpt-4o-mini"
 

@@ -8,7 +8,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
 CSV_PATH = "data/raw/FoodData_Central_branded_food_csv_2026-04-30/branded_food.csv"
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 SAMPLE_SIZE = 200
 

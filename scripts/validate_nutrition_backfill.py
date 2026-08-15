@@ -27,7 +27,7 @@ Read-only, no writes.
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 
 ALLERGENS = ["milk", "egg", "fish", "shellfish", "tree_nut", "peanut", "wheat", "soy", "sesame"]

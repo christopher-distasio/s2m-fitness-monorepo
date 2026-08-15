@@ -25,7 +25,7 @@ from backend.models import DietaryPreferences
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.1.227:6333")
 COLLECTION_NAME = "food-vectors"
 EMBEDDING_MODEL = "text-embedding-3-large"
 SCORE_THRESHOLD = 0.3

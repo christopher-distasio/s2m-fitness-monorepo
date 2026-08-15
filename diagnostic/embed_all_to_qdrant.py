@@ -27,7 +27,7 @@ load_dotenv(dotenv_path=dotenv_path)
 # CONFIG
 # ============================================================================
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 QDRANT_API_KEY = None
 COLLECTION_NAME = "food-vectors"
 VECTOR_DIM = 3072  # text-embedding-3-large

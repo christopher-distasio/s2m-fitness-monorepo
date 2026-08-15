@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 EMBEDDING_MODEL = "text-embedding-3-large"
 FNDDS_PATH = "data/raw/FoodData_Central_survey_food_csv_2024-10-31/food.csv"

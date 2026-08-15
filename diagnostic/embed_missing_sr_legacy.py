@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 EMBEDDING_MODEL = "text-embedding-3-large"
 MISSING_LIST_PATH = "diagnostic/missing_sr_legacy_fdc_ids.csv"

@@ -1,7 +1,7 @@
 """Live Qdrant fixtures for nutrition backfill + retrieval regressions.
 
 Marked @pytest.mark.live — skip in default CI. Requires local Qdrant at
-http://localhost:6333 with collection food-vectors populated.
+http://192.168.1.227:6333 with collection food-vectors populated.
 
 Run: poetry run pytest tests/eval_nutrition_allergens.py -v -m live
 """
@@ -12,7 +12,7 @@ import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION = "food-vectors"
 
 

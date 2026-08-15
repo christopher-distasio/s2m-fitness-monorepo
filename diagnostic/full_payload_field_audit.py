@@ -13,7 +13,7 @@ confirmed reality, not memory or a 3-record sample.
 from qdrant_client import QdrantClient
 from collections import defaultdict
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 SAMPLE_SIZE = 1000
 

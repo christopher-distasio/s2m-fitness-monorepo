@@ -19,7 +19,7 @@ search results and from getting any future nutrition backfill.
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://192.168.1.227:6333"
 COLLECTION_NAME = "food-vectors"
 TARGET_FDC_ID = "2705383"
 
