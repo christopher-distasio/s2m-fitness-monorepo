@@ -367,6 +367,20 @@ function speakPortion(foodName: string, p: PortionOption): string {
   return parts.join(", ");
 }
 
+/** Payload for "Yes, log it": the headline match already shown on the card. */
+function headlineLogPick(parsed: ParsedResult, rawInput: string) {
+  return {
+    food_name: formatBrandedName(parsed.food, parsed.brand),
+    calories: parsed.calories,
+    protein: parsed.macronutrients?.protein,
+    carbs: parsed.macronutrients?.carbohydrates,
+    fat: parsed.macronutrients?.fats,
+    nutrients: parsed.nutrients,
+    quantity: parsed.serving_label || parsed.serving_size,
+    raw_input: rawInput,
+  };
+}
+
 /**
  * The FULL flat, ordered list of selectable options: candidates first, then
  * portions — same top-to-bottom order the card renders and voice speaks. Each
@@ -2148,7 +2162,10 @@ export default function Home() {
             <button
               type="button"
               onClick={() =>
-                confirmLog(pendingParse.uid, pendingParse.raw_input)
+                logResolved(
+                  pendingParse.uid,
+                  headlineLogPick(parsed, pendingParse.raw_input),
+                )
               }
               className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
               aria-label={`Confirm and log ${parsed.food}`}

@@ -133,6 +133,87 @@ test.describe("logged-in food log", () => {
     );
   });
 
+  test("Yes, log it saves the headline match without re-parsing", async ({
+    page,
+  }) => {
+    await page.route("**/food/parse", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          confidence: "medium",
+          food: "banana",
+          brand: null,
+          serving_label: "1 banana",
+          serving_size: "1 banana",
+          calories: 122,
+          macronutrients: {
+            protein: 1.5,
+            carbohydrates: 31,
+            fats: 0.4,
+            sugar: 17,
+          },
+          reasoning: "Several banana entries match",
+          candidates: [
+            {
+              fdc_id: "other",
+              name: "Bananas, dehydrated",
+              calories: 94.08,
+              protein: 1,
+              carbs: 24,
+              fat: 0.2,
+              serving_label: "100 g",
+            },
+          ],
+        }),
+      });
+    });
+
+    let logBody: Record<string, unknown> | null = null;
+    await page.route("**/food", async (route) => {
+      const req = route.request();
+      if (req.method() !== "POST" || req.url().includes("/food/parse")) {
+        await route.continue();
+        return;
+      }
+      logBody = JSON.parse(req.postData() || "{}") as Record<string, unknown>;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: "Food logged successfully",
+          id: "test-log-id",
+          parsed: {
+            food: logBody.food_name,
+            calories: logBody.calories,
+            confidence: "high",
+          },
+        }),
+      });
+    });
+
+    await page.getByLabel(/Type it instead/i).fill("banana");
+    await page.getByRole("button", { name: /^Log Food$/i }).click();
+
+    await expect(
+      page.getByRole("heading", { name: /^(Unsure|Less Sure)$/i }),
+    ).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/1 banana/i)).toBeVisible();
+    await expect(page.getByText(/122 cal/i).first()).toBeVisible();
+
+    await page.getByRole("button", { name: /yes, log it/i }).click();
+
+    await expect(page.getByRole("status").filter({ hasText: /Logged/i })).toBeVisible(
+      { timeout: 10000 },
+    );
+    expect(logBody).not.toBeNull();
+    expect(logBody?.resolved).toBe(true);
+    expect(logBody?.calories).toBe(122);
+    expect(logBody?.food_name).toMatch(/banana/i);
+    expect(logBody?.quantity).toBe("1 banana");
+    expect(logBody?.raw_input).toBe("banana");
+  });
+
   test("shows clarification UI on low confidence parse", async ({ page }) => {
     await page.route("**/food/parse", async (route) => {
       await route.fulfill({
