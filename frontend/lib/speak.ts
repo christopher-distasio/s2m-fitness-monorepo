@@ -110,10 +110,20 @@ export async function speak(
     const audio = new Audio(url);
     currentAudio = audio;
     const { finish, done } = waitUntilDone(aborted);
-    audio.onended = finish;
-    audio.onerror = finish;
-    audio.play().catch(finish);
+    const cap = window.setTimeout(finish, 20000);
+    const end = () => {
+      window.clearTimeout(cap);
+      finish();
+    };
+    audio.onended = end;
+    audio.onerror = end;
+    audio.onloadedmetadata = () => {
+      const ms = Math.ceil((audio.duration || 0) * 1000) + 400;
+      if (Number.isFinite(ms) && ms > 400) window.setTimeout(end, ms);
+    };
+    audio.play().catch(end);
     await done;
+    window.clearTimeout(cap);
     if (currentAudio === audio) currentAudio = null;
     URL.revokeObjectURL(url);
   } catch {
@@ -121,11 +131,17 @@ export async function speak(
     const { finish, done } = waitUntilDone(aborted, () => {
       window.speechSynthesis.cancel();
     });
+    const cap = window.setTimeout(finish, 20000);
+    const end = () => {
+      window.clearTimeout(cap);
+      finish();
+    };
     const utt = new SpeechSynthesisUtterance(text);
-    utt.onend = finish;
-    utt.onerror = finish;
+    utt.onend = end;
+    utt.onerror = end;
     window.speechSynthesis.speak(utt);
     await done;
+    window.clearTimeout(cap);
   } finally {
     if (epoch === speakEpoch) notifySpeaking(false);
   }

@@ -121,6 +121,8 @@ const MIN_RECORDING_BYTES = 8000;
 // yes → listen another 8s; no → stop. Not the old "say that again / be more specific".
 const MORE_TIME_MESSAGE = "Do you need more time?";
 const SAY_NUMBER_OR_WORD = "Say the number or the word.";
+const SAY_LOG_IT_OR_OPTIONS =
+  "Say log it to confirm, or say options to hear other matches.";
 
 function readStoredBoolean(key: string, defaultValue: boolean) {
   if (typeof window === "undefined") return defaultValue;
@@ -471,6 +473,19 @@ function withNumberCue(body: string, offerMore = false): string {
   return msg;
 }
 
+function buildHeadlineConfirmSpeech(parsed: ParsedResult): string {
+  const name = formatBrandedName(parsed.food, parsed.brand);
+  const serving = (parsed.serving_label || parsed.serving_size || "").trim();
+  const cal =
+    parsed.calories != null && Number.isFinite(Number(parsed.calories))
+      ? `${Math.round(Number(parsed.calories))} calories`
+      : "";
+  const lead = ["I think this is " + name, serving, cal]
+    .filter(Boolean)
+    .join(", ");
+  return `${lead}. ${SAY_LOG_IT_OR_OPTIONS}`;
+}
+
 function buildNumberedClarificationSpeech(
   parsed: ParsedResult,
   rawInput: string,
@@ -655,11 +670,13 @@ export default function Home() {
   // consistent with the full expanded set. Owned by the frontend (not
   // conversation_history / clarification.py); those only classify the reply.
   const spokenClarifyOptionsRef = useRef<ClarifyOption[]>([]);
+  const spokenListAloudRef = useRef(false);
   const rememberSpokenClarifyOptions = (options: ClarifyOption[]) => {
     spokenClarifyOptionsRef.current = options;
   };
   const clearSpokenClarifyOptions = () => {
     spokenClarifyOptionsRef.current = [];
+    spokenListAloudRef.current = false;
   };
   // Set when we just asked MORE_TIME_MESSAGE; the next voice reply is yes/no
   // (or a normal answer that falls through). Applies to every mic session.
@@ -668,6 +685,8 @@ export default function Home() {
   const cancelRecordingRef = useRef(false);
   // User cut TTS with the Speak button — don't auto-open the mic afterward.
   const suppressAutoListenRef = useRef(false);
+  // Card tap / Yes-log-it / dismiss — interrupt THIS prompt's listen only.
+  const uiChoiceInFlightRef = useRef(false);
   // Active barge-in session: Speak/Stop sets this to discard the mic clip.
   const cancelBargeInRef = useRef<(() => void) | null>(null);
   const processVoiceBlobRef = useRef<
@@ -754,10 +773,10 @@ export default function Home() {
   );
 
   /**
-   * Numbered clarification TTS with mic open for barge-in. Returns true when a
-   * barge-in clip was handled (or Stop discarded it) — caller should skip
-   * maybeAutoListen. Works in See and Speak (mic exists in both); muted falls
-   * back to plain speak.
+   * Speak the numbered choices with the mic open (barge-in). Caller auto-listens
+   * afterward if this returns false — that is the "wait for a spoken choice"
+   * loop. Returns true only when barge-in already handled the reply, or a card
+   * tap consumed this prompt (do not open the mic again).
    */
   async function speakClarificationWithBargeIn(
     msg: string,
@@ -767,6 +786,10 @@ export default function Home() {
       await speak(msg);
       return false;
     }
+    // New prompt: always speak and listen. A leftover tap/stop flag from an
+    // earlier card must not cancel this readback or skip the follow-up listen.
+    uiChoiceInFlightRef.current = false;
+    suppressAutoListenRef.current = false;
     let cancelled = false;
     cancelBargeInRef.current = () => {
       cancelled = true;
@@ -778,16 +801,19 @@ export default function Home() {
       {
         onMicReady: () => setRecordingBoth(true),
         onBargeIn: () => setStatus("Listening..."),
-        shouldCancel: () => cancelled || suppressAutoListenRef.current,
+        shouldCancel: () => cancelled,
       },
     );
     cancelBargeInRef.current = null;
-    // Flush so follow-on maybeAutoListen / startRecording see mic free.
     flushSync(() => {
       setRecordingBoth(false);
       setAutoListening(false);
     });
 
+    if (uiChoiceInFlightRef.current) {
+      suppressAutoListenRef.current = false;
+      return true;
+    }
     if (suppressAutoListenRef.current) {
       suppressAutoListenRef.current = false;
       return true;
@@ -827,6 +853,18 @@ export default function Home() {
   }, [wantsVoiceOnOpen]);
 
   const maybeAutoListen = useCallback(async () => {
+    if (uiChoiceInFlightRef.current) {
+      return;
+    }
+    const awaitingClarification = pendingParseRef.current !== null;
+    // While a Less Sure card is up, always listen for "log it" / "options" /
+    // a number. Do not let a leftover suppress flag skip that wait.
+    if (awaitingClarification) {
+      if (recordingRef.current) return;
+      flushSync(() => setLoadingBoth(false));
+      await startRecordingRef.current({ fromAutoListen: true });
+      return;
+    }
     if (suppressAutoListenRef.current) {
       suppressAutoListenRef.current = false;
       return;
@@ -834,14 +872,7 @@ export default function Home() {
     if (muted || loadingRef.current || recordingRef.current) {
       return;
     }
-    const awaitingClarification = pendingParseRef.current !== null;
     const awaitingPostLogin = postLoginVoiceSessionRef.current;
-    // Clarification answers re-open the mic in BOTH See and Speak — the Speak
-    // button exists in both modes and must keep listening after choices.
-    if (awaitingClarification) {
-      await startRecordingRef.current({ fromAutoListen: true });
-      return;
-    }
     // Post-login greet auto-listen stays Speak-mode + pref gated.
     if (mode !== "speak" || !autoListen || !awaitingPostLogin) return;
     await startRecordingRef.current({ fromAutoListen: true });
@@ -987,7 +1018,17 @@ export default function Home() {
     conversationHistoryRef.current = conversationHistory;
   }, [conversationHistory]);
 
-  useEffect(() => onSpeakingChange(setSpeaking), []);
+  useEffect(() => {
+    return onSpeakingChange((next) => {
+      setSpeaking(next);
+      if (next) return;
+      if (uiChoiceInFlightRef.current) return;
+      if (suppressAutoListenRef.current) return;
+      if (!pendingParseRef.current) return;
+      if (recordingRef.current) return;
+      void startRecordingRef.current({ fromAutoListen: true });
+    });
+  }, []);
 
   useEffect(() => {
     if (!status) return;
@@ -1192,18 +1233,23 @@ export default function Home() {
           rememberSpokenClarifyOptions(
             clarifyOptions(parsed, textInput, false),
           );
-          msg = buildNumberedClarificationSpeech(parsed, textInput, false);
+          spokenListAloudRef.current = false;
+          msg = buildHeadlineConfirmSpeech(parsed);
         }
         setStatus(msg);
         setTextInput("");
-        const numberedClarify =
-          isBrandChoice(parsed) || parsed.confidence !== "low";
-        if (numberedClarify) {
+        if (isBrandChoice(parsed)) {
           const barged = await speakClarificationWithBargeIn(msg, uid);
-          if (!barged) shouldAutoListen = true;
+          if (uiChoiceInFlightRef.current) {
+            shouldAutoListen = false;
+          } else if (!barged) {
+            shouldAutoListen = true;
+          }
         } else {
-          shouldAutoListen = true;
           await speak(msg);
+          flushSync(() => setLoadingBoth(false));
+          shouldAutoListen =
+            !uiChoiceInFlightRef.current && pendingParseRef.current != null;
         }
       }
     } catch {
@@ -1213,7 +1259,12 @@ export default function Home() {
     } finally {
       flushSync(() => setLoadingBoth(false));
     }
-    if (shouldAutoListen) await maybeAutoListen();
+    if (
+      shouldAutoListen ||
+      (pendingParseRef.current != null && !uiChoiceInFlightRef.current)
+    ) {
+      await maybeAutoListen();
+    }
   }
 
   async function deleteLog(id: string) {
@@ -1300,6 +1351,7 @@ export default function Home() {
         clarification?: {
           type:
             | "select"
+            | "confirm"
             | "repeat"
             | "more"
             | "brand_choice"
@@ -1362,6 +1414,12 @@ export default function Home() {
               cmd.value,
             );
             if (!barged) shouldAutoListen = true;
+          } else if (cmd.type === "confirm") {
+            await logResolved(
+              pending.uid,
+              headlineLogPick(pending.parsed, pending.raw_input),
+            );
+            return;
           } else if (cmd.type === "select" && cmd.index != null) {
             // Resolve against the list most recently spoken (trimmed default,
             // or full expanded set after "more") — no re-parse. Fall back to
@@ -1390,18 +1448,24 @@ export default function Home() {
             );
             if (!barged) shouldAutoListen = true;
           } else if (cmd.type === "more") {
-            // Speak only the trimmed-off items, then append them to the
-            // tracked spoken list so later number/repeat use the full set.
             const all = allClarifyOptions(
               pending.parsed,
               pending.raw_input,
             );
             setClarifyExpandedBoth(true);
             rememberSpokenClarifyOptions(all);
-            const msg = buildMoreClarificationSpeech(
-              pending.parsed,
-              pending.raw_input,
-            );
+            const firstRead = !spokenListAloudRef.current;
+            spokenListAloudRef.current = true;
+            const msg = firstRead
+              ? buildNumberedClarificationSpeech(
+                  pending.parsed,
+                  pending.raw_input,
+                  false,
+                )
+              : buildMoreClarificationSpeech(
+                  pending.parsed,
+                  pending.raw_input,
+                );
             setStatus(msg);
             const barged = await speakClarificationWithBargeIn(
               msg,
@@ -1409,11 +1473,33 @@ export default function Home() {
             );
             if (!barged) shouldAutoListen = true;
           } else if (cmd.type === "unrecognized") {
-            // Missed the number — re-ask without re-parsing food (that looped
-            // the same list). Brand gate gets the brand prompt again.
             const msg = isBrandChoice(pending.parsed)
               ? `I didn't catch that. ${BRAND_CHOICE_SPEECH}`
-              : (() => {
+              : spokenListAloudRef.current
+                ? (() => {
+                    const options =
+                      spokenClarifyOptionsRef.current.length > 0
+                        ? spokenClarifyOptionsRef.current
+                        : clarifyOptions(
+                            pending.parsed,
+                            pending.raw_input,
+                            clarifyExpandedRef.current,
+                          );
+                    const offerMore =
+                      allClarifyOptions(pending.parsed, pending.raw_input)
+                        .length > options.length;
+                    return `I didn't catch a number. ${buildSpeechFromSpokenOptions(pending.parsed, options, offerMore)}`;
+                  })()
+                : `I didn't catch that. ${buildHeadlineConfirmSpeech(pending.parsed)}`;
+            setStatus(msg);
+            const barged = await speakClarificationWithBargeIn(
+              msg,
+              pending.uid,
+            );
+            if (!barged) shouldAutoListen = true;
+          } else {
+            const msg = spokenListAloudRef.current
+              ? (() => {
                   const options =
                     spokenClarifyOptionsRef.current.length > 0
                       ? spokenClarifyOptionsRef.current
@@ -1425,32 +1511,13 @@ export default function Home() {
                   const offerMore =
                     allClarifyOptions(pending.parsed, pending.raw_input)
                       .length > options.length;
-                  return `I didn't catch a number. ${buildSpeechFromSpokenOptions(pending.parsed, options, offerMore)}`;
-                })();
-            setStatus(msg);
-            const barged = await speakClarificationWithBargeIn(
-              msg,
-              pending.uid,
-            );
-            if (!barged) shouldAutoListen = true;
-          } else {
-            // "repeat" — exact list most recently spoken (same items/order).
-            const options =
-              spokenClarifyOptionsRef.current.length > 0
-                ? spokenClarifyOptionsRef.current
-                : clarifyOptions(
+                  return buildSpeechFromSpokenOptions(
                     pending.parsed,
-                    pending.raw_input,
-                    clarifyExpandedRef.current,
+                    options,
+                    offerMore,
                   );
-            const offerMore =
-              allClarifyOptions(pending.parsed, pending.raw_input).length >
-              options.length;
-            const msg = buildSpeechFromSpokenOptions(
-              pending.parsed,
-              options,
-              offerMore,
-            );
+                })()
+              : buildHeadlineConfirmSpeech(pending.parsed);
             setStatus(msg);
             const barged = await speakClarificationWithBargeIn(
               msg,
@@ -1516,10 +1583,8 @@ export default function Home() {
             { role: "user", content: data.transcription ?? "" },
             { role: "assistant", content: JSON.stringify(data.parsed) },
           ]);
-          // Brand-vs-generic gate comes first; otherwise a numbered list so
-          // the user can answer "one", "two"… (even at low confidence, as
-          // long as there are grounded options — the builder falls back to a
-          // "be more specific" prompt only when there's genuinely nothing).
+          // Headline first so the user can say "log it" before hearing
+          // alternates. Brand-vs-generic still comes first when needed.
           let msg: string;
           if (isBrandChoice(data.parsed)) {
             clearSpokenClarifyOptions();
@@ -1531,15 +1596,23 @@ export default function Home() {
               false,
             );
             rememberSpokenClarifyOptions(spoken);
-            msg = buildNumberedClarificationSpeech(
-              data.parsed,
-              data.transcription ?? "",
-              false,
-            );
+            spokenListAloudRef.current = false;
+            msg = buildHeadlineConfirmSpeech(data.parsed);
           }
           setStatus(msg);
-          const barged = await speakClarificationWithBargeIn(msg, uid);
-          if (!barged) shouldAutoListen = true;
+          if (isBrandChoice(data.parsed)) {
+            const barged = await speakClarificationWithBargeIn(msg, uid);
+            if (uiChoiceInFlightRef.current) {
+              shouldAutoListen = false;
+            } else if (!barged) {
+              shouldAutoListen = true;
+            }
+          } else {
+            await speak(msg);
+            flushSync(() => setLoadingBoth(false));
+            shouldAutoListen =
+              !uiChoiceInFlightRef.current && pendingParseRef.current != null;
+          }
         }
       }
     } catch (err) {
@@ -1555,12 +1628,23 @@ export default function Home() {
     } finally {
       flushSync(() => setLoadingBoth(false));
     }
-    if (shouldAutoListen) await maybeAutoListen();
+    if (
+      shouldAutoListen ||
+      (pendingParseRef.current != null && !uiChoiceInFlightRef.current)
+    ) {
+      await maybeAutoListen();
+    }
   }
   processVoiceBlobRef.current = processVoiceBlob;
 
   async function startRecording(options?: { fromAutoListen?: boolean }) {
-    if (recordingRef.current || loadingRef.current) return;
+    if (options?.fromAutoListen) {
+      flushSync(() => setAutoListening(true));
+    }
+    if (recordingRef.current) return;
+    // Clarification follow-up listen must not be blocked by a leftover loading
+    // flag from the parse/TTS request that just finished.
+    if (loadingRef.current && !options?.fromAutoListen) return;
     // Unlock audio context for Safari
     const AudioContext =
       window.AudioContext || (window as any).webkitAudioContext;
@@ -1629,7 +1713,16 @@ export default function Home() {
     mediaRecorderRef.current = recorder;
     recorder.start();
     setRecordingBoth(true);
-    setStatus("Recording...");
+    if (pendingParseRef.current) {
+      setAutoListening(true);
+      setStatus((prev) =>
+        prev.includes("Listening")
+          ? prev
+          : `${prev} Listening now — say log it or options.`.trim(),
+      );
+    } else {
+      setStatus("Recording...");
+    }
     recordingTimedOutRef.current = false;
     clearRecordingTimeout();
     recordingTimeoutIdRef.current = setTimeout(() => {
@@ -1657,9 +1750,10 @@ export default function Home() {
     setStatus("");
   }
 
-  /** Card tap / Yes-log-it must beat barge-in and auto-listen, or Speak mode
-   * keeps the mic open and the voice loop overwrites the choice. */
+  /** Interrupt in-progress speech/listen for a card tap only — does not disable
+   * speak-then-listen for the next (or current unfinished) clarification. */
   function abortVoiceForUiChoice() {
+    uiChoiceInFlightRef.current = true;
     suppressAutoListenRef.current = true;
     cancelBargeInRef.current?.();
     stopSpeaking();
@@ -1856,13 +1950,13 @@ export default function Home() {
       rememberSpokenClarifyOptions(
         clarifyOptions(parsed, originalInput, false),
       );
-      const msg = buildNumberedClarificationSpeech(
-        parsed,
-        originalInput,
-        false,
-      );
+      spokenListAloudRef.current = false;
+      const msg = buildHeadlineConfirmSpeech(parsed);
       setStatus(msg);
-      return await speakClarificationWithBargeIn(msg, uid);
+      uiChoiceInFlightRef.current = false;
+      suppressAutoListenRef.current = false;
+      await speak(msg);
+      return false;
     } finally {
       flushSync(() => setLoadingBoth(false));
     }
@@ -1919,6 +2013,15 @@ export default function Home() {
             <span className="text-[10px] leading-tight">Tap to dismiss</span>
           </button>
         </div>
+        {autoListening && !brandChoice && (
+          <p
+            role="status"
+            className="mb-3 flex items-center gap-2 text-sm font-medium text-amber-200"
+          >
+            <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-amber-300" />
+            Listening — say log it or options
+          </p>
+        )}
         {!brandChoice && (
           <>
             <p className="text-white text-sm mb-1">
@@ -2640,8 +2743,8 @@ export default function Home() {
               )}
 
               <p className="text-white/80 text-xs mt-4 max-w-xs text-center">
-                If I'm not sure what you said, I'll ask you to clarify — just
-                click "Speak to me" again and then speak the missing detail.
+                After I guess a food, I&apos;ll listen for &ldquo;log it&rdquo; or
+                &ldquo;options.&rdquo; You can also tap a choice on the card.
               </p>
 
               <div className="mt-8 max-w-xs">
