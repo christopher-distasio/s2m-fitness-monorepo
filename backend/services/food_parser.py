@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
@@ -9,6 +10,8 @@ from backend.services.dietary_filters import FDA_ALLERGENS
 from backend.models import UserProfile
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 client = AsyncOpenAI()
 
@@ -22,7 +25,7 @@ Return this exact shape:
 {
   "food": "string — normalized food name, optimized for database lookup",
   "brand": "string — the brand/manufacturer the user EXPLICITLY named, else empty string",
-  "serving_size": "string — e.g. '1 cup', '2 eggs', '1 medium'",
+  "serving_size": "string — quantity only, e.g. '1', '2', '1 cup', '1 medium' (never include the food name)",
   "confidence": "high" | "medium" | "low",
   "notes": "string — optional clarification or assumption made",
   "reasoning": "string — optional short explanation of confidence",
@@ -39,7 +42,12 @@ Rules:
 - If the input is a single common food with an explicit quantity/size, set "confidence" to "high" unless something is genuinely ambiguous
 - Vague quantifiers alone (e.g. "some", "a bit", "a little", "a snack", "some pasta") are never "high" — use "medium" or "low" and ask for quantity/type via reasoning and alternatives
 - Only return { "error": "unparseable", "raw": "<input>" } if the input has absolutely nothing to do with food
-- Serving_size should be quantity only (e.g. '2', '1 cup'), not include the food name
+- serving_size is quantity only. Put the food name in "food", never in serving_size.
+  One rule for every case:
+  - Countable items (banana, egg, yogurt, cookie, apple): serving_size is the count as a number string only — '1', '2', '3', '12'. Wrong: '2 bananas', '2 eggs', 'two yogurts'. Right: '2' (food is 'banana' / 'egg' / 'yogurt').
+  - Measured amounts (cups, oz, tablespoons, grams): serving_size is the number plus the unit only — '1 cup', '2 cups', '8 oz', '1 tablespoon'. Wrong: '2 cups of rice'. Right: serving_size '2 cups', food 'rice'.
+  - Size words: '1 medium', '1 large', '1 small' — still no food name.
+  - Word numbers from the user ('two', 'a dozen') must be converted to digits in serving_size ('2', '12').
 - Always return a non-empty serving_size
 - Do NOT always default vague quantities to "1 serving". Apply this logic instead:
   - If the food has a natural standard measurement unit, infer that unit even when quantity is vague:
@@ -112,6 +120,97 @@ def _apply_confidence_guards(parsed: dict, raw_input: str) -> dict:
                 f"a large portion of {food}",
             ]
     return parsed
+
+
+_WORD_TO_QUANTITY = {
+    "a": 1.0,
+    "an": 1.0,
+    "one": 1.0,
+    "two": 2.0,
+    "three": 3.0,
+    "four": 4.0,
+    "five": 5.0,
+    "six": 6.0,
+    "seven": 7.0,
+    "eight": 8.0,
+    "nine": 9.0,
+    "ten": 10.0,
+    "eleven": 11.0,
+    "twelve": 12.0,
+    "dozen": 12.0,
+    "half": 0.5,
+}
+
+
+def parse_quantity_multiplier(serving_size) -> float:
+    """Parse GPT serving_size into a numeric scale factor for per-item nutrition.
+
+    Bare numbers ('2') are preferred. If the model includes a food name
+    ('2 bananas') or a unit ('2 cups'), use the leading quantity instead of
+    silently falling back to 1.0.
+    """
+    if serving_size is None:
+        logger.warning("serving_size missing; defaulting quantity multiplier to 1.0")
+        return 1.0
+    if isinstance(serving_size, (int, float)) and not isinstance(serving_size, bool):
+        return float(serving_size)
+
+    text = str(serving_size).strip().lower()
+    if not text:
+        logger.warning("serving_size empty; defaulting quantity multiplier to 1.0")
+        return 1.0
+
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        pass
+
+    dozen_match = re.match(r"^(?:a|an)\s+dozen\b", text)
+    if dozen_match or text == "dozen" or text.startswith("dozen "):
+        if text not in {"12", "12.0"}:
+            logger.warning(
+                "serving_size %r is not a bare number; using dozen quantity 12.0",
+                serving_size,
+            )
+        return 12.0
+
+    num_match = re.match(r"^(\d+(?:\.\d+)?)\b(.*)$", text)
+    if num_match:
+        quantity = float(num_match.group(1))
+        rest = num_match.group(2).strip()
+        if rest:
+            logger.warning(
+                "serving_size %r is not a bare number; using leading quantity %s",
+                serving_size,
+                quantity,
+            )
+        return quantity
+
+    word_match = re.match(r"^([a-z]+)(?:\s+(.*))?$", text)
+    if word_match:
+        word = word_match.group(1)
+        rest = (word_match.group(2) or "").strip()
+        if word in ("a", "an") and rest.startswith("dozen"):
+            logger.warning(
+                "serving_size %r is not a bare number; using dozen quantity 12.0",
+                serving_size,
+            )
+            return 12.0
+        if word in _WORD_TO_QUANTITY:
+            quantity = _WORD_TO_QUANTITY[word]
+            if rest or word not in {str(int(quantity))}:
+                logger.warning(
+                    "serving_size %r is not a bare number; using word quantity %s",
+                    serving_size,
+                    quantity,
+                )
+            return quantity
+
+    logger.warning(
+        "Could not parse serving_size %r as a quantity; defaulting multiplier to 1.0",
+        serving_size,
+    )
+    return 1.0
 
 
 def _format_alt(name: str, brand: str | None, calories, extra: str | None = None) -> str:
@@ -313,11 +412,7 @@ async def parse_food_input(
                 parsed[allergen_name] = nutrition[allergen_name]
 
         # Scale per-serving nutrition by the parsed quantity (e.g. "2" eggs).
-        quantity_str = parsed.get("serving_size", "1")
-        try:
-            quantity = float(quantity_str)
-        except (TypeError, ValueError):
-            quantity = 1.0
+        quantity = parse_quantity_multiplier(parsed.get("serving_size", "1"))
 
         if quantity > 1:
             if parsed["calories"] is not None:
@@ -337,6 +432,12 @@ async def parse_food_input(
 
         parsed["quantity_used"] = quantity
         print(f"quantity: {quantity}, calories after: {parsed['calories']}")
+        logger.info(
+            "quantity_used=%s calories_after=%s serving_size=%r",
+            quantity,
+            parsed.get("calories"),
+            parsed.get("serving_size"),
+        )
 
         # Never silently high-confidence-log a degenerate 0 kcal for a food that
         # should have calories (bad branded USDA rows). Atwater usually fills
