@@ -1,0 +1,55 @@
+---
+description: Spec 1 FoodEvent + UtteranceResult architecture, confidence model, and 18 hard rules
+alwaysApply: true
+---
+
+# Spec 1 — FoodEvent + Four-Layer Confidence Model
+
+Canonical copy: `docs/spec1-food-event-confidence-model.md`. Read it before changing parse, lookup, food routes, log documents, or confidence. Specs 2–4 depend on this shape.
+
+**Do not implement Spec 2–4 here:** confirmation/ask behavior, verbosity, recapture, restriction-tag extraction over 2M records, combination/fasting rules, or band-threshold tuning.
+
+## Canonical objects
+
+- `FoodEvent` is the parse → lookup → route → log shape (Pydantic, prefer `backend/models/food_event.py`). It is **not** the top-level object.
+- `UtteranceResult` wraps it: `intent` (v1 always `"LOG"`), `food_events: list[FoodEvent]` (never assume singular), explicit `subject_user_id`, `input_modality` (`voice|text|photo|barcode`), `activation` (voice only: `push_to_talk|wake_word|ambient`; null for photo/barcode), `raw_transcript`.
+- All TTS goes through a single `speak()` choke point. No direct TTS from routes or components.
+
+Key `FoodEvent` facts: `item_type` is food/beverage/supplement (symptoms/activity are sibling collections later). `entry_mode="direct_macro"` is legitimate — `food` may be None and `resolution_status` is `"resolved"`. `visibility` defaults private and governs **product** contribution only; consumption data is never shared. Nutrients store `{value, unit, usda_nutrient_id}`. Denormalize display name/brand/serving into the log at write time.
+
+## Confidence
+
+Per-field `FieldConfidence` with `band` (`high|medium|low`) plus raw `asr` / `semantic` / `database`. **Decision logic reads bands only.** One `compute_band()` with TUNABLE thresholds. Missing layer = skip, not zero. Extraction failure → band `"low"`, log still succeeds. Typed input: `asr=None`.
+
+LLMs at the edges, determinism in the middle: strict structured outputs, enum-constrain closed values, small focused calls not mega-prompts, model tiering never ensembling, deterministic validation after every call, **no LLM for allergen/restriction blocking, thresholds, or nutrition arithmetic**.
+
+Populate confidence keys on every parse: `food`, `brand`, `variant`, `preparation`, `amount`, `unit`, `negation`, `allergen_match`. Provenance is separate: `user_stated|user_approximate|user_confirmed|inferred|record_default`. Store the resolution audit trail on the log.
+
+## Hard rules (non-negotiable)
+
+1. Confidence failure never blocks a log — band low, proceed; test this.
+2. Branch on bands only, never raw floats.
+3. `consumption_fraction` is user-stated only; never infer ≠ 1.0.
+4. "May contain" / facility language → `unknown`, never free or contains.
+5. `certification_status` never inferred from ingredients; default unknown.
+6. Unresolved replaces silent 0-calorie logs — nothing logs; frontend gets an explicit not-recognized state.
+7. Report, never assert safety (UI copy and TTS too).
+8. Modality parity: voice alone AND touch alone for every flow.
+9. Wake-word/ambient activation is core v1; `subject_user_id` always explicit.
+10. `wake_word_enabled` defaults OFF; push-to-talk and text always available.
+11. `input_modality` ≠ `activation`; photo/barcode → `activation` null.
+12. `direct_macro` is not a resolution failure.
+13. Reserve `users.subscription_tier` (nullable); accessibility/safety never paywalled (D5).
+14. `evaluate_restrictions(food_record, user_profile) -> RestrictionVerdict` is a pure function; POST/PATCH is one caller among several.
+15. `users.nutrient_display_preferences: list[str]` for voice/progressive disclosure.
+16. `users.contribution_consent` default False; consumption data never shared; allergen status never crowdsourced to canonical.
+17. Timezone-aware timestamps; do not copy the UTC-midnight `read_today` bug.
+18. Do not implement FHIR now.
+
+## Wiring, migration, tests
+
+Parser returns FoodEvent; lookup fills database confidence + allergen/restriction tags; Mongo stores the full shape; frontend contract is **additive** (do not rename existing keys).
+
+Migration: mongodump first, schema-diff real docs, dry-run default, user sign-off for writes. Historical logs: band low, provenance `record_default`, unresolved paths not invented as "free".
+
+Tests: four-tier standard in the spec (model round-trip, typed/voice/hedged/unresolved/logprobs-fail/multi-item/direct-macro/quantity_kind, pytest including `evaluate_restrictions` with no logging, voice AND text for Tier 2).

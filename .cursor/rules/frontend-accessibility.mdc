@@ -1,0 +1,43 @@
+---
+description: S2M accessibility floor for all UI — rem type, semantic HTML, modality parity, WCAG AA
+globs: frontend/**/*.{tsx,ts,jsx,js,css}
+alwaysApply: false
+---
+
+# Frontend Accessibility Standards
+
+Canonical copy: `docs/frontend-accessibility-standards.md`. This is the floor, not a suggestion. S2M is Next.js + Tailwind, wrapped in Capacitor; custom UI must still meet these from the first commit.
+
+## Typography
+
+All font sizes in `rem`. Use Tailwind's default type scale (`text-sm`, `text-base`, `text-lg`). Never `text-[14px]` or other arbitrary pixel font sizes. Line height and spacing around text must also scale. At 200% browser font size, screens stay usable — no clipped text, overlap, or horizontal scrolling of body content.
+
+## Semantic HTML
+
+`<button>` for actions. `<a>` for navigation. `<input>` with an associated `<label>`. Landmark and heading order (`<nav>`, `<main>`, `<h1>`–`<h6>`). Never `<div onClick={...}>`. Custom components wrap native elements; they do not replace them.
+
+## Color
+
+Colors via CSS custom properties / Tailwind theme tokens. No hex values inline in components. WCAG AA: 4.5:1 normal text, 3:1 large text and UI boundaries. Never convey information by color alone — allergen warnings need text or an icon too.
+
+## OS preferences
+
+Implement from the start: `prefers-reduced-motion` (every animation has a no-motion path), `prefers-contrast: more`, `prefers-color-scheme: dark`.
+
+## Touch, focus, ARIA
+
+- Touch targets 44×44px minimum, with spacing between adjacent targets.
+- Never `outline: none` without an equally visible replacement. Focus order follows visual order.
+- `aria-label` on icon-only buttons; `aria-live="polite"` for dynamic updates; `aria-live="assertive"` / `role="alert"` only for urgent allergen/safety; `aria-describedby` for help and errors. Do not add redundant ARIA where semantic HTML already suffices.
+
+## App-specific screen-reader + modality rules
+
+- Clarification questions must be announced, not only shown.
+- Confidence/uncertainty ("Unsure") must be in announced text, not a visual badge alone.
+- Candidate lists must be navigable and ordinally addressable ("the second one").
+- Nothing dismissible by tap-only — keyboard, switch, and voice too.
+- **Modality parity:** every flow completable by voice alone AND touch alone AND keyboard alone. Never camera-only, never gesture-only (drag/pinch/swipe-to-reveal) as the only path.
+
+## Ship gate
+
+VoiceOver, TalkBack, keyboard-only, 200% font scaling, high-contrast, reduced-motion, and Switch Access/Control on the core logging flow. Automated axe/Lighthouse is a first pass, not sufficient. Apple Accessibility Nutrition Labels at launch must be true and tested — do not overclaim.
