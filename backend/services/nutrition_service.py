@@ -39,6 +39,8 @@ SCORE_THRESHOLD = 0.3
 
 class NutritionStoreUnavailable(Exception):
     """Qdrant timed out or could not be reached."""
+
+
 # Alternatives can be slightly weaker matches than the primary result — we
 # still want to offer them, just not obvious garbage. Kept below
 # SCORE_THRESHOLD so the "Did you mean?" list isn't empty for near-ties.
@@ -744,6 +746,13 @@ async def lookup_food(
     print("RAG combined filter:", combined_filter)
 
     matches, winning_variant = await _retrieve_best(query, combined_filter)
+    retrieval_top1 = matches[0]["score"] if matches else None
+    retrieval_top2 = matches[1]["score"] if matches and len(matches) > 1 else None
+    retrieval_gap = (
+        retrieval_top1 - retrieval_top2
+        if retrieval_top1 is not None and retrieval_top2 is not None
+        else None
+    )
 
     # Zero results: only fall back if it's SAFE to. If any allergen is
     # active, never relax -- tell the caller explicitly rather than silently
@@ -765,6 +774,13 @@ async def lookup_food(
                 )
                 matches, winning_variant = await _retrieve_best(query, relaxed_filter)
                 used_fallback = True
+                retrieval_top1 = matches[0]["score"] if matches else None
+                retrieval_top2 = matches[1]["score"] if matches and len(matches) > 1 else None
+                retrieval_gap = (
+                    retrieval_top1 - retrieval_top2
+                    if retrieval_top1 is not None and retrieval_top2 is not None
+                    else None
+                )
 
     if not matches:
         return None
@@ -868,5 +884,10 @@ async def lookup_food(
         "used_dietary_fallback": used_fallback,
         "nutrients": nutrients,
         "allergens": allergens_present,
+        # Spec 1 database confidence layer — stop discarding retrieval scores.
+        "database_score": match.get("score"),
+        "database_score_gap": retrieval_gap,
+        "database_score_top1": retrieval_top1,
+        "database_score_top2": retrieval_top2,
         **allergen_states,
     }

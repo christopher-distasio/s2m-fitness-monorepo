@@ -12,6 +12,11 @@ from backend.services.query_match_rank import is_zero_calorie_query
 from backend.services.parse_query_modifiers import parse_query_modifiers
 from backend.services.dietary_filters import FDA_ALLERGENS
 from backend.models import UserProfile
+from backend.services.confidence import extract_semantic_logprob
+from backend.services.food_event_build import (
+    food_event_from_parsed,
+    utterance_from_parsed_events,
+)
 
 load_dotenv()
 
@@ -52,7 +57,10 @@ Rules:
   - Measured amounts (cups, oz, tablespoons, grams): serving_size is the number plus the unit only — '1 cup', '2 cups', '8 oz', '1 tablespoon'. Wrong: '2 cups of rice'. Right: serving_size '2 cups', food 'rice'.
   - Size words: '1 medium', '1 large', '1 small' — still no food name.
   - Word numbers from the user ('two', 'a dozen') must be converted to digits in serving_size ('2', '12').
-- Always return a non-empty serving_size
+- amount, when present, MUST be a JSON number (2, 1.5) — never a string like "2 bananas"
+- If the user names multiple distinct foods ("eggs, toast, and coffee"), put each in "items" as its own object with its own food/brand/serving_size. A single food stays in the top-level fields (items may be []).
+- Direct macro dictation ("just log 300 calories") is entry_mode "direct_macro": food may be null and calories is the user-stated number. That is not a lookup failure.
+- Always return a non-empty serving_size for resolved food items
 - Do NOT always default vague quantities to "1 serving". Apply this logic instead:
   - If the food has a natural standard measurement unit, infer that unit even when quantity is vague:
     butter → tablespoon
@@ -86,6 +94,119 @@ Combine the previous food from history with the new quantity/detail to produce a
 Example: history has "pasta", user says "a small bowl" → parse as "a small bowl of pasta".
 NEVER return unparseable for a clarification response.
 """
+
+# Strict structured output — amount is a number so "2 bananas" cannot occupy it.
+PARSE_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "unparseable": {"type": "boolean"},
+        "hedged": {"type": "boolean"},
+        "entry_mode": {"type": "string", "enum": ["resolved", "direct_macro"]},
+        "item_type": {"type": "string", "enum": ["food", "beverage", "supplement"]},
+        "food": {"type": ["string", "null"]},
+        "brand": {"type": "string"},
+        "serving_size": {"type": "string"},
+        "amount": {"type": ["number", "null"]},
+        "unit": {"type": "string"},
+        "quantity_kind": {"type": "string", "enum": ["count", "measure"]},
+        "calories": {"type": ["number", "null"]},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "notes": {"type": "string"},
+        "reasoning": {"type": "string"},
+        "alternatives": {"type": "array", "items": {"type": "string"}},
+        "error": {"type": ["string", "null"]},
+        "raw": {"type": "string"},
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "food": {"type": ["string", "null"]},
+                    "brand": {"type": "string"},
+                    "item_type": {
+                        "type": "string",
+                        "enum": ["food", "beverage", "supplement"],
+                    },
+                    "serving_size": {"type": "string"},
+                    "amount": {"type": ["number", "null"]},
+                    "unit": {"type": "string"},
+                    "quantity_kind": {"type": "string", "enum": ["count", "measure"]},
+                    "calories": {"type": ["number", "null"]},
+                    "entry_mode": {
+                        "type": "string",
+                        "enum": ["resolved", "direct_macro"],
+                    },
+                },
+                "required": [
+                    "food",
+                    "brand",
+                    "item_type",
+                    "serving_size",
+                    "amount",
+                    "unit",
+                    "quantity_kind",
+                    "calories",
+                    "entry_mode",
+                ],
+            },
+        },
+    },
+    "required": [
+        "unparseable",
+        "hedged",
+        "entry_mode",
+        "item_type",
+        "food",
+        "brand",
+        "serving_size",
+        "amount",
+        "unit",
+        "quantity_kind",
+        "calories",
+        "confidence",
+        "notes",
+        "reasoning",
+        "alternatives",
+        "error",
+        "raw",
+        "items",
+    ],
+}
+
+QUANTITY_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "amount": {"type": "number"},
+        "unit": {"type": "string"},
+        "quantity_kind": {"type": "string", "enum": ["count", "measure"]},
+        "serving_size": {"type": "string"},
+        "hydration_state": {"type": ["string", "null"], "enum": ["dry", "cooked", None]},
+        "consumption_fraction": {"type": "number"},
+        "consumption_fraction_stated": {"type": "boolean"},
+    },
+    "required": [
+        "amount",
+        "unit",
+        "quantity_kind",
+        "serving_size",
+        "hydration_state",
+        "consumption_fraction",
+        "consumption_fraction_stated",
+    ],
+}
+
+_DIRECT_MACRO_RE = re.compile(
+    r"(?:just\s+)?log\s+(\d+(?:\.\d+)?)\s*(?:cal(?:orie)?s?)\b",
+    re.IGNORECASE,
+)
+
+UNRECOGNIZED_MESSAGE = (
+    "I didn't recognize that as a food I can look up. "
+    "Please try a different name or more detail."
+)
 
 # The single upfront disambiguating question, before any mixed candidate list.
 # Shared by text and voice so the two flows can't diverge.
@@ -284,11 +405,138 @@ async def _fetch_dietary_preferences(user_id: str | None):
     return user_profile.dietary_preferences
 
 
+def _direct_macro_parsed(raw_input: str) -> dict | None:
+    match = _DIRECT_MACRO_RE.search(raw_input or "")
+    if not match:
+        return None
+    calories = float(match.group(1))
+    return {
+        "food": None,
+        "brand": "",
+        "entry_mode": "direct_macro",
+        "item_type": "food",
+        "serving_size": "1",
+        "amount": 1.0,
+        "unit": "count",
+        "quantity_kind": "count",
+        "calories": calories,
+        "macronutrients": {"carbohydrates": None, "protein": None, "fats": None},
+        "confidence": "high",
+        "notes": "User-stated energy amount; no food lookup.",
+        "reasoning": "Direct calorie entry — nothing to resolve.",
+        "alternatives": [],
+        "resolution_status": "resolved",
+        "resolution": {"status": "resolved"},
+        "data_source": "user_stated",
+    }
+
+
+def _split_parsed_items(parsed: dict) -> list[dict]:
+    items = parsed.get("items")
+    if isinstance(items, list) and items:
+        shared = {
+            k: v
+            for k, v in parsed.items()
+            if k not in {"items", "food", "brand", "serving_size", "amount", "unit"}
+        }
+        out = []
+        for item in items:
+            merged = dict(shared)
+            merged.update(item)
+            out.append(merged)
+        return out
+    return [parsed]
+
+
+async def _complete_json(
+    messages: list,
+    schema: dict | None = None,
+    *,
+    max_tokens: int = 600,
+) -> tuple[dict, object, bool]:
+    """Return (parsed_dict, raw_response, extraction_failed)."""
+    extraction_failed = False
+    kwargs: dict = {
+        "model": "gpt-4o-mini",
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+        "logprobs": True,
+        "top_logprobs": 3,
+    }
+    if schema is not None:
+        kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "food_parse",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+    try:
+        response = await client.chat.completions.create(**kwargs)
+    except Exception:
+        logger.exception("Structured GPT call failed; retrying without schema/logprobs")
+        extraction_failed = True
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=max_tokens,
+        )
+
+    content = (response.choices[0].message.content or "").strip()
+    print("GPT response:", content)
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return {"error": "parse_failed", "raw_response": content}, response, True
+    if not isinstance(parsed, dict):
+        return {"error": "parse_failed", "raw_response": content}, response, True
+    return parsed, response, extraction_failed
+
+
+def _finalize_utterance(
+    parsed_items: list[dict],
+    *,
+    raw_input: str,
+    user_id: str | None,
+    input_modality: str,
+    activation: str | None,
+    asr: float | None,
+    semantic: float | None,
+    extraction_failed: bool,
+) -> dict:
+    subject = user_id or "anonymous"
+    events = [
+        food_event_from_parsed(
+            item,
+            raw_input=raw_input,
+            asr=asr,
+            semantic=semantic,
+            extraction_failed=extraction_failed,
+        )
+        for item in parsed_items
+    ]
+    utterance = utterance_from_parsed_events(
+        events,
+        subject_user_id=subject,
+        raw_input=raw_input,
+        input_modality=input_modality,
+        activation=activation,
+    )
+    return utterance.to_parse_response()
+
+
 async def parse_food_input(
     raw_input: str,
     conversation_history: list = [],
     source_filter: str | None = None,
     user_id: str | None = None,
+    *,
+    input_modality: str = "text",
+    activation: str | None = None,
+    asr: float | None = None,
 ) -> dict:
     # If this is a clarification, combine with previous food
     if conversation_history:
@@ -303,60 +551,113 @@ async def parse_food_input(
         except Exception:
             pass
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(conversation_history)
-    messages.append({"role": "user", "content": raw_input})    
-    print("MESSAGES SENT TO GPT:", json.dumps(messages, indent=2))
-    response = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.2,
-        max_tokens=400,
-    )
+    extraction_failed = False
+    semantic = None
+    parsed: dict
 
-    content = response.choices[0].message.content.strip()
+    direct = _direct_macro_parsed(raw_input) if not conversation_history else None
+    if direct:
+        parsed = direct
+    else:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(conversation_history)
+        messages.append({"role": "user", "content": raw_input})
+        print("MESSAGES SENT TO GPT:", json.dumps(messages, indent=2))
+        parsed, response, extraction_failed = await _complete_json(
+            messages, PARSE_JSON_SCHEMA
+        )
+        try:
+            semantic = extract_semantic_logprob(response, parsed.get("food"))
+        except Exception:
+            logger.exception("semantic logprob extraction failed")
+            extraction_failed = True
+            semantic = None
 
-    print("GPT response:", content)
+    if parsed.get("error") not in (None, ""):
+        if parsed.get("error") == "unparseable" and conversation_history:
+            pass
+        else:
+            return parsed
 
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        return {"error": "parse_failed", "raw_response": content}
-
-    # Return early if unparseable
-    if "error" in parsed:
-        return parsed
+    if parsed.get("unparseable") and not conversation_history:
+        return {"error": "unparseable", "raw": raw_input}
 
     parsed = _apply_confidence_guards(parsed, raw_input)
 
-    # Extract modifiers from the user's raw input — independent of GPT's
-    # parsing, word-boundary matching on the same 13 categories as the
-    # database-side extractor.
     modifiers = parse_query_modifiers(raw_input)
     parsed["modifiers"] = modifiers
-
     non_none_mods = {k: v for k, v in modifiers.items() if v != "NONE"}
     if non_none_mods:
         print(f"Extracted modifiers: {non_none_mods}")
 
-    # Did the user explicitly name a brand? If so, we skip the brand-vs-generic
-    # question entirely and go straight to branded results — the answer's known.
+    items = _split_parsed_items(parsed)
+    dietary_preferences = await _fetch_dietary_preferences(user_id)
+    enriched: list[dict] = []
+    for item in items:
+        item["modifiers"] = modifiers
+        if item.get("entry_mode") == "direct_macro" or (
+            not item.get("food") and item.get("calories") is not None
+        ):
+            item["entry_mode"] = "direct_macro"
+            item["resolution_status"] = "resolved"
+            item["resolution"] = {"status": "resolved"}
+            item["data_source"] = item.get("data_source") or "user_stated"
+            enriched.append(item)
+            continue
+        filled = await _enrich_with_nutrition(
+            item,
+            raw_input=raw_input,
+            source_filter=source_filter,
+            dietary_preferences=dietary_preferences,
+        )
+        if filled.get("error") == "nutrition_unavailable":
+            return filled
+        enriched.append(filled)
+
+    return _finalize_utterance(
+        enriched,
+        raw_input=raw_input,
+        user_id=user_id,
+        input_modality=input_modality,
+        activation=activation,
+        asr=asr,
+        semantic=semantic,
+        extraction_failed=extraction_failed,
+    )
+
+
+async def _enrich_with_nutrition(
+    parsed: dict,
+    *,
+    raw_input: str,
+    source_filter: str | None,
+    dietary_preferences,
+) -> dict:
     stated_brand = (parsed.get("brand") or "").strip()
     effective_source = source_filter
     if effective_source is None and stated_brand:
         effective_source = "brand"
 
-    # NEW (2026-08-04): fetch the user's dietary preferences (allergens,
-    # vegan/kosher/etc, organic/keto/etc) so lookup_food can apply them.
-    dietary_preferences = await _fetch_dietary_preferences(user_id)
+    food_query = parsed.get("food")
+    if not food_query:
+        parsed["confidence"] = "low"
+        parsed["resolution_status"] = "unresolved"
+        parsed["resolution"] = {
+            "status": "unresolved",
+            "reason": UNRECOGNIZED_MESSAGE,
+        }
+        parsed["reasoning"] = UNRECOGNIZED_MESSAGE
+        parsed["calories"] = None
+        parsed["candidates"] = []
+        parsed["alternatives"] = []
+        return parsed
 
-    food_query = parsed['food']
-    print("calling lookup_food with:", food_query, "| source:", effective_source, "| modifiers:", non_none_mods)
+    print("calling lookup_food with:", food_query, "| source:", effective_source)
     try:
         nutrition = await lookup_food(
             food_query,
             source_filter=effective_source,
-            modifiers=modifiers,
+            modifiers=parsed.get("modifiers"),
             dietary_preferences=dietary_preferences,
         )
     except NutritionStoreUnavailable:
@@ -369,17 +670,9 @@ async def parse_food_input(
             "raw": raw_input,
         }
 
-    # NEW (2026-08-04): lookup_food returns a distinct shape when a severe
-    # allergen constraint produced zero safe results — no calories/candidates
-    # to process, just a safety message. Handle this BEFORE the normal
-    # `if nutrition:` branch, which assumes standard nutrition fields exist.
-    #
-    # NOTE: introduces a 4th confidence-like state, "blocked", alongside the
-    # existing high/medium/low. If the frontend/voice layer only branches on
-    # those three values, it will need a small update to handle this state
-    # explicitly — not verified against that code from here.
     if nutrition and nutrition.get("blocked_by_allergy"):
         parsed["confidence"] = "blocked"
+        parsed["blocked_by_allergy"] = True
         parsed["calories"] = None
         parsed["macronutrients"] = {"carbohydrates": None, "protein": None, "fats": None}
         parsed["data_source"] = "allergy_block"
@@ -387,10 +680,10 @@ async def parse_food_input(
         parsed["candidates"] = []
         parsed["portion_options"] = []
         parsed["alternatives"] = []
+        parsed["resolution_status"] = "needs_clarification"
         return parsed
 
     if nutrition:
-        # Use Current food data source data
         parsed["calories"] = nutrition["calories"]
         parsed["macronutrients"] = {
             "carbohydrates": nutrition["carbs"],
@@ -398,35 +691,30 @@ async def parse_food_input(
             "fats": nutrition["fat"],
         }
         parsed["data_source"] = "usda"
+        parsed["source"] = nutrition.get("source")
+        parsed["fdc_id"] = nutrition.get("fdc_id")
+        parsed["database_score"] = nutrition.get("database_score")
+        parsed["database_score_gap"] = nutrition.get("database_score_gap")
 
-        # Serving/brand context, straight from the matched record.
-        parsed["brand"] = nutrition.get("brand") or None
+        parsed["brand"] = nutrition.get("brand") or parsed.get("brand") or None
         parsed["serving_label"] = nutrition.get("serving_label")
         parsed["serving_note"] = nutrition.get("serving_note")
-
-        # Grounded choices from the data (real foods + real portions), so the
-        # frontend can offer accurate, priced alternatives instead of guesses.
         parsed["candidates"] = nutrition.get("candidates", [])
         parsed["portion_options"] = nutrition.get("portion_options", [])
-
-        # NEW (2026-08-04): surface whether a non-allergen Tier 1 constraint
-        # (vegan, kosher, etc.) had to be relaxed to find any results, so the
-        # voice/UI layer can say something like "no vegan options found,
-        # here's what I found instead" rather than presenting a silently
-        # relaxed result as an exact match.
         parsed["used_dietary_fallback"] = nutrition.get("used_dietary_fallback", False)
-
-        # Extra macros/micros scaled to serving (fiber, sodium, vitamins, …).
         parsed["nutrients"] = dict(nutrition.get("nutrients") or {})
-
-        # Allergen tags for POST/PATCH allergy gate (severe block / moderate warn).
         parsed["allergens"] = nutrition.get("allergens") or []
         for allergen_name in FDA_ALLERGENS:
             if allergen_name in nutrition:
                 parsed[allergen_name] = nutrition[allergen_name]
 
-        # Scale per-serving nutrition by the parsed quantity (e.g. "2" eggs).
-        quantity = parse_quantity_multiplier(parsed.get("serving_size", "1"))
+        if parsed.get("amount") is not None:
+            try:
+                quantity = float(parsed["amount"])
+            except (TypeError, ValueError):
+                quantity = parse_quantity_multiplier(parsed.get("serving_size", "1"))
+        else:
+            quantity = parse_quantity_multiplier(parsed.get("serving_size", "1"))
 
         if quantity > 1:
             if parsed["calories"] is not None:
@@ -445,6 +733,7 @@ async def parse_food_input(
             parsed["nutrients"] = nutrients
 
         parsed["quantity_used"] = quantity
+        parsed["amount"] = quantity
         print(f"quantity: {quantity}, calories after: {parsed['calories']}")
         logger.info(
             "quantity_used=%s calories_after=%s serving_size=%r",
@@ -453,9 +742,6 @@ async def parse_food_input(
             parsed.get("serving_size"),
         )
 
-        # Never silently high-confidence-log a degenerate 0 kcal for a food that
-        # should have calories (bad branded USDA rows). Atwater usually fills
-        # this in lookup; this is the last-resort safety net.
         cal = parsed.get("calories")
         try:
             cal_f = float(cal) if cal is not None else None
@@ -468,6 +754,11 @@ async def parse_food_input(
             and not is_zero_calorie_query(raw_input or "")
         ):
             parsed["confidence"] = "low"
+            parsed["resolution_status"] = "unresolved"
+            parsed["resolution"] = {
+                "status": "unresolved",
+                "reason": "Nutrition data looks incomplete (0 calories for this food).",
+            }
             note = "Nutrition data looks incomplete (0 calories for this food)."
             parsed["reasoning"] = (
                 f"{parsed['reasoning']} {note}".strip()
@@ -475,21 +766,9 @@ async def parse_food_input(
                 else note
             )
 
-        # Consolidated resolver: even when the model was confident about the
-        # TEXT, the DATA may show the plausible interpretations disagree on
-        # calories (e.g. "milk" -> skim ~83 vs whole ~149). When that happens
-        # we drop to "medium" so the app asks one grounded question instead of
-        # silently logging a coin-flip. Runs BEFORE the alternatives block so a
-        # downgrade still populates the options the user will pick from.
         resolution = nutrition.get("resolution") or {}
         parsed["resolution"] = resolution
 
-        # Brand-vs-generic gate: when the user named no brand AND we haven't yet
-        # filtered by source AND the pool is genuinely ambiguous, ask ONE
-        # upfront question (brand vs generic) instead of showing a mixed list of
-        # branded products, generics, and substitutes. The answer re-queries
-        # with a source filter (see routes + frontend), and only THEN do we
-        # build the candidate/portion list — now from a single clean source.
         if (
             source_filter is None
             and not stated_brand
@@ -506,34 +785,42 @@ async def parse_food_input(
                 "reason": brand_reason,
                 "question": BRAND_CHOICE_QUESTION,
             }
+            parsed["resolution_status"] = "needs_clarification"
             parsed["reasoning"] = brand_reason
-            # Withhold the mixed list; the filtered follow-up query builds it.
             parsed["candidates"] = []
             parsed["portion_options"] = []
             parsed["alternatives"] = []
             return _apply_confidence_guards(parsed, raw_input)
 
         if resolution.get("status") == "needs_clarification":
+            parsed["resolution_status"] = "needs_clarification"
             if parsed.get("confidence") == "high":
                 parsed["confidence"] = "medium"
-            # Prefer the data-driven reason over GPT "food is clear…" copy so
-            # the Less Sure card matches why we're asking.
             data_reason = resolution.get("reason")
             if data_reason:
                 parsed["reasoning"] = data_reason
 
-        # For medium/low confidence, prefer data-grounded alternatives over the
-        # model's free-text guesses: real, priced options the user can pick.
         if parsed.get("confidence") != "high":
             parsed["alternatives"] = _build_grounded_alternatives(
                 parsed, nutrition
             ) or parsed.get("alternatives")
     else:
-        # Current food data source found nothing — ask GPT to estimate as fallback
         parsed["calories"] = None
-        parsed["macronutrients"] = {"carbohydrates": None, "protein": None, "fats": None, "sugar": None}
+        parsed["macronutrients"] = {
+            "carbohydrates": None,
+            "protein": None,
+            "fats": None,
+            "sugar": None,
+        }
         parsed["confidence"] = "low"
-        parsed["reasoning"] = (parsed.get("reasoning") or "") + " Nutrition data unavailable — estimate only."
-        parsed["data_source"] = "gpt_fallback"
+        parsed["reasoning"] = UNRECOGNIZED_MESSAGE
+        parsed["data_source"] = None
+        parsed["resolution_status"] = "unresolved"
+        parsed["resolution"] = {
+            "status": "unresolved",
+            "reason": UNRECOGNIZED_MESSAGE,
+        }
+        parsed["candidates"] = []
+        parsed["alternatives"] = parsed.get("alternatives") or []
 
     return _apply_confidence_guards(parsed, raw_input)

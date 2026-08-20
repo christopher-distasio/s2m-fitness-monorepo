@@ -67,6 +67,7 @@ function waitUntilDone(
   return { finish, done };
 }
 
+/** Single TTS choke point — all spoken UI must go through `speak()`. */
 export async function speak(
   text: string,
   {

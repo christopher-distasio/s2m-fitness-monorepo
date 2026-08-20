@@ -310,11 +310,19 @@ interface ParsedResult {
   portion_options?: PortionOption[];
   notes?: string;
   resolution?: {
-    status?: "resolved" | "needs_clarification" | "needs_brand_choice";
+    status?:
+      | "resolved"
+      | "needs_clarification"
+      | "needs_brand_choice"
+      | "unresolved";
     axis?: string | null;
     reason?: string;
     question?: string;
   };
+  resolution_status?: "resolved" | "needs_clarification" | "unresolved";
+  entry_mode?: "resolved" | "direct_macro";
+  food_events?: unknown[];
+  confidence_detail?: Record<string, { band?: string }>;
 }
 
 // The upfront brand-vs-generic question. Kept identical for text and voice so
@@ -322,6 +330,20 @@ interface ParsedResult {
 const BRAND_CHOICE_QUESTION =
   "Are you looking for a specific brand, or a general item?";
 const BRAND_CHOICE_SPEECH = `${SAY_NUMBER_OR_WORD} ${BRAND_CHOICE_QUESTION} Number 1: general. Number 2: specific.`;
+
+function isUnresolved(parsed: ParsedResult): boolean {
+  return (
+    parsed.resolution_status === "unresolved" ||
+    parsed.resolution?.status === "unresolved"
+  );
+}
+
+function unresolvedSpeech(parsed: ParsedResult): string {
+  return (
+    parsed.reasoning ||
+    "I didn't recognize that as a food I can look up. Please try a different name or more detail."
+  );
+}
 
 function isBrandChoice(parsed: ParsedResult): boolean {
   return parsed.resolution?.status === "needs_brand_choice";
@@ -1222,6 +1244,13 @@ export default function Home() {
         return;
       }
 
+      if (isUnresolved(parsed)) {
+        const msg = unresolvedSpeech(parsed);
+        setStatus(msg);
+        await speak(msg);
+        return;
+      }
+
       if (parsed.confidence === "high") {
         const resolvedInput = `${parsed.serving_size} ${parsed.food}`;
         await confirmLog(uid, resolvedInput);
@@ -1582,11 +1611,21 @@ export default function Home() {
           transcription: data.transcription,
         });
 
+        if (isUnresolved(data.parsed)) {
+          const msg = unresolvedSpeech(data.parsed);
+          setStatus(`Heard: "${data.transcription}" — ${msg}`);
+          await speak(msg);
+          shouldAutoListen = true;
+          return;
+        }
+
         if (data.parsed.confidence === "high") {
-          const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
-          setStatus(
-            `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} cal`,
-          );
+          const label =
+            data.parsed.entry_mode === "direct_macro" || !data.parsed.food
+              ? `${Math.round(data.parsed.calories ?? 0)} calories`
+              : `${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
+          const msg = `Logged ${label}`;
+          setStatus(`Heard: "${data.transcription}" — ${label}`);
           await speak(msg);
           await fetchLogs(uid);
           await fetchSummary(uid);
@@ -1944,7 +1983,10 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ raw_input: originalInput, source_filter: source, user_id: uid }),
       });
-      const parsed = (await res.json()) as ParsedResult & { error?: string };
+      const parsed = (await res.json()) as ParsedResult & {
+        error?: string;
+        message?: string;
+      };
 
       if (parsed.error) {
         const err =
@@ -1953,6 +1995,13 @@ export default function Home() {
             : `I couldn't find a ${source === "brand" ? "branded" : "general"} match. Please try again.`;
         setStatus(err);
         await speak(err);
+        return false;
+      }
+
+      if (isUnresolved(parsed)) {
+        const msg = unresolvedSpeech(parsed);
+        setStatus(msg);
+        await speak(msg);
         return false;
       }
 

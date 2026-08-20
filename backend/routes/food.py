@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 from backend.models import FoodLog, Correction, UserProfile, DietaryPreferences
 from backend.services.food_parser import parse_food_input
-from backend.services.transcriber import transcribe_audio
+from backend.services.transcriber import transcribe_audio_detailed
 from backend.services.allergy_check import check_allergy_block, moderate_allergy_warnings
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
@@ -15,7 +15,7 @@ from backend.services.clarification import (
     parse_stop_command,
     clarification_state,
 )
-from backend.services.tts_service import generate_speech
+from backend.services.tts_service import speak
 from fastapi.responses import JSONResponse, Response
 import json
 
@@ -105,15 +105,62 @@ class TTSRequest(BaseModel):
     voice: str = "alloy"
 
 
+def _is_unresolved(parsed: dict) -> bool:
+    if parsed.get("resolution_status") == "unresolved":
+        return True
+    return (parsed.get("resolution") or {}).get("status") == "unresolved"
+
+
+def _events_to_log(parsed: dict) -> list[dict]:
+    events = parsed.get("food_events")
+    if isinstance(events, list) and events:
+        from backend.services.food_event_build import food_event_from_parsed
+
+        out = []
+        for event in events:
+            if isinstance(event, dict):
+                out.append(
+                    food_event_from_parsed(event, raw_input=parsed.get("raw_transcript")).to_legacy_parsed()
+                    if "calories" in event or "food" in event
+                    else event
+                )
+            else:
+                out.append(event.to_legacy_parsed())
+        # Prefer the already-legacy top-level parse for the first event so
+        # scaled calories / candidates match what the client saw.
+        if out:
+            primary = dict(parsed)
+            primary.pop("food_events", None)
+            out[0] = primary
+        return out
+    return [parsed]
+
+
 def build_food_log(
     user_id: str, raw_input: str, parsed: dict, food_name: Optional[str] = None
 ) -> FoodLog:
     macros = parsed.get("macronutrients", {})
     extras = parsed.get("nutrients") or {}
+    if extras and isinstance(next(iter(extras.values()), None), dict):
+        extras = {
+            k: v["value"]
+            for k, v in extras.items()
+            if isinstance(v, dict) and v.get("value") is not None
+        }
+    display_name = food_name or parsed.get("food") or parsed.get("logged_food_name") or raw_input
+    utterance = {
+        "intent": parsed.get("intent") or "LOG",
+        "subject_user_id": parsed.get("subject_user_id") or user_id,
+        "input_modality": parsed.get("input_modality") or "text",
+        "activation": parsed.get("activation"),
+        "raw_transcript": parsed.get("raw_transcript") or raw_input,
+    }
+    food_event = parsed.get("food_events", [None])
+    stored_event = food_event[0] if isinstance(food_event, list) and food_event else parsed.get("food_event")
     return FoodLog(
         user_id=user_id,
         raw_input=raw_input,
-        food_name=food_name or parsed["food"],
+        food_name=display_name,
         calories=parsed.get("calories"),
         protein=macros.get("protein"),
         carbs=macros.get("carbohydrates"),
@@ -123,6 +170,11 @@ def build_food_log(
         confidence=parsed.get("confidence"),
         reasoning=parsed.get("reasoning"),
         alternatives=parsed.get("alternatives"),
+        food_event=stored_event if isinstance(stored_event, dict) else None,
+        utterance=utterance,
+        resolution_audit=(stored_event or {}).get("resolution_audit")
+        if isinstance(stored_event, dict)
+        else None,
     )
 
 
@@ -196,22 +248,49 @@ async def log_food(request: FoodLogRequest):
 
     if parsed.get("error") == "nutrition_unavailable":
         return _nutrition_unavailable_response(parsed)
-    if "error" in parsed:
+    if parsed.get("error"):
         raise HTTPException(
             status_code=422, detail=f"Could not parse food input: {parsed}"
         )
+
+    if _is_unresolved(parsed):
+        return {
+            "logged": False,
+            "resolution_status": "unresolved",
+            "message": parsed.get("reasoning")
+            or "I didn't recognize that as a food I can look up. Please try a different name or more detail.",
+            "parsed": parsed,
+        }
 
     # Severe allergen refusal (lookup zero-safe-results or explicit allergen
     # match). Shared with PATCH so create/edit stay consistent.
     user_prefs = await _load_dietary_preferences(request.user_id)
     warnings = _apply_allergy_gate(parsed, user_prefs)
 
-    food_log = build_food_log(
-        request.user_id, request.raw_input, parsed, request.food_name
-    )
-    await food_log.insert()
+    inserted = []
+    for event_parsed in _events_to_log(parsed):
+        if _is_unresolved(event_parsed):
+            continue
+        food_log = build_food_log(
+            request.user_id, request.raw_input, event_parsed, request.food_name
+        )
+        await food_log.insert()
+        inserted.append(food_log)
 
-    return _with_allergy_warning(build_response(food_log, parsed), warnings)
+    if not inserted:
+        return {
+            "logged": False,
+            "resolution_status": "unresolved",
+            "message": parsed.get("reasoning")
+            or "I didn't recognize that as a food I can look up. Please try a different name or more detail.",
+            "parsed": parsed,
+        }
+
+    food_log = inserted[0]
+    response = _with_allergy_warning(build_response(food_log, parsed), warnings)
+    if len(inserted) > 1:
+        response["ids"] = [str(item.id) for item in inserted]
+    return response
 
 
 @router.post("/food/voice")
@@ -224,12 +303,13 @@ async def log_food_voice(
 ):
     audio_bytes = await audio.read()
     clarify_flag = awaiting_clarification.strip().lower()
-    raw_input = await transcribe_audio(
+    transcript = await transcribe_audio_detailed(
         audio_bytes,
         audio.filename or "recording.webm",
         clarification=clarify_flag
         in ("list", "brand_choice", "true", "1", "yes"),
     )
+    raw_input = transcript.text
 
     history = json.loads(conversation_history)
 
@@ -309,10 +389,17 @@ async def log_food_voice(
         return {"message": f"Today you ate: {names}", "transcription": raw_input}
 
     # default — treat as food log
-    parsed = await parse_food_input(raw_input, history, user_id=user_id)  # NEW: user_id
+    parsed = await parse_food_input(
+        raw_input,
+        history,
+        user_id=user_id,
+        input_modality="voice",
+        activation="push_to_talk",
+        asr=transcript.asr,
+    )
     if parsed.get("error") == "nutrition_unavailable":
         return _nutrition_unavailable_response(parsed, transcription=raw_input)
-    if "error" in parsed:
+    if parsed.get("error"):
         return {
             "error": parsed.get("error", "unparseable"),
             "raw": parsed.get("raw", raw_input),
@@ -323,17 +410,33 @@ async def log_food_voice(
     # "high" — the frontend receives parsed.reasoning (the safety message)
     # via the normal clarification-style response and speaks it. No extra
     # branch needed on the voice path, unlike POST /food above.
+    if _is_unresolved(parsed):
+        return {"transcription": raw_input, "parsed": parsed, "logged": False}
+
     if parsed.get("confidence") != "high":
         return {"transcription": raw_input, "parsed": parsed}
 
+    user_prefs = await _load_dietary_preferences(user_id)
+    try:
+        warnings = _apply_allergy_gate(parsed, user_prefs)
+    except HTTPException as exc:
+        return {
+            "transcription": raw_input,
+            "parsed": parsed,
+            "error": "allergy_block",
+            "message": exc.detail,
+        }
+
     food_log = build_food_log(user_id, raw_input, parsed)
     await food_log.insert()
-    return build_response(food_log, parsed, transcription=raw_input)
+    return _with_allergy_warning(
+        build_response(food_log, parsed, transcription=raw_input), warnings
+    )
 
 
 @router.post("/food/tts")
 async def text_to_speech(request: TTSRequest):
-    audio = await generate_speech(request.text, request.voice)
+    audio = await speak(request.text, request.voice)
     return Response(content=audio, media_type="audio/mpeg")
 
 
@@ -400,17 +503,26 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     parsed = await parse_food_input(request.raw_input, user_id=request.user_id)  # NEW: user_id
     if parsed.get("error") == "nutrition_unavailable":
         return _nutrition_unavailable_response(parsed)
-    if "error" in parsed:
+    if parsed.get("error"):
         raise HTTPException(
             status_code=422, detail=f"Could not parse food input: {parsed}"
         )
+
+    if _is_unresolved(parsed):
+        return {
+            "logged": False,
+            "resolution_status": "unresolved",
+            "message": parsed.get("reasoning")
+            or "I didn't recognize that as a food I can look up. Please try a different name or more detail.",
+            "parsed": parsed,
+        }
 
     # Same severe-allergen gate as POST /food — refuse the edit before any
     # Correction / FoodLog write commits.
     user_prefs = await _load_dietary_preferences(request.user_id)
     warnings = _apply_allergy_gate(parsed, user_prefs)
 
-    food_changed = food_log.food_name.lower() != parsed["food"].lower()
+    food_changed = (food_log.food_name or "").lower() != (parsed.get("food") or "").lower()
     quantity_changed = food_log.quantity != parsed.get("serving_size")
 
     if food_changed and quantity_changed:
@@ -426,14 +538,14 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
         original_food=food_log.food_name,
         original_calories=food_log.calories,
         original_confidence=food_log.confidence,
-        corrected_food=parsed["food"],
+        corrected_food=parsed.get("food"),
         corrected_calories=parsed.get("calories"),
         correction_type=correction_type,
     )
     await correction.insert()
 
     food_log.raw_input = request.raw_input
-    food_log.food_name = request.food_name or parsed["food"]
+    food_log.food_name = request.food_name or parsed.get("food") or food_log.food_name
     food_log.calories = parsed.get("calories")
     macros = parsed.get("macronutrients", {})
     food_log.protein = macros.get("protein")
