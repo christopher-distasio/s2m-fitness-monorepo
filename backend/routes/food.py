@@ -16,7 +16,7 @@ from backend.services.clarification import (
     clarification_state,
 )
 from backend.services.tts_service import generate_speech
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 import json
 
 router = APIRouter()
@@ -46,6 +46,19 @@ def _with_allergy_warning(response: dict, warnings: list[str]) -> dict:
     if warnings:
         response["allergy_warning"] = warnings
     return response
+
+
+def _nutrition_unavailable_response(parsed: dict, **extra):
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "nutrition_unavailable",
+            "message": parsed.get("message")
+            or "Nutrition search is temporarily unavailable. Please try again.",
+            "raw": parsed.get("raw"),
+            **extra,
+        },
+    )
 
 
 class FoodLogRequest(BaseModel):
@@ -145,6 +158,8 @@ async def parse_food(request: ParseRequest):
         source_filter=request.source_filter,
         user_id=request.user_id,  # NEW (2026-08-04)
     )
+    if parsed.get("error") == "nutrition_unavailable":
+        return _nutrition_unavailable_response(parsed)
     return parsed
 
 
@@ -179,6 +194,8 @@ async def log_food(request: FoodLogRequest):
 
     parsed = await parse_food_input(request.raw_input, user_id=request.user_id)  # NEW: user_id
 
+    if parsed.get("error") == "nutrition_unavailable":
+        return _nutrition_unavailable_response(parsed)
     if "error" in parsed:
         raise HTTPException(
             status_code=422, detail=f"Could not parse food input: {parsed}"
@@ -293,6 +310,8 @@ async def log_food_voice(
 
     # default — treat as food log
     parsed = await parse_food_input(raw_input, history, user_id=user_id)  # NEW: user_id
+    if parsed.get("error") == "nutrition_unavailable":
+        return _nutrition_unavailable_response(parsed, transcription=raw_input)
     if "error" in parsed:
         return {
             "error": parsed.get("error", "unparseable"),
@@ -379,6 +398,8 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
         raise HTTPException(status_code=404, detail="Food log not found")
 
     parsed = await parse_food_input(request.raw_input, user_id=request.user_id)  # NEW: user_id
+    if parsed.get("error") == "nutrition_unavailable":
+        return _nutrition_unavailable_response(parsed)
     if "error" in parsed:
         raise HTTPException(
             status_code=422, detail=f"Could not parse food input: {parsed}"

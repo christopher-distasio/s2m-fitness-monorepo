@@ -25,6 +25,19 @@ import {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+function speechForParseError(parsed: {
+  error?: string;
+  message?: string;
+}): string {
+  if (parsed.error === "nutrition_unavailable") {
+    return (
+      parsed.message ||
+      "Nutrition search is temporarily unavailable. Please try again."
+    );
+  }
+  return "I couldn't understand that. Please try saying something more specific.";
+}
+
 const VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] as const;
 
 const STORAGE_KEYS = {
@@ -1203,8 +1216,7 @@ export default function Home() {
       const parsed = await res.json();
 
       if (parsed.error) {
-        const err =
-          "I couldn't understand that. Please try saying something more specific.";
+        const err = speechForParseError(parsed);
         setStatus(err);
         await speak(err);
         return;
@@ -1364,6 +1376,21 @@ export default function Home() {
       };
 
       if (!res.ok) {
+        const errBody = voiceResponseBody as {
+          error?: string;
+          message?: string;
+        };
+        if (
+          errBody &&
+          typeof errBody === "object" &&
+          errBody.error === "nutrition_unavailable"
+        ) {
+          const err = speechForParseError(errBody);
+          setStatus(err);
+          await speak(err);
+          if (wasAwaitingClarification) shouldAutoListen = true;
+          return;
+        }
         throw new Error(
           `Voice API ${res.status}: ${responseText.slice(0, 500)}`,
         );
@@ -1530,8 +1557,7 @@ export default function Home() {
 
       if (!handledClarification) {
         if (data.error) {
-          const err =
-            "I couldn't understand that. Please try saying something more specific.";
+          const err = speechForParseError(data);
           setStatus(err);
           await speak(err);
           if (wasAwaitingClarification) shouldAutoListen = true;
@@ -1831,6 +1857,12 @@ export default function Home() {
       body: JSON.stringify({ user_id: uid, raw_input }),
     });
     const data = await res.json();
+    if (!res.ok || data.error || !data.parsed) {
+      const err = speechForParseError(data);
+      setStatus(err);
+      await speak(err);
+      return;
+    }
     const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
     setStatus(msg);
     await speak(msg);
@@ -1915,7 +1947,10 @@ export default function Home() {
       const parsed = (await res.json()) as ParsedResult & { error?: string };
 
       if (parsed.error) {
-        const err = `I couldn't find a ${source === "brand" ? "branded" : "general"} match. Please try again.`;
+        const err =
+          parsed.error === "nutrition_unavailable"
+            ? speechForParseError(parsed)
+            : `I couldn't find a ${source === "brand" ? "branded" : "general"} match. Please try again.`;
         setStatus(err);
         await speak(err);
         return false;

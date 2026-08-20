@@ -3,7 +3,11 @@ import logging
 import re
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
-from backend.services.nutrition_service import format_branded_name, lookup_food
+from backend.services.nutrition_service import (
+    NutritionStoreUnavailable,
+    format_branded_name,
+    lookup_food,
+)
 from backend.services.query_match_rank import is_zero_calorie_query
 from backend.services.parse_query_modifiers import parse_query_modifiers
 from backend.services.dietary_filters import FDA_ALLERGENS
@@ -348,12 +352,22 @@ async def parse_food_input(
 
     food_query = parsed['food']
     print("calling lookup_food with:", food_query, "| source:", effective_source, "| modifiers:", non_none_mods)
-    nutrition = await lookup_food(
-        food_query,
-        source_filter=effective_source,
-        modifiers=modifiers,
-        dietary_preferences=dietary_preferences,
-    )
+    try:
+        nutrition = await lookup_food(
+            food_query,
+            source_filter=effective_source,
+            modifiers=modifiers,
+            dietary_preferences=dietary_preferences,
+        )
+    except NutritionStoreUnavailable:
+        logger.warning("Nutrition store unavailable for query %r", food_query)
+        return {
+            "error": "nutrition_unavailable",
+            "message": (
+                "Nutrition search is temporarily unavailable. Please try again."
+            ),
+            "raw": raw_input,
+        }
 
     # NEW (2026-08-04): lookup_food returns a distinct shape when a severe
     # allergen constraint produced zero safe results — no calories/candidates

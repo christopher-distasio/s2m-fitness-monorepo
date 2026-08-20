@@ -196,3 +196,32 @@ async def test_low_confidence_unknown_food_has_empty_alternatives():
             result = await parse_food_input("asdfgh", conversation_history=[])
     alternatives = result.get("alternatives") or []
     assert alternatives == []
+
+
+@pytest.mark.asyncio
+async def test_qdrant_timeout_returns_nutrition_unavailable():
+    from backend.services.nutrition_service import NutritionStoreUnavailable
+
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "yogurt",
+            "serving_size": "2",
+            "confidence": "high",
+            "alternatives": [],
+        })
+        return mock_response
+
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=fake_create,
+    ):
+        with patch(
+            "backend.services.food_parser.lookup_food",
+            new_callable=AsyncMock,
+        ) as mock_lookup:
+            mock_lookup.side_effect = NutritionStoreUnavailable("down")
+            result = await parse_food_input("2 yogurts", conversation_history=[])
+
+    assert result["error"] == "nutrition_unavailable"
+    assert "unavailable" in (result.get("message") or "").lower()
