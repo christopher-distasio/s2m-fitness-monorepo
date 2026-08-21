@@ -7,7 +7,10 @@ from backend.services.transcriber import transcribe_audio_detailed
 from backend.services.allergy_check import check_allergy_block, moderate_allergy_warnings
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
-from backend.services.intent_classifier import classify_intent
+from backend.services.utterance_pipeline import (
+    dispatch_voice_utterance,
+    run_safety_and_domain,
+)
 from backend.services.clarification import (
     parse_clarification_command,
     parse_brand_choice,
@@ -204,6 +207,9 @@ async def parse_food(request: ParseRequest):
     Parse-only endpoint used by the frontend to decide whether to auto-log
     (high confidence) or ask the user to confirm (medium/low confidence).
     """
+    gated = await run_safety_and_domain(request.raw_input, request.user_id)
+    if gated.response is not None:
+        return gated.response
     parsed = await parse_food_input(
         request.raw_input,
         request.conversation_history,
@@ -217,6 +223,10 @@ async def parse_food(request: ParseRequest):
 
 @router.post("/food")
 async def log_food(request: FoodLogRequest):
+    gated = await run_safety_and_domain(request.raw_input, request.user_id)
+    if gated.response is not None:
+        return gated.response
+
     if request.resolved:
         food_log = FoodLog(
             user_id=request.user_id,
@@ -354,41 +364,16 @@ async def log_food_voice(
             "clarification": {"type": "unrecognized"},
         }
 
-    intent = await classify_intent(raw_input)
+    dispatched = await dispatch_voice_utterance(
+        raw_input,
+        user_id,
+        history=history,
+        asr=transcript.asr,
+    )
+    if dispatched.response is not None:
+        return dispatched.response
 
-    if intent["intent"] == "delete_last":
-        last = (
-            await FoodLog.find(FoodLog.user_id == user_id)
-            .sort(-FoodLog.logged_at)
-            .first_or_none()
-        )
-        if last:
-            await last.delete()
-            return {"message": "Last entry deleted", "transcription": raw_input}
-        return {"message": "No entries to delete", "transcription": raw_input}
-
-    if intent["intent"] == "calories_today":
-        now = datetime.now(timezone.utc)
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        logs = await FoodLog.find(
-            FoodLog.user_id == user_id, FoodLog.logged_at >= start
-        ).to_list()
-        total = sum(log.calories or 0 for log in logs)
-        return {
-            "message": f"You have logged {total} calories today",
-            "transcription": raw_input,
-        }
-
-    if intent["intent"] == "read_today":
-        now = datetime.now(timezone.utc)
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        logs = await FoodLog.find(
-            FoodLog.user_id == user_id, FoodLog.logged_at >= start
-        ).to_list()
-        names = ", ".join(log.food_name for log in logs) or "nothing yet"
-        return {"message": f"Today you ate: {names}", "transcription": raw_input}
-
-    # default — treat as food log
+    # default — treat as food log (text path still bypasses intent classification)
     parsed = await parse_food_input(
         raw_input,
         history,

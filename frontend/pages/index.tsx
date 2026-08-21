@@ -29,13 +29,22 @@ function speechForParseError(parsed: {
   error?: string;
   message?: string;
 }): string {
-  if (parsed.error === "nutrition_unavailable") {
+  if (
+    parsed.error === "nutrition_unavailable" ||
+    parsed.error === "safety" ||
+    parsed.error === "off_domain" ||
+    parsed.error === "allergy_block"
+  ) {
     return (
       parsed.message ||
-      "Nutrition search is temporarily unavailable. Please try again."
+      (parsed.error === "off_domain"
+        ? "I can only help with logging food."
+        : parsed.error === "nutrition_unavailable"
+          ? "Nutrition search is temporarily unavailable. Please try again."
+          : "I couldn't complete that.")
     );
   }
-  return "I couldn't understand that. Please try saying something more specific.";
+  return parsed.message || "I couldn't understand that. Please try saying something more specific.";
 }
 
 const VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] as const;
