@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 
@@ -6,6 +7,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from backend.services.query_match_rank import (
     effective_calories_per_100g,
@@ -24,11 +26,21 @@ from backend.models import DietaryPreferences
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.1.227:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
+# Fail fast on a down store instead of hanging the parse/voice request.
+QDRANT_TIMEOUT_SECONDS = 5.0
 COLLECTION_NAME = "food-vectors"
 EMBEDDING_MODEL = "text-embedding-3-large"
 SCORE_THRESHOLD = 0.3
+
+
+class NutritionStoreUnavailable(Exception):
+    """Qdrant timed out or could not be reached."""
+
+
 # Alternatives can be slightly weaker matches than the primary result — we
 # still want to offer them, just not obvious garbage. Kept below
 # SCORE_THRESHOLD so the "Did you mean?" list isn't empty for near-ties.
@@ -60,7 +72,7 @@ SOURCE_GROUPS = {
 NONE_MODIFIER = "NONE"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-qdrant_client = QdrantClient(url=QDRANT_URL, timeout=30)
+qdrant_client = QdrantClient(url=QDRANT_URL, timeout=QDRANT_TIMEOUT_SECONDS)
 
 
 # ============================================================================
@@ -688,13 +700,17 @@ async def _retrieve_best(
         # at all here, confirmed against a real AttributeError during the
         # first live end-to-end test. query_points() returns a QueryResponse
         # object with a .points attribute (not a bare list like .search() did).
-        response = qdrant_client.query_points(
-            collection_name=COLLECTION_NAME,
-            query=vector,
-            limit=RETRIEVAL_TOP_K,
-            query_filter=qdrant_filter,
-            with_payload=True,
-        )
+        try:
+            response = qdrant_client.query_points(
+                collection_name=COLLECTION_NAME,
+                query=vector,
+                limit=RETRIEVAL_TOP_K,
+                query_filter=qdrant_filter,
+                with_payload=True,
+            )
+        except (ResponseHandlingException, TimeoutError, OSError, ConnectionError) as exc:
+            logger.warning("Qdrant query failed: %s", exc)
+            raise NutritionStoreUnavailable("Nutrition search is temporarily unavailable.") from exc
         matches = _qdrant_results_to_matches(response.points)
         top_score = matches[0]["score"] if matches else 0
         if top_score > best_score:
@@ -730,6 +746,13 @@ async def lookup_food(
     print("RAG combined filter:", combined_filter)
 
     matches, winning_variant = await _retrieve_best(query, combined_filter)
+    retrieval_top1 = matches[0]["score"] if matches else None
+    retrieval_top2 = matches[1]["score"] if matches and len(matches) > 1 else None
+    retrieval_gap = (
+        retrieval_top1 - retrieval_top2
+        if retrieval_top1 is not None and retrieval_top2 is not None
+        else None
+    )
 
     # Zero results: only fall back if it's SAFE to. If any allergen is
     # active, never relax -- tell the caller explicitly rather than silently
@@ -751,6 +774,13 @@ async def lookup_food(
                 )
                 matches, winning_variant = await _retrieve_best(query, relaxed_filter)
                 used_fallback = True
+                retrieval_top1 = matches[0]["score"] if matches else None
+                retrieval_top2 = matches[1]["score"] if matches and len(matches) > 1 else None
+                retrieval_gap = (
+                    retrieval_top1 - retrieval_top2
+                    if retrieval_top1 is not None and retrieval_top2 is not None
+                    else None
+                )
 
     if not matches:
         return None
@@ -854,5 +884,10 @@ async def lookup_food(
         "used_dietary_fallback": used_fallback,
         "nutrients": nutrients,
         "allergens": allergens_present,
+        # Spec 1 database confidence layer — stop discarding retrieval scores.
+        "database_score": match.get("score"),
+        "database_score_gap": retrieval_gap,
+        "database_score_top1": retrieval_top1,
+        "database_score_top2": retrieval_top2,
         **allergen_states,
     }

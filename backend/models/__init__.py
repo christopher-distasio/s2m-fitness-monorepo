@@ -3,6 +3,19 @@ from pydantic import Field, BaseModel
 from typing import Optional, List, Literal, Dict
 from datetime import datetime, timezone
 
+from backend.models.food_event import (  # noqa: F401
+    CONFIDENCE_FIELD_KEYS,
+    FieldConfidence,
+    FoodEvent,
+    NutrientValue,
+    ResolutionAudit,
+    RestrictionHit,
+    RestrictionVerdict,
+    UtteranceResult,
+    VariantTag,
+    empty_confidence_map,
+)
+
 # ============================================================================
 # DIETARY PREFERENCES (Tier 1/2/Optional)
 # ============================================================================
@@ -81,6 +94,17 @@ class DietaryPreferences(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class NutrientCeiling(BaseModel):
+    """User-set numeric ceiling with neutral reporting only (D3).
+
+    Separate from calorie_goal / energy budgets so Safety Mode can suppress
+    energy-budget language without touching ceiling display.
+    """
+    nutrient: str
+    limit: float
+    unit: str = "mg"
+
+
 # ============================================================================
 # DOCUMENTS
 # ============================================================================
@@ -102,12 +126,18 @@ class FoodLog(Document):
     logged_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     modified_at: Optional[datetime] = None
 
+    # Spec 1 — full FoodEvent / utterance stored alongside legacy fields.
+    food_event: Optional[Dict] = None
+    utterance: Optional[Dict] = None
+    resolution_audit: Optional[Dict] = None
+
     class Settings:
         name = "food_logs"
 
 
 class UserProfile(Document):
     user_id: str
+    # Energy budget — kept SEPARATE from nutrient_ceilings (D3 / Safety Mode).
     calorie_goal: float = 2000.0
     first_name: str = ""
     last_name: str = ""
@@ -115,6 +145,14 @@ class UserProfile(Document):
     voice: str = "alloy"
 
     dietary_preferences: DietaryPreferences = Field(default_factory=DietaryPreferences)
+
+    # Spec 1 reserved / v1 fields
+    subscription_tier: Optional[str] = None  # unused until billing; a11y never gated on this
+    wake_word_enabled: bool = False  # default OFF; opt-in with privacy disclaimer
+    nutrient_display_preferences: List[str] = Field(default_factory=list)
+    contribution_consent: bool = False  # consumption data is never shared regardless
+    timezone: str = "UTC"
+    nutrient_ceilings: List[NutrientCeiling] = Field(default_factory=list)
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

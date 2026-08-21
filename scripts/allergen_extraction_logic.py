@@ -3,7 +3,8 @@ FDA allergen term list + three-state extraction logic.
 
 Priority order per allergen, per product:
 1. Explicit "CONTAINS: X, Y" statement present -> named = CONTAINS, not named = FREE
-2. "MAY CONTAIN: X" cross-contamination warning -> CONTAINS if severity=severe, ignored if moderate
+2. "MAY CONTAIN: X" / facility language -> UNKNOWN (Spec 1 hard rule 4).
+   Never mapped to CONTAINS or FREE. Advisory language is not a declaration.
 3. No statement -> scan raw ingredient text for allergen + derivative terms -> match = CONTAINS
 4. No statement, no match -> UNKNOWN
 5. No ingredients text at all (SR Legacy, FNDDS, ~5,373 blank Branded records) -> UNKNOWN for all allergens
@@ -323,20 +324,26 @@ def extract_allergen_states(ingredients_text: str) -> dict:
 
 def apply_may_contain_severity(states: dict, ingredients_text: str) -> dict:
     """
-    Fold 'MAY CONTAIN: X' cross-contamination warnings into CONTAINS.
-    Only call this when building the SEVERE payload variant --
-    moderate severity should ignore cross-contamination warnings.
+    Spec 1 hard rule 4: "may contain" / "made in a facility with" maps to
+    UNKNOWN. Never CONTAINS, never FREE. Severity does not change the state —
+    unknown means unknown.
+
+    Kept as a named helper so existing pipeline callers still have a hook;
+    the function no longer promotes advisory language to CONTAINS.
     """
     if not ingredients_text:
         return states
 
+    # Hard rule 4 — advisory language is UNKNOWN, never contains, never free.
+    ADVISORY_LANGUAGE_STATE = "unknown"
+
     may_contain = extract_explicit_statement(ingredients_text, MAY_CONTAIN_PATTERN)
 
-    severe_states = dict(states)
+    updated = dict(states)
     for allergen in may_contain:
-        severe_states[allergen] = "CONTAINS"
+        updated[allergen] = ADVISORY_LANGUAGE_STATE.upper()  # UNKNOWN
 
-    return severe_states
+    return updated
 
 
 # ============================================================================

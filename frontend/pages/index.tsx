@@ -25,6 +25,28 @@ import {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+function speechForParseError(parsed: {
+  error?: string;
+  message?: string;
+}): string {
+  if (
+    parsed.error === "nutrition_unavailable" ||
+    parsed.error === "safety" ||
+    parsed.error === "off_domain" ||
+    parsed.error === "allergy_block"
+  ) {
+    return (
+      parsed.message ||
+      (parsed.error === "off_domain"
+        ? "I can only help with logging food."
+        : parsed.error === "nutrition_unavailable"
+          ? "Nutrition search is temporarily unavailable. Please try again."
+          : "I couldn't complete that.")
+    );
+  }
+  return parsed.message || "I couldn't understand that. Please try saying something more specific.";
+}
+
 const VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] as const;
 
 const STORAGE_KEYS = {
@@ -297,11 +319,19 @@ interface ParsedResult {
   portion_options?: PortionOption[];
   notes?: string;
   resolution?: {
-    status?: "resolved" | "needs_clarification" | "needs_brand_choice";
+    status?:
+      | "resolved"
+      | "needs_clarification"
+      | "needs_brand_choice"
+      | "unresolved";
     axis?: string | null;
     reason?: string;
     question?: string;
   };
+  resolution_status?: "resolved" | "needs_clarification" | "unresolved";
+  entry_mode?: "resolved" | "direct_macro";
+  food_events?: unknown[];
+  confidence_detail?: Record<string, { band?: string }>;
 }
 
 // The upfront brand-vs-generic question. Kept identical for text and voice so
@@ -309,6 +339,20 @@ interface ParsedResult {
 const BRAND_CHOICE_QUESTION =
   "Are you looking for a specific brand, or a general item?";
 const BRAND_CHOICE_SPEECH = `${SAY_NUMBER_OR_WORD} ${BRAND_CHOICE_QUESTION} Number 1: general. Number 2: specific.`;
+
+function isUnresolved(parsed: ParsedResult): boolean {
+  return (
+    parsed.resolution_status === "unresolved" ||
+    parsed.resolution?.status === "unresolved"
+  );
+}
+
+function unresolvedSpeech(parsed: ParsedResult): string {
+  return (
+    parsed.reasoning ||
+    "I didn't recognize that as a food I can look up. Please try a different name or more detail."
+  );
+}
 
 function isBrandChoice(parsed: ParsedResult): boolean {
   return parsed.resolution?.status === "needs_brand_choice";
@@ -1203,10 +1247,16 @@ export default function Home() {
       const parsed = await res.json();
 
       if (parsed.error) {
-        const err =
-          "I couldn't understand that. Please try saying something more specific.";
+        const err = speechForParseError(parsed);
         setStatus(err);
         await speak(err);
+        return;
+      }
+
+      if (isUnresolved(parsed)) {
+        const msg = unresolvedSpeech(parsed);
+        setStatus(msg);
+        await speak(msg);
         return;
       }
 
@@ -1364,6 +1414,21 @@ export default function Home() {
       };
 
       if (!res.ok) {
+        const errBody = voiceResponseBody as {
+          error?: string;
+          message?: string;
+        };
+        if (
+          errBody &&
+          typeof errBody === "object" &&
+          errBody.error === "nutrition_unavailable"
+        ) {
+          const err = speechForParseError(errBody);
+          setStatus(err);
+          await speak(err);
+          if (wasAwaitingClarification) shouldAutoListen = true;
+          return;
+        }
         throw new Error(
           `Voice API ${res.status}: ${responseText.slice(0, 500)}`,
         );
@@ -1530,8 +1595,7 @@ export default function Home() {
 
       if (!handledClarification) {
         if (data.error) {
-          const err =
-            "I couldn't understand that. Please try saying something more specific.";
+          const err = speechForParseError(data);
           setStatus(err);
           await speak(err);
           if (wasAwaitingClarification) shouldAutoListen = true;
@@ -1556,11 +1620,21 @@ export default function Home() {
           transcription: data.transcription,
         });
 
+        if (isUnresolved(data.parsed)) {
+          const msg = unresolvedSpeech(data.parsed);
+          setStatus(`Heard: "${data.transcription}" — ${msg}`);
+          await speak(msg);
+          shouldAutoListen = true;
+          return;
+        }
+
         if (data.parsed.confidence === "high") {
-          const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
-          setStatus(
-            `Heard: "${data.transcription}" — ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} cal`,
-          );
+          const label =
+            data.parsed.entry_mode === "direct_macro" || !data.parsed.food
+              ? `${Math.round(data.parsed.calories ?? 0)} calories`
+              : `${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
+          const msg = `Logged ${label}`;
+          setStatus(`Heard: "${data.transcription}" — ${label}`);
           await speak(msg);
           await fetchLogs(uid);
           await fetchSummary(uid);
@@ -1831,6 +1905,12 @@ export default function Home() {
       body: JSON.stringify({ user_id: uid, raw_input }),
     });
     const data = await res.json();
+    if (!res.ok || data.error || !data.parsed) {
+      const err = speechForParseError(data);
+      setStatus(err);
+      await speak(err);
+      return;
+    }
     const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
     setStatus(msg);
     await speak(msg);
@@ -1912,12 +1992,25 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ raw_input: originalInput, source_filter: source, user_id: uid }),
       });
-      const parsed = (await res.json()) as ParsedResult & { error?: string };
+      const parsed = (await res.json()) as ParsedResult & {
+        error?: string;
+        message?: string;
+      };
 
       if (parsed.error) {
-        const err = `I couldn't find a ${source === "brand" ? "branded" : "general"} match. Please try again.`;
+        const err =
+          parsed.error === "nutrition_unavailable"
+            ? speechForParseError(parsed)
+            : `I couldn't find a ${source === "brand" ? "branded" : "general"} match. Please try again.`;
         setStatus(err);
         await speak(err);
+        return false;
+      }
+
+      if (isUnresolved(parsed)) {
+        const msg = unresolvedSpeech(parsed);
+        setStatus(msg);
+        await speak(msg);
         return false;
       }
 

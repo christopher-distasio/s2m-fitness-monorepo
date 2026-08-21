@@ -51,6 +51,96 @@ EXTRA_NUTRIENT_FIELDS: tuple[str, ...] = MACRO_EXTRA_FIELDS + MICRO_FIELDS
 
 CORE_SCALED_KEYS = frozenset({"calories", "protein", "carbs", "fat"})
 
+# USDA FDC nutrient numbers (SR Legacy / branded classic ids). Spec 1 CHANGE 1.
+USDA_NUTRIENT_IDS: dict[str, int] = {
+    "calories": 1008,
+    "protein": 1003,
+    "fat": 1004,
+    "fats": 1004,
+    "carbs": 1005,
+    "carbohydrates": 1005,
+    "fiber": 1079,
+    "sugar": 2000,
+    "saturated_fat": 1258,
+    "trans_fat": 1257,
+    "sodium": 1093,
+    "cholesterol": 1253,
+    "calcium": 1087,
+    "iron": 1089,
+    "magnesium": 1090,
+    "potassium": 1092,
+    "zinc": 1095,
+    "vitamin_a_rae_mcg": 1106,
+    "vitamin_c": 1162,
+    "vitamin_d_mcg": 1114,
+    "vitamin_e_mg": 1109,
+    "vitamin_k": 1185,
+    "vitamin_b1": 1165,
+    "vitamin_b2": 1166,
+    "vitamin_b3": 1167,
+    "vitamin_b6": 1175,
+    "folate_dfe_mcg": 1190,
+    "pantothenic_acid": 1170,
+    "vitamin_b12": 1178,
+    "caffeine": 1057,
+    "phosphorus": 1091,
+    "copper": 1098,
+    "manganese": 1101,
+    "selenium": 1103,
+    "choline": 1180,
+    "iodine": 1100,
+    "chromium": 1096,
+    "molybdenum": 1102,
+    "biotin": 1176,
+}
+
+
+def wrap_nutrient(name: str, value: float | None) -> dict:
+    """Typed nutrient payload: value + unit + usda_nutrient_id."""
+    meta = NUTRIENT_META.get(name, {})
+    unit = meta.get("unit") or ("kcal" if name == "calories" else "g")
+    return {
+        "value": value,
+        "unit": unit,
+        "usda_nutrient_id": USDA_NUTRIENT_IDS.get(name),
+    }
+
+
+def wrap_nutrient_map(values: dict | None) -> dict:
+    if not values:
+        return {}
+    out = {}
+    for key, raw in values.items():
+        if raw is None:
+            continue
+        if isinstance(raw, dict) and "value" in raw:
+            out[key] = raw
+            continue
+        try:
+            out[key] = wrap_nutrient(key, float(raw))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def unwrap_nutrient_map(values: dict | None) -> dict[str, float]:
+    """Flatten typed nutrients back to the legacy {name: number} UI shape."""
+    if not values:
+        return {}
+    out: dict[str, float] = {}
+    for key, raw in values.items():
+        if isinstance(raw, dict):
+            val = raw.get("value")
+        else:
+            val = getattr(raw, "value", raw)
+        if val is None:
+            continue
+        try:
+            out[key] = float(val)
+        except (TypeError, ValueError):
+            continue
+    return out
+
 
 def extras_from_scaled(scaled: dict) -> dict[str, float]:
     """Drop core macros/calories; keep scaled extras for FoodLog / summary."""

@@ -15,6 +15,11 @@ class UpdateProfile(BaseModel):
     last_name: Optional[str] = None
     screen_name: Optional[str] = None
     voice: Optional[str] = None
+    wake_word_enabled: Optional[bool] = None
+    nutrient_display_preferences: Optional[list[str]] = None
+    contribution_consent: Optional[bool] = None
+    timezone: Optional[str] = None
+    subscription_tier: Optional[str] = None
 
 
 @router.get("/user/{user_id}/profile")

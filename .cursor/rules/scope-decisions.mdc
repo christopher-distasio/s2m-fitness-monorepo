@@ -1,0 +1,36 @@
+---
+description: Locked product scope decisions D1–D5 that constrain Spec 1 and later specs
+alwaysApply: true
+---
+
+# Scope Decisions D1–D5 (Locked Aug 18)
+
+Canonical copy: `docs/scope-decisions-d1-d5.md`. These constrain implementation throughout Spec 1 and later specs.
+
+## D1 — Hands-free / smart-speaker support is core, not deferred
+
+Wake-word/ambient listening is a core v1 feature, not an add-on. `UtteranceResult.activation` supports `"push_to_talk" | "text" | "wake_word" | "ambient"`. Wake-word detection and basic addressedness filtering are REQUIRED in v1 — ambient listening without them produces false-positive logs.
+
+Multi-account speaker attribution is deferred. Do not build it. Keep `subject_user_id` explicit everywhere (never an ambient "current user" shortcut).
+
+**`wake_word_enabled` defaults OFF.** Opt-in during onboarding with the privacy disclaimer. Push-to-talk and text stay available regardless. Privacy/bystander-exposure is handled by disclaimer, not by restricting the feature.
+
+## D2 — Report, never assert safety
+
+The app states what a record shows and what is unknown. Never say a food "is safe" for an allergen or restriction — not in generated text, UI copy, or TTS. `evidence_basis` reports the basis for a claim; that is not a safety assertion.
+
+## D3 — No medical-diet advice; quantitative shape is in scope, narrowly
+
+Support user-set numeric ceilings (sodium, potassium, caffeine, etc.) with neutral reporting only: "that's 640mg; you've set 2,000mg." Never "you can/can't have this."
+
+Keep **nutrient ceilings** and **calorie/energy budgets** as separate concepts in the data model — not one "goals" field — so future Safety Mode can suppress energy-budget language without touching ceiling display.
+
+## D4 — Strict domain boundary
+
+S2M is a food-logging app, not a general assistant. Off-domain requests get a brief, consistent decline.
+
+**Exception:** safety-relevant utterances (distress, self-harm, eating-disorder signals, medical emergency) are NEVER treated as off-domain. Safety routing takes priority over domain-boundary logic.
+
+## D5 — Pricing (context; accessibility never paywalled)
+
+$7/mo stays; annual tier later. Accessibility, safety responses, and restriction/allergen handling are never paywalled.

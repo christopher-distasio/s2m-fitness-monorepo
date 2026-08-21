@@ -196,3 +196,156 @@ async def test_low_confidence_unknown_food_has_empty_alternatives():
             result = await parse_food_input("asdfgh", conversation_history=[])
     alternatives = result.get("alternatives") or []
     assert alternatives == []
+
+
+@pytest.mark.asyncio
+async def test_qdrant_timeout_returns_nutrition_unavailable():
+    from backend.services.nutrition_service import NutritionStoreUnavailable
+
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "yogurt",
+            "serving_size": "2",
+            "confidence": "high",
+            "alternatives": [],
+        })
+        return mock_response
+
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=fake_create,
+    ):
+        with patch(
+            "backend.services.food_parser.lookup_food",
+            new_callable=AsyncMock,
+        ) as mock_lookup:
+            mock_lookup.side_effect = NutritionStoreUnavailable("down")
+            result = await parse_food_input("2 yogurts", conversation_history=[])
+
+    assert result["error"] == "nutrition_unavailable"
+    assert "unavailable" in (result.get("message") or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_lookup_miss_is_unresolved_not_zero_cal():
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "asdfgh",
+            "serving_size": "1",
+            "confidence": "low",
+            "alternatives": [],
+        })
+        return mock_response
+
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=fake_create,
+    ):
+        with patch(
+            "backend.services.food_parser.lookup_food",
+            new_callable=AsyncMock,
+        ) as mock_lookup:
+            mock_lookup.return_value = None
+            result = await parse_food_input("asdfgh", conversation_history=[])
+
+    assert result["resolution_status"] == "unresolved"
+    assert result.get("calories") is None
+    assert result["confidence"] == "low"
+    assert "food_events" in result
+
+
+@pytest.mark.asyncio
+async def test_direct_macro_skips_lookup():
+    with patch(
+        "backend.services.food_parser.lookup_food",
+        new_callable=AsyncMock,
+    ) as mock_lookup:
+        result = await parse_food_input("just log 300 calories")
+
+    mock_lookup.assert_not_called()
+    assert result["entry_mode"] == "direct_macro"
+    assert result["food"] is None
+    assert result["calories"] == 300
+    assert result["resolution_status"] == "resolved"
+    assert result["confidence"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_multi_item_utterance_returns_three_events():
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "eggs",
+            "serving_size": "2",
+            "confidence": "high",
+            "alternatives": [],
+            "items": [
+                {"food": "eggs", "serving_size": "2", "brand": ""},
+                {"food": "toast", "serving_size": "1", "brand": ""},
+                {"food": "coffee", "serving_size": "1", "brand": ""},
+            ],
+        })
+        return mock_response
+
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=fake_create,
+    ):
+        with patch(
+            "backend.services.food_parser.lookup_food",
+            new_callable=AsyncMock,
+        ) as mock_lookup:
+            mock_lookup.return_value = {
+                "calories": 100,
+                "carbs": 1,
+                "protein": 1,
+                "fat": 1,
+            }
+            result = await parse_food_input(
+                "eggs, toast, and coffee", conversation_history=[]
+            )
+
+    assert len(result["food_events"]) == 3
+    assert mock_lookup.await_count == 3
+    names = [event["food"] for event in result["food_events"]]
+    assert names == ["eggs", "toast", "coffee"]
+
+
+@pytest.mark.asyncio
+async def test_logprob_extraction_failure_still_returns_parse():
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "banana",
+            "serving_size": "1",
+            "confidence": "high",
+            "alternatives": [],
+        })
+        return mock_response
+
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=fake_create,
+    ):
+        with patch(
+            "backend.services.food_parser.extract_semantic_logprob",
+            side_effect=RuntimeError("broken logprobs"),
+        ):
+            with patch(
+                "backend.services.food_parser.lookup_food",
+                new_callable=AsyncMock,
+            ) as mock_lookup:
+                mock_lookup.return_value = {
+                    "calories": 89,
+                    "carbs": 23,
+                    "protein": 1,
+                    "fat": 0,
+                }
+                result = await parse_food_input("one banana")
+
+    assert result["food"] == "banana"
+    assert result["calories"] == 89
+    assert result["confidence"] == "low"
+    assert result["confidence_detail"]["food"]["band"] == "low"

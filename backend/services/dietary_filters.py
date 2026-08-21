@@ -1,7 +1,7 @@
 """
 Dietary preference / allergen filtering for food search.
 
-Builds Qdrant filters from a user's DietaryPreferences (backend/models.py) and
+Builds Qdrant filters from a user's DietaryPreferences (backend.models) and
 applies Tier 2 soft-preference boosts post-retrieval.
 
 Design (validated via multi-AI review + real-data extraction, 2026-08-04):
