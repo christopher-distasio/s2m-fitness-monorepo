@@ -174,6 +174,23 @@ def test_state_list_from_medium_with_options():
     assert clarification_state(history) == "list"
 
 
+def test_state_list_from_spec2_ask():
+    history = _history(
+        {
+            "confidence": "high",
+            "confirmation": {
+                "action": "ASK",
+                "spoken_candidates": [
+                    {"name": "dry rice"},
+                    {"name": "cooked rice"},
+                ],
+            },
+        }
+    )
+    assert clarification_state(history) == "list"
+    assert is_awaiting_clarification(history) is True
+
+
 def test_state_none_when_high_confidence_or_empty():
     assert clarification_state([]) is None
     assert (

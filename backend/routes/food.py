@@ -11,6 +11,12 @@ from backend.services.utterance_pipeline import (
     dispatch_voice_utterance,
     run_safety_and_domain,
 )
+from backend.services.confirmation import (
+    apply_self_repair,
+    attach_confirmation,
+    resolve_confirmation_reply,
+    spoken_candidates_from_history,
+)
 from backend.services.clarification import (
     parse_clarification_command,
     parse_brand_choice,
@@ -114,6 +120,39 @@ def _is_unresolved(parsed: dict) -> bool:
     return (parsed.get("resolution") or {}).get("status") == "unresolved"
 
 
+def _is_brand_choice(parsed: dict) -> bool:
+    return (parsed.get("resolution") or {}).get("status") == "needs_brand_choice"
+
+
+def _ask_payload(parsed: dict, *, transcription: str | None = None) -> dict:
+    confirmation = parsed.get("confirmation") or {}
+    payload = {
+        "logged": False,
+        "confirmation": confirmation,
+        "parsed": parsed,
+        "message": confirmation.get("question"),
+    }
+    if transcription is not None:
+        payload["transcription"] = transcription
+    return payload
+
+
+async def _parse_log_utterance(
+    raw_input: str,
+    conversation_history: list | None = None,
+    **kwargs,
+) -> dict:
+    """Parse a log utterance: self-repair rewrite, then Spec 2 confirmation."""
+    text, repaired = apply_self_repair(raw_input)
+    parsed = await parse_food_input(text, conversation_history or [], **kwargs)
+    if parsed.get("error") or _is_unresolved(parsed) or _is_brand_choice(parsed):
+        return parsed
+    if parsed.get("confidence") == "blocked":
+        return parsed
+    attach_confirmation(parsed, raw_input, self_repaired=repaired)
+    return parsed
+
+
 def _events_to_log(parsed: dict) -> list[dict]:
     events = parsed.get("food_events")
     if isinstance(events, list) and events:
@@ -160,6 +199,9 @@ def build_food_log(
     }
     food_event = parsed.get("food_events", [None])
     stored_event = food_event[0] if isinstance(food_event, list) and food_event else parsed.get("food_event")
+    markers = (parsed.get("confirmation") or {}).get("markers") or None
+    if isinstance(stored_event, dict) and markers:
+        stored_event = {**stored_event, "confirmation_markers": markers}
     return FoodLog(
         user_id=user_id,
         raw_input=raw_input,
@@ -178,6 +220,7 @@ def build_food_log(
         resolution_audit=(stored_event or {}).get("resolution_audit")
         if isinstance(stored_event, dict)
         else None,
+        confirmation_markers=(parsed.get("confirmation") or {}).get("markers") or None,
     )
 
 
@@ -198,6 +241,9 @@ def build_response(
     }
     if transcription:
         response["transcription"] = transcription
+    confirmation = parsed.get("confirmation")
+    if confirmation:
+        response["confirmation"] = confirmation
     return response
 
 
@@ -210,11 +256,11 @@ async def parse_food(request: ParseRequest):
     gated = await run_safety_and_domain(request.raw_input, request.user_id)
     if gated.response is not None:
         return gated.response
-    parsed = await parse_food_input(
+    parsed = await _parse_log_utterance(
         request.raw_input,
         request.conversation_history,
         source_filter=request.source_filter,
-        user_id=request.user_id,  # NEW (2026-08-04)
+        user_id=request.user_id,
     )
     if parsed.get("error") == "nutrition_unavailable":
         return _nutrition_unavailable_response(parsed)
@@ -254,7 +300,7 @@ async def log_food(request: FoodLogRequest):
             },
         }
 
-    parsed = await parse_food_input(request.raw_input, user_id=request.user_id)  # NEW: user_id
+    parsed = await _parse_log_utterance(request.raw_input, user_id=request.user_id)
 
     if parsed.get("error") == "nutrition_unavailable":
         return _nutrition_unavailable_response(parsed)
@@ -271,6 +317,9 @@ async def log_food(request: FoodLogRequest):
             or "I didn't recognize that as a food I can look up. Please try a different name or more detail.",
             "parsed": parsed,
         }
+
+    if (parsed.get("confirmation") or {}).get("action") == "ASK":
+        return _ask_payload(parsed)
 
     # Severe allergen refusal (lookup zero-safe-results or explicit allergen
     # match). Shared with PATCH so create/edit stay consistent.
@@ -356,7 +405,8 @@ async def log_food_voice(
             "clarification": {"type": "unrecognized"},
         }
     if state == "list":
-        command = parse_clarification_command(raw_input)
+        spoken = spoken_candidates_from_history(history)
+        command = resolve_confirmation_reply(raw_input, spoken) if spoken else parse_clarification_command(raw_input)
         if command:
             return {"transcription": raw_input, "clarification": command}
         return {
@@ -374,7 +424,7 @@ async def log_food_voice(
         return dispatched.response
 
     # default — treat as food log (text path still bypasses intent classification)
-    parsed = await parse_food_input(
+    parsed = await _parse_log_utterance(
         raw_input,
         history,
         user_id=user_id,
@@ -391,15 +441,14 @@ async def log_food_voice(
             "transcription": raw_input,
         }
 
-    # NOTE: "blocked" already falls through here correctly, since it's not
-    # "high" — the frontend receives parsed.reasoning (the safety message)
-    # via the normal clarification-style response and speaks it. No extra
-    # branch needed on the voice path, unlike POST /food above.
     if _is_unresolved(parsed):
         return {"transcription": raw_input, "parsed": parsed, "logged": False}
 
-    if parsed.get("confidence") != "high":
+    if _is_brand_choice(parsed):
         return {"transcription": raw_input, "parsed": parsed}
+
+    if (parsed.get("confirmation") or {}).get("action") == "ASK":
+        return _ask_payload(parsed, transcription=raw_input)
 
     user_prefs = await _load_dietary_preferences(user_id)
     try:
