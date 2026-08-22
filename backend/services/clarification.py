@@ -327,6 +327,9 @@ def clarification_state(history: list[dict]) -> str | None:
         except (json.JSONDecodeError, TypeError):
             return None
         status = (data.get("resolution") or {}).get("status")
+        confirmation = data.get("confirmation") or {}
+        if confirmation.get("action") == "ASK":
+            return "list"
         if status == "needs_brand_choice":
             return "brand_choice"
         confidence = data.get("confidence")

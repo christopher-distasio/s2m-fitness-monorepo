@@ -271,6 +271,7 @@ interface FoodLog {
   confidence?: "high" | "medium" | "low";
   reasoning?: string;
   alternatives?: string[];
+  confirmation_markers?: Array<{ field: string; label: string }>;
 }
 
 interface FoodCandidate {
@@ -332,6 +333,16 @@ interface ParsedResult {
   entry_mode?: "resolved" | "direct_macro";
   food_events?: unknown[];
   confidence_detail?: Record<string, { band?: string }>;
+  confirmation?: {
+    action?: "SILENT" | "CONFIRM" | "ASK";
+    question?: string | null;
+    spoken_candidates?: Array<
+      FoodCandidate & { label?: string; kind?: string }
+    >;
+    markers?: Array<{ field: string; label: string }>;
+    asked_fields?: string[];
+    question_kind?: string | null;
+  };
 }
 
 // The upfront brand-vs-generic question. Kept identical for text and voice so
@@ -356,6 +367,30 @@ function unresolvedSpeech(parsed: ParsedResult): string {
 
 function isBrandChoice(parsed: ParsedResult): boolean {
   return parsed.resolution?.status === "needs_brand_choice";
+}
+
+function isSpec2Ask(parsed: ParsedResult): boolean {
+  return parsed.confirmation?.action === "ASK";
+}
+
+function spec2AskSpeech(parsed: ParsedResult): string {
+  return parsed.confirmation?.question || "Can you confirm that?";
+}
+
+function shouldAutoLog(parsed: ParsedResult): boolean {
+  if (isUnresolved(parsed) || isBrandChoice(parsed) || isSpec2Ask(parsed)) {
+    return false;
+  }
+  const action = parsed.confirmation?.action;
+  if (action === "SILENT" || action === "CONFIRM") return true;
+  return parsed.confidence === "high";
+}
+
+function confirmMarkerSpeech(
+  markers?: Array<{ field: string; label: string }>,
+): string {
+  if (!markers?.length) return "";
+  return markers.map((m) => m.label).join(" ");
 }
 
 // Trim limits for the clarification list. The visual card can show a bit more
@@ -437,6 +472,32 @@ function allClarifyOptions(
   parsed: ParsedResult,
   rawInput: string,
 ): ClarifyOption[] {
+  const spoken = parsed.confirmation?.spoken_candidates || [];
+  if (spoken.length > 0) {
+    return spoken.map((c, i) => {
+      const title =
+        formatBrandedName(c.name, c.brand) || c.label || `Option ${i + 1}`;
+      return {
+        key: `s2-${c.fdc_id ?? c.label ?? i}`,
+        kind: (c.kind === "portion" ? "portion" : "candidate") as
+          | "candidate"
+          | "portion",
+        speech: title,
+        title,
+        subtitle: c.serving_label || c.label,
+        calories: c.calories ?? 0,
+        pick: {
+          food_name: title,
+          calories: c.calories,
+          protein: c.protein,
+          carbs: c.carbs,
+          fat: c.fat,
+          quantity: c.serving_label || c.label,
+          raw_input: rawInput,
+        },
+      };
+    });
+  }
   const candidates = clarificationCandidates(parsed);
   const allPortions = parsed.portion_options || [];
   const portions = allPortions.length > 1 ? allPortions : [];
@@ -1260,9 +1321,49 @@ export default function Home() {
         return;
       }
 
-      if (parsed.confidence === "high") {
-        const resolvedInput = `${parsed.serving_size} ${parsed.food}`;
-        await confirmLog(uid, resolvedInput);
+      if (isBrandChoice(parsed)) {
+        setConversationHistoryBoth((prev) => [
+          ...prev,
+          { role: "user", content: textInput },
+          { role: "assistant", content: JSON.stringify(parsed) },
+        ]);
+        const pending = { parsed, raw_input: textInput, uid };
+        setPendingParse(pending);
+        pendingParseRef.current = pending;
+        setClarifyExpandedBoth(false);
+        clearSpokenClarifyOptions();
+        const msg = `I think this is ${parsed.food}. ${BRAND_CHOICE_SPEECH}`;
+        setStatus(msg);
+        setTextInput("");
+        const barged = await speakClarificationWithBargeIn(msg, uid);
+        if (uiChoiceInFlightRef.current) {
+          shouldAutoListen = false;
+        } else if (!barged) {
+          shouldAutoListen = true;
+        }
+      } else if (isSpec2Ask(parsed)) {
+        setConversationHistoryBoth((prev) => [
+          ...prev,
+          { role: "user", content: textInput },
+          { role: "assistant", content: JSON.stringify(parsed) },
+        ]);
+        const pending = { parsed, raw_input: textInput, uid };
+        setPendingParse(pending);
+        pendingParseRef.current = pending;
+        setClarifyExpandedBoth(false);
+        rememberSpokenClarifyOptions(clarifyOptions(parsed, textInput, false));
+        spokenListAloudRef.current = true;
+        const msg = spec2AskSpeech(parsed);
+        setStatus(msg);
+        setTextInput("");
+        const barged = await speakClarificationWithBargeIn(msg, uid);
+        if (uiChoiceInFlightRef.current) {
+          shouldAutoListen = false;
+        } else if (!barged) {
+          shouldAutoListen = true;
+        }
+      } else if (shouldAutoLog(parsed)) {
+        await confirmLog(uid, textInput);
       } else {
         setConversationHistoryBoth((prev) => [
           ...prev,
@@ -1275,9 +1376,7 @@ export default function Home() {
         setClarifyExpandedBoth(false);
         clearSpokenClarifyOptions();
         let msg: string;
-        if (isBrandChoice(parsed)) {
-          msg = `I think this is ${parsed.food}. ${BRAND_CHOICE_SPEECH}`;
-        } else if (parsed.confidence === "low") {
+        if (parsed.confidence === "low") {
           msg = `I wasn't sure about that. ${parsed.reasoning}. Please be more specific.`;
         } else {
           rememberSpokenClarifyOptions(
@@ -1288,19 +1387,10 @@ export default function Home() {
         }
         setStatus(msg);
         setTextInput("");
-        if (isBrandChoice(parsed)) {
-          const barged = await speakClarificationWithBargeIn(msg, uid);
-          if (uiChoiceInFlightRef.current) {
-            shouldAutoListen = false;
-          } else if (!barged) {
-            shouldAutoListen = true;
-          }
-        } else {
-          await speak(msg);
-          flushSync(() => setLoadingBoth(false));
-          shouldAutoListen =
-            !uiChoiceInFlightRef.current && pendingParseRef.current != null;
-        }
+        await speak(msg);
+        flushSync(() => setLoadingBoth(false));
+        shouldAutoListen =
+          !uiChoiceInFlightRef.current && pendingParseRef.current != null;
       }
     } catch {
       const err = "Error logging food.";
@@ -1398,6 +1488,9 @@ export default function Home() {
         message?: string;
         transcription?: string;
         parsed?: ParsedResult;
+        id?: string;
+        logged?: boolean;
+        confirmation?: ParsedResult["confirmation"];
         clarification?: {
           type:
             | "select"
@@ -1628,12 +1721,69 @@ export default function Home() {
           return;
         }
 
-        if (data.parsed.confidence === "high") {
+        const parsed: ParsedResult = {
+          ...data.parsed,
+          confirmation: data.parsed.confirmation || data.confirmation,
+        };
+
+        if (isBrandChoice(parsed)) {
+          const pending = {
+            parsed,
+            raw_input: data.transcription ?? "",
+            uid,
+          };
+          setPendingParse(pending);
+          pendingParseRef.current = pending;
+          setClarifyExpandedBoth(false);
+          setConversationHistoryBoth((prev) => [
+            ...prev,
+            { role: "user", content: data.transcription ?? "" },
+            { role: "assistant", content: JSON.stringify(parsed) },
+          ]);
+          clearSpokenClarifyOptions();
+          const msg = `I think this is ${parsed.food}. ${BRAND_CHOICE_SPEECH}`;
+          setStatus(msg);
+          const barged = await speakClarificationWithBargeIn(msg, uid);
+          if (uiChoiceInFlightRef.current) {
+            shouldAutoListen = false;
+          } else if (!barged) {
+            shouldAutoListen = true;
+          }
+        } else if (isSpec2Ask(parsed)) {
+          const pending = {
+            parsed,
+            raw_input: data.transcription ?? "",
+            uid,
+          };
+          setPendingParse(pending);
+          pendingParseRef.current = pending;
+          setClarifyExpandedBoth(false);
+          setConversationHistoryBoth((prev) => [
+            ...prev,
+            { role: "user", content: data.transcription ?? "" },
+            { role: "assistant", content: JSON.stringify(parsed) },
+          ]);
+          rememberSpokenClarifyOptions(
+            clarifyOptions(parsed, data.transcription ?? "", false),
+          );
+          spokenListAloudRef.current = true;
+          const msg = spec2AskSpeech(parsed);
+          setStatus(`Heard: "${data.transcription}" — ${msg}`);
+          const barged = await speakClarificationWithBargeIn(msg, uid);
+          if (uiChoiceInFlightRef.current) {
+            shouldAutoListen = false;
+          } else if (!barged) {
+            shouldAutoListen = true;
+          }
+        } else if (data.id || shouldAutoLog(parsed)) {
           const label =
-            data.parsed.entry_mode === "direct_macro" || !data.parsed.food
-              ? `${Math.round(data.parsed.calories ?? 0)} calories`
-              : `${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
-          const msg = `Logged ${label}`;
+            parsed.entry_mode === "direct_macro" || !parsed.food
+              ? `${Math.round(parsed.calories ?? 0)} calories`
+              : `${parsed.food}, ${Math.round(parsed.calories ?? 0)} calories`;
+          const markerBit = confirmMarkerSpeech(
+            parsed.confirmation?.markers || data.confirmation?.markers,
+          );
+          const msg = markerBit ? `Logged ${label}. ${markerBit}` : `Logged ${label}`;
           setStatus(`Heard: "${data.transcription}" — ${label}`);
           await speak(msg);
           await fetchLogs(uid);
@@ -1645,7 +1795,7 @@ export default function Home() {
           endPostLoginVoiceSession();
         } else {
           const pending = {
-            parsed: data.parsed,
+            parsed,
             raw_input: data.transcription ?? "",
             uid,
           };
@@ -1655,38 +1805,21 @@ export default function Home() {
           setConversationHistoryBoth((prev) => [
             ...prev,
             { role: "user", content: data.transcription ?? "" },
-            { role: "assistant", content: JSON.stringify(data.parsed) },
+            { role: "assistant", content: JSON.stringify(parsed) },
           ]);
-          // Headline first so the user can say "log it" before hearing
-          // alternates. Brand-vs-generic still comes first when needed.
-          let msg: string;
-          if (isBrandChoice(data.parsed)) {
-            clearSpokenClarifyOptions();
-            msg = `I think this is ${data.parsed.food}. ${BRAND_CHOICE_SPEECH}`;
-          } else {
-            const spoken = clarifyOptions(
-              data.parsed,
-              data.transcription ?? "",
-              false,
-            );
-            rememberSpokenClarifyOptions(spoken);
-            spokenListAloudRef.current = false;
-            msg = buildHeadlineConfirmSpeech(data.parsed);
-          }
+          const spoken = clarifyOptions(
+            parsed,
+            data.transcription ?? "",
+            false,
+          );
+          rememberSpokenClarifyOptions(spoken);
+          spokenListAloudRef.current = false;
+          const msg = buildHeadlineConfirmSpeech(parsed);
           setStatus(msg);
-          if (isBrandChoice(data.parsed)) {
-            const barged = await speakClarificationWithBargeIn(msg, uid);
-            if (uiChoiceInFlightRef.current) {
-              shouldAutoListen = false;
-            } else if (!barged) {
-              shouldAutoListen = true;
-            }
-          } else {
-            await speak(msg);
-            flushSync(() => setLoadingBoth(false));
-            shouldAutoListen =
-              !uiChoiceInFlightRef.current && pendingParseRef.current != null;
-          }
+          await speak(msg);
+          flushSync(() => setLoadingBoth(false));
+          shouldAutoListen =
+            !uiChoiceInFlightRef.current && pendingParseRef.current != null;
         }
       }
     } catch (err) {
@@ -1905,13 +2038,43 @@ export default function Home() {
       body: JSON.stringify({ user_id: uid, raw_input }),
     });
     const data = await res.json();
-    if (!res.ok || data.error || !data.parsed) {
+    if (!res.ok || data.error) {
       const err = speechForParseError(data);
       setStatus(err);
       await speak(err);
       return;
     }
-    const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
+    if (data.confirmation?.action === "ASK" || data.logged === false) {
+      const parsed = data.parsed as ParsedResult | undefined;
+      if (parsed && isUnresolved(parsed)) {
+        const msg = unresolvedSpeech(parsed);
+        setStatus(msg);
+        await speak(msg);
+        return;
+      }
+      if (parsed && isSpec2Ask({ ...parsed, confirmation: parsed.confirmation || data.confirmation })) {
+        const withConf = { ...parsed, confirmation: parsed.confirmation || data.confirmation };
+        const pending = { parsed: withConf, raw_input, uid };
+        setPendingParse(pending);
+        pendingParseRef.current = pending;
+        const msg = spec2AskSpeech(withConf);
+        setStatus(msg);
+        await speak(msg);
+        return;
+      }
+    }
+    if (!data.parsed) {
+      const err = speechForParseError(data);
+      setStatus(err);
+      await speak(err);
+      return;
+    }
+    const markerBit = confirmMarkerSpeech(
+      data.confirmation?.markers || data.parsed.confirmation?.markers,
+    );
+    const msg = markerBit
+      ? `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories. ${markerBit}`
+      : `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
     setStatus(msg);
     await speak(msg);
     setTextInput("");
@@ -3539,7 +3702,21 @@ export default function Home() {
                                   ) : (
                                     <>
                                       <td className="px-3 py-2 text-white text-xs font-medium">
-                                        {log.food_name}
+                                        <span>{log.food_name}</span>
+                                        {log.confirmation_markers &&
+                                          log.confirmation_markers.length > 0 && (
+                                            <span
+                                              className="mt-1 block text-xs text-white/80"
+                                              aria-label={log.confirmation_markers
+                                                .map((m) => m.label)
+                                                .join(" ")}
+                                            >
+                                              Review:{" "}
+                                              {log.confirmation_markers
+                                                .map((m) => m.field.replace("_", " "))
+                                                .join(", ")}
+                                            </span>
+                                          )}
                                       </td>
                                       <td className="px-3 py-2 text-white text-xs">
                                         {log.calories}

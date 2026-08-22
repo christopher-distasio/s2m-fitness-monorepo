@@ -130,6 +130,8 @@ class FoodLog(Document):
     food_event: Optional[Dict] = None
     utterance: Optional[Dict] = None
     resolution_audit: Optional[Dict] = None
+    # Spec 2 — visible, non-blocking review markers (additive).
+    confirmation_markers: Optional[List[dict]] = None
 
     class Settings:
         name = "food_logs"
