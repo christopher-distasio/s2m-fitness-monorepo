@@ -20,6 +20,7 @@ from typing import Literal
 from backend.models import FoodLog
 from backend.services.correct_last import handle_correct_last
 from backend.services.domain_boundary import is_off_domain, off_domain_response
+from backend.services.edit_entry import handle_edit_entry, pending_edit_entry
 from backend.services.intent_classifier import classify_intent
 from backend.services.safety_detector import build_safety_response, detect_safety
 from backend.services.user_logs import latest_log_for_user
@@ -30,6 +31,7 @@ DispatchKind = Literal[
     "safety",
     "off_domain",
     "correct_last",
+    "edit_entry",
     "delete_last",
     "read_today",
     "calories_today",
@@ -83,6 +85,18 @@ async def dispatch_voice_utterance(
         return gated
 
     stages = list(gated.stages)
+    if pending_edit_entry(history):
+        stages.append("handler")
+        response = await handle_edit_entry(
+            user_id, text, history=history, asr=asr
+        )
+        return DispatchResult(
+            kind="edit_entry",
+            stages=stages,
+            intent="edit_entry",
+            response=response,
+        )
+
     stages.append("intent")
     classified = await classify_intent(text)
     intent_name = classified.get("intent") or "unknown"
@@ -136,6 +150,17 @@ async def dispatch_voice_utterance(
         )
         return DispatchResult(
             kind="correct_last",
+            stages=stages,
+            intent=intent_name,
+            response=response,
+        )
+
+    if intent_name == "edit_entry":
+        response = await handle_edit_entry(
+            user_id, text, history=history, asr=asr
+        )
+        return DispatchResult(
+            kind="edit_entry",
             stages=stages,
             intent=intent_name,
             response=response,

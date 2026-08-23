@@ -33,5 +33,17 @@ async def latest_log_for_user(
     return last
 
 
+async def logs_for_user_since(user_id: str, since: datetime) -> list[FoodLog]:
+    """This user's logs at or after ``since``. Never crosses user_id."""
+    return (
+        await FoodLog.find(
+            FoodLog.user_id == user_id,
+            FoodLog.logged_at >= since,
+        )
+        .sort(-FoodLog.logged_at)
+        .to_list()
+    )
+
+
 async def load_user_profile(user_id: str):
     return await UserProfile.find_one(UserProfile.user_id == user_id)

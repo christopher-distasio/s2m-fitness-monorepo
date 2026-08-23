@@ -236,4 +236,68 @@ test.describe("logged-in food log", () => {
       page.getByRole("heading", { name: /^(Unsure|Less Sure)$/i }),
     ).toBeVisible({ timeout: 10000 });
   });
+
+  test("tap-to-edit form is labeled and accessible", async ({ page }) => {
+    await page.route("**/food/**/today", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            _id: "507f1f77bcf86cd799439011",
+            food_name: "eggs",
+            calories: 150,
+            protein: 12,
+            carbs: 1,
+            fat: 10,
+            quantity: "2",
+            raw_input: "two eggs",
+            logged_at: new Date().toISOString(),
+            food_event: {
+              food: "eggs",
+              brand: null,
+              preparation: "scrambled",
+              amount: 2,
+              unit: "count",
+            },
+          },
+        ]),
+      });
+    });
+    await page.route("**/food/**/summary", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          calories: 150,
+          protein: 12,
+          carbs: 1,
+          fat: 10,
+          nutrients: {},
+          entry_count: 1,
+        }),
+      });
+    });
+
+    await page.reload();
+    await page.getByRole("button", { name: /Today's logs/i }).click();
+    await page.getByRole("button", { name: /Edit eggs/i }).first().click();
+    await expect(page.getByRole("heading", { name: /Edit eggs/i })).toBeVisible();
+    await expect(page.getByLabel("Food")).toHaveValue("eggs");
+    await expect(page.getByLabel("Preparation")).toHaveValue("scrambled");
+    await expect(page.getByLabel("Amount")).toHaveValue("2");
+
+    const { violations } = await new AxeBuilder({ page })
+      .include("form")
+      .analyze();
+    expect(violations, formatAxeViolations(violations)).toEqual([]);
+  });
 });

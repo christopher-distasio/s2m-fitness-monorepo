@@ -14,7 +14,8 @@ Classify the user's input as exactly one of these intents:
 - "delete_last" — delete or remove their last entry
 - "read_today" — wants to hear what they've eaten today
 - "calories_today" — wants to know their calorie total
-- "correct_last" — correcting or editing their last entry
+- "correct_last" — correcting or editing their last entry (the thing they just logged)
+- "edit_entry" — correcting a specific past entry by time or description, not the last one (e.g. "change what I logged for lunch", "the eggs I had this morning", "yesterday's coffee"). Do not use this for "actually that was X" about the thing just logged — that is correct_last.
 - "unknown" — none of the above
 
 Return ONLY valid JSON, no explanation:

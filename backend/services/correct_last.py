@@ -92,6 +92,61 @@ def _correction_type(food_log: FoodLog, parsed: dict) -> str:
     return "quantity"
 
 
+def identity_fields_changed(
+    before_event: dict | None,
+    after_event: dict | None,
+    *,
+    before_name: str | None = None,
+    after_name: str | None = None,
+) -> bool:
+    """True when food identity, brand, or preparation changed."""
+    before = before_event or {}
+    after = after_event or {}
+    before_food = (before.get("food") or before_name or "").strip().lower()
+    after_food = (after.get("food") or after_name or "").strip().lower()
+    if before_food != after_food:
+        return True
+    if (before.get("brand") or "").strip().lower() != (after.get("brand") or "").strip().lower():
+        return True
+    if (before.get("preparation") or "").strip().lower() != (
+        after.get("preparation") or ""
+    ).strip().lower():
+        return True
+    return False
+
+
+async def apply_food_event_correction(
+    food_log: FoodLog,
+    changes: dict,
+    subject_user_id: str,
+    *,
+    raw_input: str = "",
+    food_name: str | None = None,
+) -> Correction:
+    """In-place FoodLog update plus a Correction audit row. Never inserts a FoodLog.
+
+    Shared by correct_last, edit_entry, and PATCH. ``changes`` is a parse dict
+    (food, calories, serving_size, food_event, …).
+    """
+    if food_log.user_id != subject_user_id:
+        raise ValueError("subject_user_id does not match the log owner")
+
+    correction = Correction(
+        user_id=subject_user_id,
+        log_id=str(food_log.id),
+        original_food=food_log.food_name,
+        original_calories=food_log.calories,
+        original_confidence=food_log.confidence,
+        corrected_food=food_name or changes.get("food"),
+        corrected_calories=changes.get("calories"),
+        correction_type=_correction_type(food_log, changes),
+    )
+    apply_parsed_to_food_log(food_log, changes, raw_input, food_name)
+    await food_log.save()
+    await correction.insert()
+    return correction
+
+
 async def handle_correct_last(
     user_id: str,
     raw_input: str,
@@ -152,19 +207,9 @@ async def handle_correct_last(
             "corrected": False,
         }
 
-    correction = Correction(
-        user_id=user_id,
-        log_id=str(last.id),
-        original_food=last.food_name,
-        original_calories=last.calories,
-        original_confidence=last.confidence,
-        corrected_food=parsed.get("food"),
-        corrected_calories=parsed.get("calories"),
-        correction_type=_correction_type(last, parsed),
+    await apply_food_event_correction(
+        last, parsed, user_id, raw_input=raw_input
     )
-    apply_parsed_to_food_log(last, parsed, raw_input)
-    await last.save()
-    await correction.insert()
 
     label = last.food_name or parsed.get("food") or "your last entry"
     return {

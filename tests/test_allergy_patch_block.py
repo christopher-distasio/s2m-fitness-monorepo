@@ -102,6 +102,8 @@ def _mock_existing_log():
     log.confidence = "high"
     log.quantity = "1 medium"
     log.id = "507f1f77bcf86cd799439011"
+    log.user_id = "u1"
+    log.food_event = {"food": "apple"}
     log.save = AsyncMock()
     return log
 
@@ -161,7 +163,7 @@ async def test_patch_allows_moderate_allergen_with_warning():
             new_callable=AsyncMock,
             return_value=prefs,
         ),
-        patch("backend.routes.food.Correction", return_value=correction),
+        patch("backend.services.correct_last.Correction", return_value=correction),
     ):
         mock_get.return_value = existing
 
