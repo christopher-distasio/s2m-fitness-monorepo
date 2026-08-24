@@ -236,9 +236,14 @@ test.describe("logged-in food log", () => {
       page.getByRole("heading", { name: /^(Unsure|Less Sure)$/i }),
     ).toBeVisible({ timeout: 10000 });
   });
+});
 
-  test("tap-to-edit form is labeled and accessible", async ({ page }) => {
-    await page.route("**/food/**/today", async (route) => {
+test.describe("tap-to-edit form is labeled and accessible", () => {
+  // Stub /today and /summary before login. Registering after the signed-in
+  // fetch (then reload) left the empty real response in place — Playwright
+  // never invoked the route handler, so no "Edit eggs" control existed.
+  test.beforeEach(async ({ page }) => {
+    await page.route("**/food/*/today", async (route) => {
       if (route.request().method() !== "GET") {
         await route.continue();
         return;
@@ -268,7 +273,7 @@ test.describe("logged-in food log", () => {
         ]),
       });
     });
-    await page.route("**/food/**/summary", async (route) => {
+    await page.route("**/food/*/summary", async (route) => {
       if (route.request().method() !== "GET") {
         await route.continue();
         return;
@@ -287,13 +292,38 @@ test.describe("logged-in food log", () => {
       });
     });
 
-    await page.reload();
+    const email = process.env.TEST_USER_EMAIL;
+    const password = process.env.TEST_USER_PASSWORD;
+    if (!email || !password) {
+      throw new Error(
+        "Missing TEST_USER_EMAIL or TEST_USER_PASSWORD. Create frontend/.env.test with those keys (gitignored).",
+      );
+    }
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: /^Sign in$/i }).click();
+    await expect(page).toHaveURL("/");
+  });
+
+  test("tap-to-edit form is labeled and accessible", async ({ page }) => {
+    await expect(
+      page.getByRole("button", { name: /Today's logs \(1\)/i }),
+    ).toBeVisible({ timeout: 15000 });
     await page.getByRole("button", { name: /Today's logs/i }).click();
     await page.getByRole("button", { name: /Edit eggs/i }).first().click();
     await expect(page.getByRole("heading", { name: /Edit eggs/i })).toBeVisible();
-    await expect(page.getByLabel("Food")).toHaveValue("eggs");
-    await expect(page.getByLabel("Preparation")).toHaveValue("scrambled");
-    await expect(page.getByLabel("Amount")).toHaveValue("2");
+    const editForm = page.getByRole("form", { name: /Edit eggs/i });
+    await expect(editForm.getByRole("textbox", { name: "Food" })).toHaveValue(
+      "eggs",
+    );
+    await expect(
+      editForm.getByRole("textbox", { name: "Preparation" }),
+    ).toHaveValue("scrambled");
+    await expect(editForm.getByRole("textbox", { name: "Amount" })).toHaveValue(
+      "2",
+    );
 
     const { violations } = await new AxeBuilder({ page })
       .include("form")
