@@ -25,6 +25,12 @@ from backend.services.clarification import (
     clarification_state,
 )
 from backend.services.tts_service import speak
+from backend.services.correct_last import (
+    apply_food_event_correction,
+    identity_fields_changed,
+)
+from backend.services.edit_entry import factual_restriction_message, handle_edit_entry
+from backend.services.restriction_eval import evaluate_restrictions
 from fastapi.responses import JSONResponse, Response
 import json
 
@@ -81,6 +87,11 @@ class FoodLogRequest(BaseModel):
     fat: Optional[float] = None
     nutrients: Optional[dict[str, float]] = None
     quantity: Optional[str] = None
+    brand: Optional[str] = None
+    variant: Optional[str] = None
+    preparation: Optional[str] = None
+    amount: Optional[float] = None
+    unit: Optional[str] = None
 
 
 class CorrectionRequest(BaseModel):
@@ -222,6 +233,37 @@ def build_food_log(
         else None,
         confirmation_markers=(parsed.get("confirmation") or {}).get("markers") or None,
     )
+
+
+def _overlay_structured_edit(parsed: dict, request: FoodLogRequest) -> None:
+    """Tap-to-edit fields win over re-parse; keep food_event in sync."""
+    event = parsed.get("food_event")
+    if not isinstance(event, dict):
+        event = {}
+        parsed["food_event"] = event
+    if request.brand is not None:
+        parsed["brand"] = request.brand
+        event["brand"] = request.brand
+    if request.preparation is not None:
+        parsed["preparation"] = request.preparation
+        event["preparation"] = request.preparation
+    if request.amount is not None:
+        parsed["amount"] = request.amount
+        event["amount"] = request.amount
+    if request.unit is not None:
+        parsed["unit"] = request.unit
+        event["unit"] = request.unit
+    if request.variant:
+        parsed["variant"] = request.variant
+        event["variant_tags"] = [{"type": "variant", "value": request.variant}]
+    if request.food_name:
+        parsed["food"] = request.food_name
+        event["food"] = request.food_name
+    if request.amount is not None or request.unit:
+        amount = request.amount if request.amount is not None else event.get("amount")
+        unit = request.unit or event.get("unit") or ""
+        if amount is not None:
+            parsed["serving_size"] = f"{amount} {unit}".strip()
 
 
 def build_response(
@@ -404,6 +446,10 @@ async def log_food_voice(
             "transcription": raw_input,
             "clarification": {"type": "unrecognized"},
         }
+    if state == "edit_entry":
+        return await handle_edit_entry(
+            user_id, raw_input, history=history, asr=transcript.asr
+        )
     if state == "list":
         spoken = spoken_candidates_from_history(history)
         command = resolve_confirmation_reply(raw_input, spoken) if spoken else parse_clarification_command(raw_input)
@@ -556,41 +602,37 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
     user_prefs = await _load_dietary_preferences(request.user_id)
     warnings = _apply_allergy_gate(parsed, user_prefs)
 
-    food_changed = (food_log.food_name or "").lower() != (parsed.get("food") or "").lower()
-    quantity_changed = food_log.quantity != parsed.get("serving_size")
+    _overlay_structured_edit(parsed, request)
 
-    if food_changed and quantity_changed:
-        correction_type = "both"
-    elif food_changed:
-        correction_type = "food"
-    else:
-        correction_type = "quantity"
+    previous_event = dict(food_log.food_event) if isinstance(food_log.food_event, dict) else {}
+    previous_name = food_log.food_name
 
-    correction = Correction(
-        user_id=request.user_id,
-        log_id=log_id,
-        original_food=food_log.food_name,
-        original_calories=food_log.calories,
-        original_confidence=food_log.confidence,
-        corrected_food=parsed.get("food"),
-        corrected_calories=parsed.get("calories"),
-        correction_type=correction_type,
+    await apply_food_event_correction(
+        food_log,
+        parsed,
+        request.user_id,
+        raw_input=request.raw_input,
+        food_name=request.food_name,
     )
-    await correction.insert()
 
-    food_log.raw_input = request.raw_input
-    food_log.food_name = request.food_name or parsed.get("food") or food_log.food_name
-    food_log.calories = parsed.get("calories")
-    macros = parsed.get("macronutrients", {})
-    food_log.protein = macros.get("protein")
-    food_log.carbs = macros.get("carbohydrates")
-    food_log.fat = macros.get("fats")
-    food_log.extra_nutrients = parsed.get("nutrients") or None
-    food_log.quantity = parsed.get("serving_size")
-    food_log.modified_at = datetime.now(timezone.utc)
-
-    await food_log.save()
-    return _with_allergy_warning(build_response(food_log, parsed), warnings)
+    response = _with_allergy_warning(build_response(food_log, parsed), warnings)
+    after_event = (
+        food_log.food_event if isinstance(food_log.food_event, dict) else parsed
+    )
+    if identity_fields_changed(
+        previous_event,
+        after_event,
+        before_name=previous_name,
+        after_name=food_log.food_name,
+    ):
+        verdict = evaluate_restrictions(after_event or parsed, user_prefs)
+        response["restriction_verdict"] = verdict.model_dump()
+        restriction_message = factual_restriction_message(
+            previous_event, after_event or parsed, verdict
+        )
+        if restriction_message:
+            response["restriction_update"] = restriction_message
+    return response
 
 
 @router.get("/food/{user_id}/weekly")

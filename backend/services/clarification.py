@@ -328,6 +328,8 @@ def clarification_state(history: list[dict]) -> str | None:
             return None
         status = (data.get("resolution") or {}).get("status")
         confirmation = data.get("confirmation") or {}
+        if confirmation.get("pending_kind") == "edit_entry":
+            return "edit_entry"
         if confirmation.get("action") == "ASK":
             return "list"
         if status == "needs_brand_choice":

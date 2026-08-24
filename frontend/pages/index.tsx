@@ -13,6 +13,12 @@ import {
   type DietaryPreferences,
 } from "../lib/dietaryPreferences";
 import { DietaryPreferencesPanel } from "../components/DietaryPreferencesPanel";
+import { EditLogForm } from "../components/EditLogForm";
+import {
+  composeEditInput,
+  fieldsFromLog,
+  type EditLogFields,
+} from "../lib/editLog";
 import {
   MACRO_DISPLAY_KEYS,
   MICRO_KEYS,
@@ -272,6 +278,15 @@ interface FoodLog {
   reasoning?: string;
   alternatives?: string[];
   confirmation_markers?: Array<{ field: string; label: string }>;
+  food_event?: {
+    food?: string | null;
+    brand?: string | null;
+    variant_tags?: Array<{ type?: string; value?: string }>;
+    preparation?: string | null;
+    amount?: number;
+    unit?: string;
+    allergen_state?: Record<string, string>;
+  } | null;
 }
 
 interface FoodCandidate {
@@ -342,6 +357,7 @@ interface ParsedResult {
     markers?: Array<{ field: string; label: string }>;
     asked_fields?: string[];
     question_kind?: string | null;
+    pending_kind?: string | null;
   };
 }
 
@@ -677,6 +693,15 @@ export default function Home() {
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
+  const [editFields, setEditFields] = useState<EditLogFields>({
+    food: "",
+    brand: "",
+    variant: "",
+    preparation: "",
+    amount: "",
+    unit: "",
+  });
+  const [editRestrictionStatus, setEditRestrictionStatus] = useState("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const [calorieGoal, setCalorieGoal] = useState(2000);
@@ -1425,12 +1450,29 @@ export default function Home() {
     } = await supabase.auth.getSession();
     if (!session) return;
     const uid = session.user.id;
-    if (!editInput.trim()) return;
-    await fetch(`${API_BASE}/food/${id}`, {
+    const composed = composeEditInput(editFields) || editInput.trim();
+    if (!composed) return;
+    const res = await fetch(`${API_BASE}/food/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ raw_input: editInput, user_id: userId }),
+      body: JSON.stringify({
+        raw_input: composed,
+        user_id: uid,
+        food_name: editFields.food || undefined,
+        brand: editFields.brand || undefined,
+        variant: editFields.variant || undefined,
+        preparation: editFields.preparation || undefined,
+        amount: editFields.amount ? Number(editFields.amount) : undefined,
+        unit: editFields.unit || undefined,
+      }),
     });
+    const data = await res.json().catch(() => ({}));
+    const restrictionNote =
+      typeof data.restriction_update === "string" ? data.restriction_update : "";
+    setEditRestrictionStatus(restrictionNote);
+    if (restrictionNote) {
+      setStatus(restrictionNote);
+    }
     setEditingId(null);
     fetchLogs(uid);
     fetchSummary(uid);
@@ -1692,6 +1734,36 @@ export default function Home() {
           setStatus(err);
           await speak(err);
           if (wasAwaitingClarification) shouldAutoListen = true;
+          return;
+        }
+
+        if (
+          data.confirmation?.pending_kind === "edit_entry" &&
+          data.confirmation?.action === "ASK"
+        ) {
+          const pending = {
+            parsed: {
+              food: "",
+              calories: 0,
+              confirmation: data.confirmation,
+            } as ParsedResult,
+            raw_input: data.transcription ?? "",
+            uid,
+          };
+          setPendingParse(pending);
+          pendingParseRef.current = pending;
+          setConversationHistoryBoth((prev) => [
+            ...prev,
+            { role: "user", content: data.transcription ?? "" },
+            {
+              role: "assistant",
+              content: JSON.stringify({ confirmation: data.confirmation }),
+            },
+          ]);
+          const msg = data.message || data.confirmation.question || "";
+          setStatus(msg);
+          const barged = await speakClarificationWithBargeIn(msg, uid);
+          if (!barged) shouldAutoListen = true;
           return;
         }
 
@@ -3653,56 +3725,36 @@ export default function Home() {
                                   className={`border-b border-white/10 last:border-0 ${index % 2 === 0 ? "bg-white/5" : "bg-transparent"}`}
                                 >
                                   {editingId === log._id ? (
-                                    <>
-                                      <td colSpan={5} className="px-3 py-2">
-                                        <label
-                                          htmlFor={`edit-input-${log._id}`}
-                                          className="sr-only"
-                                        >
-                                          Edit food entry for {log.food_name}
-                                        </label>
-                                        <input
-                                          id={`edit-input-${log._id}`}
-                                          ref={editInputRef}
-                                          value={editInput}
-                                          onChange={(e) =>
-                                            setEditInput(e.target.value)
-                                          }
-                                          onKeyDown={(e) => {
-                                            if (e.key === "Enter")
-                                              saveEdit(log._id);
-                                            if (e.key === "Escape")
-                                              setEditingId(null);
-                                          }}
-                                          placeholder="Describe what you ate"
-                                          className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/30 text-white placeholder-white text-xs focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent"
-                                        />
-                                      </td>
-                                      <td className="px-3 py-2">
-                                        <div className="flex gap-2">
-                                          <button
-                                            type="button"
-                                            onClick={() => saveEdit(log._id)}
-                                            className="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                                            aria-label={`Save edit for ${log.food_name}`}
-                                          >
-                                            Save
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => setEditingId(null)}
-                                            className="px-2 py-1 bg-gray-600 hover:bg-gray-700 text-white text-xs font-semibold rounded-lg focus:outline-none focus:ring-2 focus:ring-white transition-colors"
-                                            aria-label="Cancel edit"
-                                          >
-                                            Cancel
-                                          </button>
-                                        </div>
-                                      </td>
-                                    </>
+                                    <td colSpan={6} className="px-3 py-3">
+                                      <EditLogForm
+                                        logId={log._id}
+                                        foodName={log.food_name}
+                                        fields={editFields}
+                                        onChange={setEditFields}
+                                        onSave={() => saveEdit(log._id)}
+                                        onCancel={() => {
+                                          setEditingId(null);
+                                          setEditRestrictionStatus("");
+                                        }}
+                                        restrictionStatus={editRestrictionStatus}
+                                      />
+                                    </td>
                                   ) : (
                                     <>
                                       <td className="px-3 py-2 text-white text-xs font-medium">
-                                        <span>{log.food_name}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingId(log._id);
+                                            setEditFields(fieldsFromLog(log));
+                                            setEditInput(log.raw_input);
+                                            setEditRestrictionStatus("");
+                                          }}
+                                          className="min-h-11 min-w-11 text-left text-sm font-medium text-white underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-white rounded"
+                                          aria-label={`Edit ${log.food_name}`}
+                                        >
+                                          {log.food_name}
+                                        </button>
                                         {log.confirmation_markers &&
                                           log.confirmation_markers.length > 0 && (
                                             <span
@@ -3736,9 +3788,11 @@ export default function Home() {
                                             type="button"
                                             onClick={() => {
                                               setEditingId(log._id);
+                                              setEditFields(fieldsFromLog(log));
                                               setEditInput(log.raw_input);
+                                              setEditRestrictionStatus("");
                                             }}
-                                            className="p-1.5 rounded-lg bg-blue-500/20 hover:bg-blue-500/40 text-white hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                                            className="min-h-11 min-w-11 p-2 rounded-lg bg-blue-500/20 hover:bg-blue-500/40 text-white hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                                             aria-label={`Edit ${log.food_name}`}
                                           >
                                             <svg
@@ -3760,7 +3814,7 @@ export default function Home() {
                                           <button
                                             type="button"
                                             onClick={() => deleteLog(log._id)}
-                                            className="p-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/40 text-red-300 hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
+                                            className="min-h-11 min-w-11 p-2 rounded-lg bg-red-500/20 hover:bg-red-500/40 text-red-300 hover:text-white focus:outline-none focus:ring-2 focus:ring-white transition-colors"
                                             aria-label={`Delete ${log.food_name}`}
                                           >
                                             <svg

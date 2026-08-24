@@ -278,6 +278,11 @@ def _contrastive_question(labels: list[str], field: str) -> tuple[str, str]:
     return f"Was that {joined}?", "contrastive"
 
 
+def contrastive_question(labels: list[str], field: str = "food") -> tuple[str, str]:
+    """Public Spec 2 contrastive prompt — reused by edit_entry candidate lists."""
+    return _contrastive_question(labels, field)
+
+
 def _question_for_fields(
     fields: list[str],
     parsed: dict,

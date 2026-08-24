@@ -191,6 +191,25 @@ def test_state_list_from_spec2_ask():
     assert is_awaiting_clarification(history) is True
 
 
+def test_state_edit_entry_pending_kind():
+    history = _history(
+        {
+            "logged": False,
+            "confirmation": {
+                "action": "ASK",
+                "pending_kind": "edit_entry",
+                "question_kind": "contrastive",
+                "spoken_candidates": [
+                    {"name": "your 8am eggs", "log_id": "1"},
+                    {"name": "your 8am toast", "log_id": "2"},
+                ],
+            },
+        }
+    )
+    assert clarification_state(history) == "edit_entry"
+    assert is_awaiting_clarification(history) is True
+
+
 def test_state_none_when_high_confidence_or_empty():
     assert clarification_state([]) is None
     assert (
