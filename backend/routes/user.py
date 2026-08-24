@@ -16,6 +16,8 @@ class UpdateProfile(BaseModel):
     screen_name: Optional[str] = None
     voice: Optional[str] = None
     wake_word_enabled: Optional[bool] = None
+    verbosity_level: Optional[str] = None
+    safety_mode_enabled: Optional[bool] = None
     nutrient_display_preferences: Optional[list[str]] = None
     contribution_consent: Optional[bool] = None
     timezone: Optional[str] = None
@@ -37,6 +39,12 @@ async def update_profile(user_id: str, updates: UpdateProfile = Body(...)):
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     update_data = updates.model_dump(exclude_unset=True)
+    if "verbosity_level" in update_data:
+        level = update_data["verbosity_level"]
+        if level not in {"quick", "standard", "careful"}:
+            raise HTTPException(
+                status_code=422, detail="verbosity_level must be quick, standard, or careful"
+            )
     for key, value in update_data.items():
         setattr(profile, key, value)
     await profile.save()

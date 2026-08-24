@@ -23,7 +23,8 @@ from backend.services.domain_boundary import is_off_domain, off_domain_response
 from backend.services.edit_entry import handle_edit_entry, pending_edit_entry
 from backend.services.intent_classifier import classify_intent
 from backend.services.safety_detector import build_safety_response, detect_safety
-from backend.services.user_logs import latest_log_for_user
+from backend.services.user_logs import latest_log_for_user, load_user_profile
+from backend.services.response_compose import compose_response, settings_from_profile
 
 PIPELINE_ORDER = ("safety", "domain_boundary", "intent", "handler")
 
@@ -132,8 +133,20 @@ async def dispatch_voice_utterance(
             FoodLog.user_id == user_id, FoodLog.logged_at >= start
         ).to_list()
         if intent_name == "calories_today":
+            profile = await load_user_profile(user_id)
+            verbosity, safety = settings_from_profile(profile)
             total = sum(log.calories or 0 for log in logs)
-            message = f"You have logged {total} calories today"
+            goal = getattr(profile, "calorie_goal", 2000) if profile else 2000
+            message = compose_response(
+                "calories_today",
+                {
+                    "calories": total,
+                    "entry_count": len(logs),
+                    "calorie_goal": goal,
+                },
+                verbosity_level=verbosity,
+                safety_mode_enabled=safety,
+            )
         else:
             names = ", ".join(log.food_name for log in logs) or "nothing yet"
             message = f"Today you ate: {names}"
@@ -141,7 +154,11 @@ async def dispatch_voice_utterance(
             kind=intent_name,  # type: ignore[arg-type]
             stages=stages,
             intent=intent_name,
-            response={"message": message, "transcription": text},
+            response={
+                "message": message,
+                "spoken_message": message,
+                "transcription": text,
+            },
         )
 
     if intent_name == "correct_last":
