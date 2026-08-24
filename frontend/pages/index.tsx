@@ -14,6 +14,11 @@ import {
 } from "../lib/dietaryPreferences";
 import { DietaryPreferencesPanel } from "../components/DietaryPreferencesPanel";
 import { EditLogForm } from "../components/EditLogForm";
+import { ResponseSettingsPanel } from "../components/ResponseSettingsPanel";
+import {
+  logConfirmationSpeech,
+  type VerbosityLevel,
+} from "../lib/responseCompose";
 import {
   composeEditInput,
   fieldsFromLog,
@@ -683,7 +688,7 @@ export default function Home() {
   };
   const [autoListening, setAutoListening] = useState(false);
   const [status, setStatus] = useState("");
-  const [summary, setSummary] = useState({
+    const [summary, setSummary] = useState({
     calories: 0,
     protein: 0,
     carbs: 0,
@@ -691,6 +696,7 @@ export default function Home() {
     nutrients: {} as Record<string, number>,
     entry_count: 0,
   });
+  const [spokenSummary, setSpokenSummary] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
   const [editFields, setEditFields] = useState<EditLogFields>({
@@ -705,6 +711,10 @@ export default function Home() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const [calorieGoal, setCalorieGoal] = useState(2000);
+  const [verbosityLevel, setVerbosityLevel] =
+    useState<VerbosityLevel>("standard");
+  const [safetyModeEnabled, setSafetyModeEnabled] = useState(false);
+  const [responseSettingsStatus, setResponseSettingsStatus] = useState("");
   const [goalInput, setGoalInput] = useState("");
   const [dietaryPrefs, setDietaryPrefs] = useState<DietaryPreferences>(
     () => defaultDietaryPreferences(),
@@ -854,6 +864,7 @@ export default function Home() {
         entry_count: data.entry_count ?? 0,
       };
       setSummary(next);
+      setSpokenSummary(data.spoken_message || "");
       return next;
     },
     [userId],
@@ -869,6 +880,14 @@ export default function Home() {
     const res = await fetch(`${API_BASE}/user/${id}/profile`);
     const data = await res.json();
     setCalorieGoal(data.calorie_goal);
+    if (
+      data.verbosity_level === "quick" ||
+      data.verbosity_level === "standard" ||
+      data.verbosity_level === "careful"
+    ) {
+      setVerbosityLevel(data.verbosity_level);
+    }
+    setSafetyModeEnabled(Boolean(data.safety_mode_enabled));
     return data as { calorie_goal: number };
   }, []);
 
@@ -955,9 +974,14 @@ export default function Home() {
 
   const speakTodaysSummary = useCallback(
     async (s: SummarySnapshot, goal: number) => {
-      await speak(buildTodaysSummaryMessage(s, goal));
+      const text =
+        spokenSummary ||
+        (safetyModeEnabled
+          ? `Today you logged ${summary.entry_count} items.`
+          : buildTodaysSummaryMessage(s, goal));
+      await speak(text);
     },
-    [speak],
+    [speak, spokenSummary, safetyModeEnabled, summary.entry_count],
   );
 
   const setModeAndPersist = useCallback((next: AppMode) => {
@@ -1533,6 +1557,13 @@ export default function Home() {
         id?: string;
         logged?: boolean;
         confirmation?: ParsedResult["confirmation"];
+        spoken_message?: string;
+        allergen_readback?: {
+          pending?: boolean;
+          claim?: string;
+          log_id?: string;
+          message?: string;
+        };
         clarification?: {
           type:
             | "select"
@@ -1839,7 +1870,38 @@ export default function Home() {
             clarifyOptions(parsed, data.transcription ?? "", false),
           );
           spokenListAloudRef.current = true;
-          const msg = spec2AskSpeech(parsed);
+          const msg = data.spoken_message || spec2AskSpeech(parsed);
+          setStatus(`Heard: "${data.transcription}" — ${msg}`);
+          const barged = await speakClarificationWithBargeIn(msg, uid);
+          if (uiChoiceInFlightRef.current) {
+            shouldAutoListen = false;
+          } else if (!barged) {
+            shouldAutoListen = true;
+          }
+        } else if (data.allergen_readback?.pending) {
+          const pending = {
+            parsed,
+            raw_input: data.transcription ?? "",
+            uid,
+          };
+          setPendingParse(pending);
+          pendingParseRef.current = pending;
+          setConversationHistoryBoth((prev) => [
+            ...prev,
+            { role: "user", content: data.transcription ?? "" },
+            {
+              role: "assistant",
+              content: JSON.stringify({
+                allergen_readback: data.allergen_readback,
+                parsed,
+              }),
+            },
+          ]);
+          const msg =
+            data.spoken_message ||
+            data.allergen_readback.message ||
+            data.message ||
+            "";
           setStatus(`Heard: "${data.transcription}" — ${msg}`);
           const barged = await speakClarificationWithBargeIn(msg, uid);
           if (uiChoiceInFlightRef.current) {
@@ -1852,12 +1914,20 @@ export default function Home() {
             parsed.entry_mode === "direct_macro" || !parsed.food
               ? `${Math.round(parsed.calories ?? 0)} calories`
               : `${parsed.food}, ${Math.round(parsed.calories ?? 0)} calories`;
+          const heardLabel = safetyModeEnabled
+            ? parsed.food || "logged"
+            : label;
           const markerBit = confirmMarkerSpeech(
             parsed.confirmation?.markers || data.confirmation?.markers,
           );
           const msg = markerBit ? `Logged ${label}. ${markerBit}` : `Logged ${label}`;
-          setStatus(`Heard: "${data.transcription}" — ${label}`);
-          await speak(msg);
+          const spoken =
+            data.spoken_message ||
+            (safetyModeEnabled
+              ? logConfirmationSpeech(parsed.food || "food", parsed.calories, verbosityLevel, true)
+              : msg);
+          setStatus(`Heard: "${data.transcription}" — ${heardLabel}`);
+          await speak(spoken);
           await fetchLogs(uid);
           await fetchSummary(uid);
           setPendingParse(null);
@@ -2051,9 +2121,46 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ calorie_goal: Number.parseFloat(goalInput) }),
     });
-    setCalorieGoal(Number.parseFloat(goalInput));
+    const savedGoal = Number.parseFloat(goalInput);
+    setCalorieGoal(savedGoal);
     setGoalInput("");
-    speak(`Calorie goal set to ${goalInput} calories`);
+    if (!safetyModeEnabled) {
+      speak(`Calorie goal set to ${savedGoal} calories`);
+    }
+  }
+
+  async function saveResponseSettings(next?: {
+    verbosity_level?: VerbosityLevel;
+    safety_mode_enabled?: boolean;
+  }) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const uid = session?.user.id ?? userId;
+    if (!uid) {
+      setResponseSettingsStatus("Sign in to save these settings");
+      return;
+    }
+    const verbosity = next?.verbosity_level ?? verbosityLevel;
+    const safety = next?.safety_mode_enabled ?? safetyModeEnabled;
+    setResponseSettingsStatus("");
+    const res = await fetch(`${API_BASE}/user/${uid}/profile`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        verbosity_level: verbosity,
+        safety_mode_enabled: safety,
+      }),
+    });
+    if (!res.ok) {
+      setResponseSettingsStatus("Could not save — try again");
+      return;
+    }
+    setVerbosityLevel(verbosity);
+    setSafetyModeEnabled(safety);
+    setResponseSettingsStatus("Saved");
+    await fetchSummary(uid);
+    await speak("Response settings saved");
   }
 
   async function saveDietaryPrefs() {
@@ -2147,8 +2254,17 @@ export default function Home() {
     const msg = markerBit
       ? `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories. ${markerBit}`
       : `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories)} calories`;
-    setStatus(msg);
-    await speak(msg);
+    const spoken =
+      data.spoken_message ||
+      logConfirmationSpeech(
+        data.parsed.food,
+        data.parsed.calories,
+        verbosityLevel,
+        safetyModeEnabled,
+      ) ||
+      msg;
+    setStatus(safetyModeEnabled ? `Logged ${data.parsed.food}` : msg);
+    await speak(spoken);
     setTextInput("");
     setPendingParse(null);
     pendingParseRef.current = null;
@@ -2192,7 +2308,14 @@ export default function Home() {
         }),
       });
       const data = await res.json();
-      const msg = `Logged ${data.parsed.food}, ${Math.round(data.parsed.calories ?? 0)} calories`;
+      const msg =
+        data.spoken_message ||
+        logConfirmationSpeech(
+          data.parsed.food,
+          data.parsed.calories,
+          verbosityLevel,
+          safetyModeEnabled,
+        );
       setStatus(msg);
       await speak(msg);
       setTextInput("");
@@ -3130,6 +3253,7 @@ export default function Home() {
 
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-stretch sm:gap-4">
                   {/* Primary metric — roomy calories block */}
+                  {!safetyModeEnabled ? (
                   <div className="flex flex-col justify-center rounded-xl bg-blue-950 border border-blue-800/80 px-5 py-5 text-center sm:min-w-[11rem] sm:flex-1 sm:max-w-[16rem]">
                     <p className="text-xs text-blue-50 uppercase tracking-wide font-medium mb-1">
                       Calories
@@ -3148,6 +3272,19 @@ export default function Home() {
                       goal
                     </p>
                   </div>
+                  ) : (
+                  <div className="flex flex-col justify-center rounded-xl bg-blue-950 border border-blue-800/80 px-5 py-5 text-center sm:min-w-[11rem] sm:flex-1 sm:max-w-[16rem]">
+                    <p className="text-xs text-blue-50 uppercase tracking-wide font-medium mb-1">
+                      Today
+                    </p>
+                    <p className="text-4xl sm:text-5xl font-bold text-white leading-none tracking-tight">
+                      {summary.entry_count}
+                    </p>
+                    <p className="mt-2 text-sm text-blue-100/90">
+                      {summary.entry_count === 1 ? "entry logged" : "entries logged"}
+                    </p>
+                  </div>
+                  )}
 
                   {/* Show Macronutrients / Show Micronutrients pickers */}
                   <div
@@ -3339,6 +3476,8 @@ export default function Home() {
 
                 {/* Progress bar */}
                 <div className="mb-4">
+                  {!safetyModeEnabled ? (
+                    <>
                   <label htmlFor="calorie-progress" className="sr-only">
                     Calorie progress: {caloriePercent}% of daily goal
                   </label>
@@ -3356,10 +3495,16 @@ export default function Home() {
                             : "#4ade80",
                     }}
                   />
+                    </>
+                  ) : null}
                   <div className="flex items-center justify-between mt-1">
+                    {!safetyModeEnabled ? (
                     <p className="text-xs text-white">
                       {caloriePercent}% of daily goal
                     </p>
+                    ) : (
+                    <p className="text-xs text-white">Safety Mode on</p>
+                    )}
                     <p className="text-xs text-white">
                       {summary.entry_count}{" "}
                       {summary.entry_count === 1 ? "entry" : "entries"}
@@ -3443,6 +3588,19 @@ export default function Home() {
                     Settings
                   </summary>
                   <div className="mt-3 flex flex-col gap-6 border-t border-white/20 pt-4">
+                    <ResponseSettingsPanel
+                      verbosityLevel={verbosityLevel}
+                      safetyModeEnabled={safetyModeEnabled}
+                      statusMessage={responseSettingsStatus}
+                      onVerbosityChange={(level) => {
+                        void saveResponseSettings({ verbosity_level: level });
+                      }}
+                      onSafetyModeChange={(enabled) => {
+                        void saveResponseSettings({
+                          safety_mode_enabled: enabled,
+                        });
+                      }}
+                    />
                     <fieldset>
                       <legend className="text-sm font-medium text-white mb-2">
                         Update calorie goal

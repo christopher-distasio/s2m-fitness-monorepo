@@ -31,6 +31,16 @@ from backend.services.correct_last import (
 )
 from backend.services.edit_entry import factual_restriction_message, handle_edit_entry
 from backend.services.restriction_eval import evaluate_restrictions
+from backend.services.response_compose import compose_response, settings_from_profile
+from backend.services.allergen_readback import (
+    allergen_readback_payload,
+    apply_readback_to_event,
+    classify_readback_reply,
+    defer_allergen_fields,
+    explicit_allergen_declarations,
+    needs_allergen_readback,
+)
+from backend.services.user_logs import latest_log_for_user
 from fastapi.responses import JSONResponse, Response
 import json
 
@@ -137,11 +147,14 @@ def _is_brand_choice(parsed: dict) -> bool:
 
 def _ask_payload(parsed: dict, *, transcription: str | None = None) -> dict:
     confirmation = parsed.get("confirmation") or {}
+    question = confirmation.get("question") or ""
+    spoken = compose_response("spec2_ask", {"question": question})
     payload = {
         "logged": False,
         "confirmation": confirmation,
         "parsed": parsed,
-        "message": confirmation.get("question"),
+        "message": spoken,
+        "spoken_message": spoken,
     }
     if transcription is not None:
         payload["transcription"] = transcription
@@ -208,8 +221,11 @@ def build_food_log(
         "activation": parsed.get("activation"),
         "raw_transcript": parsed.get("raw_transcript") or raw_input,
     }
-    food_event = parsed.get("food_events", [None])
-    stored_event = food_event[0] if isinstance(food_event, list) and food_event else parsed.get("food_event")
+    food_events = parsed.get("food_events")
+    if isinstance(food_events, list) and food_events and isinstance(food_events[0], dict):
+        stored_event = food_events[0]
+    else:
+        stored_event = parsed.get("food_event")
     markers = (parsed.get("confirmation") or {}).get("markers") or None
     if isinstance(stored_event, dict) and markers:
         stored_event = {**stored_event, "confirmation_markers": markers}
@@ -267,10 +283,33 @@ def _overlay_structured_edit(parsed: dict, request: FoodLogRequest) -> None:
 
 
 def build_response(
-    food_log: FoodLog, parsed: dict, transcription: Optional[str] = None
+    food_log: FoodLog,
+    parsed: dict,
+    transcription: Optional[str] = None,
+    *,
+    verbosity_level: str = "standard",
+    safety_mode_enabled: bool = False,
+    restriction_reasons: Optional[list[str]] = None,
 ) -> dict:
+    macros = parsed.get("macronutrients") or {}
+    spoken = compose_response(
+        "log_confirmation",
+        {
+            "food": parsed.get("food") or food_log.food_name,
+            "calories": parsed.get("calories")
+            if parsed.get("calories") is not None
+            else food_log.calories,
+            "protein": macros.get("protein", food_log.protein),
+            "carbs": macros.get("carbohydrates", food_log.carbs),
+            "fat": macros.get("fats", food_log.fat),
+            "restriction_reasons": restriction_reasons or [],
+        },
+        verbosity_level=verbosity_level,
+        safety_mode_enabled=safety_mode_enabled,
+    )
     response = {
-        "message": "Food logged successfully",
+        "message": spoken,
+        "spoken_message": spoken,
         "id": str(food_log.id),
         "parsed": {
             "food": parsed["food"],
@@ -287,6 +326,92 @@ def build_response(
     if confirmation:
         response["confirmation"] = confirmation
     return response
+
+
+async def _profile_settings(user_id: Optional[str]) -> tuple[str, bool]:
+    if not user_id:
+        return "standard", False
+    try:
+        profile = await UserProfile.find_one(UserProfile.user_id == user_id)
+    except Exception:
+        return "standard", False
+    return settings_from_profile(profile)
+
+
+async def _log_response(
+    food_log: FoodLog,
+    parsed: dict,
+    user_id: Optional[str],
+    warnings: Optional[list[str]] = None,
+    transcription: Optional[str] = None,
+    extra_spoken: Optional[str] = None,
+) -> dict:
+    verbosity, safety = await _profile_settings(user_id)
+    response = build_response(
+        food_log,
+        parsed,
+        transcription,
+        verbosity_level=verbosity,
+        safety_mode_enabled=safety,
+        restriction_reasons=warnings,
+    )
+    if extra_spoken:
+        combined = f"{response['spoken_message']} {extra_spoken}".strip()
+        response["spoken_message"] = combined
+        response["message"] = combined
+    return _with_allergy_warning(response, warnings or [])
+
+
+async def _finish_allergen_readback(
+    user_id: str, raw_input: str, history: list | None
+) -> dict:
+    reply = classify_readback_reply(raw_input)
+    log_id = None
+    if history:
+        for message in reversed(history):
+            if message.get("role") != "assistant":
+                continue
+            try:
+                data = json.loads(message.get("content") or "")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            pending = data.get("allergen_readback") or {}
+            log_id = pending.get("log_id")
+            if log_id:
+                break
+    food_log = None
+    if log_id:
+        try:
+            food_log = await FoodLog.get(PydanticObjectId(log_id))
+        except Exception:
+            food_log = None
+    if food_log is None:
+        food_log = await latest_log_for_user(user_id)
+    if food_log is None:
+        return {
+            "transcription": raw_input,
+            "allergen_readback": {"pending": False, "status": "unresolved"},
+            "message": "Okay.",
+            "spoken_message": "Okay.",
+        }
+    resolved_reply = "yes" if reply == "yes" else "no"
+    event = apply_readback_to_event(
+        food_log.food_event if isinstance(food_log.food_event, dict) else {},
+        resolved_reply,
+    )
+    food_log.food_event = event
+    await food_log.save()
+    if reply == "yes":
+        message = "Got it."
+    else:
+        message = "Okay, I won't store that allergen note."
+    return {
+        "transcription": raw_input,
+        "allergen_readback": event.get("allergen_readback"),
+        "message": message,
+        "spoken_message": message,
+        "id": str(food_log.id),
+    }
 
 
 @router.post("/food/parse")
@@ -329,8 +454,22 @@ async def log_food(request: FoodLogRequest):
             confidence="high",
         )
         await food_log.insert()
+        verbosity, safety = await _profile_settings(request.user_id)
+        spoken = compose_response(
+            "log_confirmation",
+            {
+                "food": food_log.food_name,
+                "calories": food_log.calories,
+                "protein": food_log.protein,
+                "carbs": food_log.carbs,
+                "fat": food_log.fat,
+            },
+            verbosity_level=verbosity,
+            safety_mode_enabled=safety,
+        )
         return {
-            "message": "Food logged successfully",
+            "message": spoken,
+            "spoken_message": spoken,
             "id": str(food_log.id),
             "parsed": {
                 "food": food_log.food_name,
@@ -388,7 +527,7 @@ async def log_food(request: FoodLogRequest):
         }
 
     food_log = inserted[0]
-    response = _with_allergy_warning(build_response(food_log, parsed), warnings)
+    response = await _log_response(food_log, parsed, request.user_id, warnings)
     if len(inserted) > 1:
         response["ids"] = [str(item.id) for item in inserted]
     return response
@@ -450,6 +589,8 @@ async def log_food_voice(
         return await handle_edit_entry(
             user_id, raw_input, history=history, asr=transcript.asr
         )
+    if state == "allergen_readback":
+        return await _finish_allergen_readback(user_id, raw_input, history)
     if state == "list":
         spoken = spoken_candidates_from_history(history)
         command = resolve_confirmation_reply(raw_input, spoken) if spoken else parse_clarification_command(raw_input)
@@ -496,6 +637,10 @@ async def log_food_voice(
     if (parsed.get("confirmation") or {}).get("action") == "ASK":
         return _ask_payload(parsed, transcription=raw_input)
 
+    if needs_allergen_readback(parsed, raw_input, "voice"):
+        claims = explicit_allergen_declarations(raw_input)
+        parsed = defer_allergen_fields(parsed, claims[0])
+
     user_prefs = await _load_dietary_preferences(user_id)
     try:
         warnings = _apply_allergy_gate(parsed, user_prefs)
@@ -509,9 +654,25 @@ async def log_food_voice(
 
     food_log = build_food_log(user_id, raw_input, parsed)
     await food_log.insert()
-    return _with_allergy_warning(
-        build_response(food_log, parsed, transcription=raw_input), warnings
+    extra = None
+    readback = None
+    if (parsed.get("allergen_readback") or {}).get("status") == "pending":
+        readback = allergen_readback_payload(parsed, raw_input, str(food_log.id))
+        extra = compose_response(
+            "allergen_readback",
+            {"message": readback["message"]},
+        )
+    response = await _log_response(
+        food_log,
+        parsed,
+        user_id,
+        warnings,
+        transcription=raw_input,
+        extra_spoken=extra,
     )
+    if readback:
+        response["allergen_readback"] = readback
+    return response
 
 
 @router.post("/food/tts")
@@ -543,13 +704,35 @@ async def get_daily_summary(user_id: str):
             if val is None:
                 continue
             nutrients[key] = nutrients.get(key, 0.0) + float(val)
+    calories = sum(log.calories or 0 for log in logs)
+    protein = sum(log.protein or 0 for log in logs)
+    carbs = sum(log.carbs or 0 for log in logs)
+    fat = sum(log.fat or 0 for log in logs)
+    profile = await UserProfile.find_one(UserProfile.user_id == user_id)
+    verbosity, safety = settings_from_profile(profile)
+    spoken = compose_response(
+        "daily_summary",
+        {
+            "calories": calories,
+            "protein": protein,
+            "carbs": carbs,
+            "fat": fat,
+            "entry_count": len(logs),
+            "calorie_goal": getattr(profile, "calorie_goal", 2000) if profile else 2000,
+        },
+        verbosity_level=verbosity,
+        safety_mode_enabled=safety,
+    )
     return {
-        "calories": sum(log.calories or 0 for log in logs),
-        "protein": sum(log.protein or 0 for log in logs),
-        "carbs": sum(log.carbs or 0 for log in logs),
-        "fat": sum(log.fat or 0 for log in logs),
+        "calories": calories,
+        "protein": protein,
+        "carbs": carbs,
+        "fat": fat,
         "nutrients": {k: round(v, 2) for k, v in nutrients.items()},
         "entry_count": len(logs),
+        "spoken_message": spoken,
+        "safety_mode_enabled": safety,
+        "verbosity_level": verbosity,
     }
 
 
@@ -615,7 +798,7 @@ async def update_food_log(log_id: str, request: FoodLogRequest):
         food_name=request.food_name,
     )
 
-    response = _with_allergy_warning(build_response(food_log, parsed), warnings)
+    response = await _log_response(food_log, parsed, request.user_id, warnings)
     after_event = (
         food_log.food_event if isinstance(food_log.food_event, dict) else parsed
     )

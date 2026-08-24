@@ -151,6 +151,9 @@ class UserProfile(Document):
     # Spec 1 reserved / v1 fields
     subscription_tier: Optional[str] = None  # unused until billing; a11y never gated on this
     wake_word_enabled: bool = False  # default OFF; opt-in with privacy disclaimer
+    # Spec 3 — two separate settings (length vs content). Not paywalled (D5).
+    verbosity_level: Literal["quick", "standard", "careful"] = "standard"
+    safety_mode_enabled: bool = False  # default OFF; opt-in blind logging
     nutrient_display_preferences: List[str] = Field(default_factory=list)
     contribution_consent: bool = False  # consumption data is never shared regardless
     timezone: str = "UTC"

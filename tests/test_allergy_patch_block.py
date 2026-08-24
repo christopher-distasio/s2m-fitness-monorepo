@@ -170,7 +170,7 @@ async def test_patch_allows_moderate_allergen_with_warning():
         request = FoodLogRequest(user_id="u1", raw_input="yogurt")
         response = await update_food_log(str(existing.id), request)
 
-        assert response["message"] == "Food logged successfully"
+        assert "Logged" in response["message"]
         assert "allergy_warning" in response
         assert any("milk" in w for w in response["allergy_warning"])
         existing.save.assert_awaited()
