@@ -332,6 +332,8 @@ def clarification_state(history: list[dict]) -> str | None:
             return "allergen_readback"
         if confirmation.get("pending_kind") == "edit_entry":
             return "edit_entry"
+        if (data.get("recapture") or {}).get("pending"):
+            return "recapture"
         if confirmation.get("action") == "ASK":
             return "list"
         if status == "needs_brand_choice":

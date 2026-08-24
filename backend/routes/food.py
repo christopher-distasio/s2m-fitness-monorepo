@@ -41,6 +41,15 @@ from backend.services.allergen_readback import (
     needs_allergen_readback,
 )
 from backend.services.user_logs import latest_log_for_user
+from backend.services.recapture import (
+    MODALITY_SWITCH_PROMPT,
+    is_type_instead_reply,
+    merge_recapture_text,
+    next_recapture_state,
+    recapture_from_history,
+    recapture_payload,
+    should_enter_recapture,
+)
 from fastapi.responses import JSONResponse, Response
 import json
 
@@ -591,6 +600,18 @@ async def log_food_voice(
         )
     if state == "allergen_readback":
         return await _finish_allergen_readback(user_id, raw_input, history)
+    if state == "recapture":
+        continued = await _continue_recapture(
+            user_id, raw_input, history, transcript.asr
+        )
+        if continued.get("recapture"):
+            return continued
+        return await _voice_commit_or_ask(
+            continued["parsed"],
+            continued["raw_input"],
+            user_id,
+            asr=transcript.asr,
+        )
     if state == "list":
         spoken = spoken_candidates_from_history(history)
         command = resolve_confirmation_reply(raw_input, spoken) if spoken else parse_clarification_command(raw_input)
@@ -600,6 +621,17 @@ async def log_food_voice(
             "transcription": raw_input,
             "clarification": {"type": "unrecognized"},
         }
+
+    if not (raw_input or "").strip():
+        state_r = next_recapture_state(
+            None,
+            parsed={},
+            transcript="",
+            asr=transcript.asr,
+            input_modality="voice",
+            failed=False,
+        )
+        return recapture_payload(state_r, "")
 
     dispatched = await dispatch_voice_utterance(
         raw_input,
@@ -619,9 +651,85 @@ async def log_food_voice(
         activation="push_to_talk",
         asr=transcript.asr,
     )
+    if should_enter_recapture(parsed, raw_input, transcript.asr, "voice"):
+        state_r = next_recapture_state(
+            None,
+            parsed=parsed,
+            transcript=raw_input,
+            asr=transcript.asr,
+            input_modality="voice",
+            failed=False,
+        )
+        return recapture_payload(state_r, raw_input)
+    return await _voice_commit_or_ask(
+        parsed, raw_input, user_id, asr=transcript.asr
+    )
+
+
+async def _continue_recapture(
+    user_id: str,
+    raw_input: str,
+    history: list | None,
+    asr: float | None,
+) -> dict:
+    pending = recapture_from_history(history) or {}
+    if is_type_instead_reply(raw_input):
+        state = dict(pending)
+        state["pending"] = True
+        state["modality_switch"] = True
+        spoken = compose_response(
+            "recapture", {"message": MODALITY_SWITCH_PROMPT}
+        )
+        state["message"] = spoken
+        state["prompt"] = spoken
+        state["kind"] = "modality_switch"
+        return recapture_payload(state, raw_input)
+
+    merged = merge_recapture_text(pending.get("captured"), raw_input)
+    parsed = await _parse_log_utterance(
+        merged,
+        history,
+        user_id=user_id,
+        input_modality="voice",
+        activation="push_to_talk",
+        asr=asr,
+    )
+    parsed = dict(parsed or {})
+    if pending.get("candidates") and not parsed.get("candidates"):
+        parsed["candidates"] = pending.get("candidates")
+    if should_enter_recapture(parsed, merged, asr, "voice"):
+        state = next_recapture_state(
+            pending,
+            parsed=parsed,
+            transcript=merged,
+            asr=asr,
+            input_modality="voice",
+            failed=True,
+        )
+        return recapture_payload(state, raw_input)
+    return {"parsed": parsed, "raw_input": merged}
+
+
+async def _voice_commit_or_ask(
+    parsed: dict,
+    raw_input: str,
+    user_id: str,
+    *,
+    asr: float | None = None,
+) -> dict:
     if parsed.get("error") == "nutrition_unavailable":
         return _nutrition_unavailable_response(parsed, transcription=raw_input)
     if parsed.get("error"):
+        if should_enter_recapture(parsed, raw_input, asr, "voice"):
+            state = next_recapture_state(
+                None,
+                parsed=parsed,
+                transcript=raw_input,
+                asr=asr,
+                input_modality="voice",
+                failed=False,
+            )
+            return recapture_payload(state, raw_input)
         return {
             "error": parsed.get("error", "unparseable"),
             "raw": parsed.get("raw", raw_input),
@@ -629,6 +737,16 @@ async def log_food_voice(
         }
 
     if _is_unresolved(parsed):
+        if should_enter_recapture(parsed, raw_input, asr, "voice"):
+            state = next_recapture_state(
+                None,
+                parsed=parsed,
+                transcript=raw_input,
+                asr=asr,
+                input_modality="voice",
+                failed=False,
+            )
+            return recapture_payload(state, raw_input)
         return {"transcription": raw_input, "parsed": parsed, "logged": False}
 
     if _is_brand_choice(parsed):

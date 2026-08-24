@@ -106,7 +106,7 @@ If both are false → **idle** (no mic).
 | Voice log, intent reply only (`message`, no `parsed`) | `onstop` | e.g. calories today | **No** |
 | 8s silence, tiny blob | Timer → `onstop` | “I didn't hear anything…” | Only if clarify or post-login session active |
 | 8s silence, real audio | Timer → `onstop` | Normal API path | Per API outcome above |
-| Network failure on voice API | `catch` in `onstop` | “Error processing audio…” | Only if `wasAwaitingClarification` |
+| Network failure on voice API | `catch` in `onstop` | “What did you eat?” (recapture, not a dead-end error) | Only if `wasAwaitingClarification` |
 | `submitText`, high confidence | `confirmLog` | Log confirmation | **No** |
 | `submitText`, needs clarify | set `pendingParse`, speak | Clarify question | Yes |
 | `submitText`, parse error | speak error | **No** |

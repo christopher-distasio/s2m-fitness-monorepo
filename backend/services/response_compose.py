@@ -22,6 +22,7 @@ ResponseType = Literal[
     "spec2_ask",
     "allergen_readback",
     "restriction_verdict",
+    "recapture",
 ]
 
 # Routine copy only. Safety-relevant types are intentionally absent.
@@ -65,6 +66,7 @@ PROTECTED_RESPONSE_TYPES = frozenset(
         "spec2_ask",
         "allergen_readback",
         "restriction_verdict",
+        "recapture",
     }
 )
 
