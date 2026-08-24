@@ -373,6 +373,10 @@ scripts/sr_legacy_clean.json
 scripts/sr_legacy_full_clean.json
 scripts/branded_clean_test.json
 
+### Playwright (frontend already ignores its own /test-results/; this covers a repo-root run) ###
+test-results/
+playwright-report/
+
 ### Large diagnostic dumps (keep locally, don't commit) ###
 diagnostic/pinecone_export.json
 
