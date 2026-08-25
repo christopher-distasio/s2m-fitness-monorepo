@@ -66,7 +66,7 @@ export function ResponseSettingsPanel({
           Safety Mode
         </legend>
         <p className="text-xs text-white mb-3">
-          Hides calorie remaining, energy-budget, and offset-exercise language.
+          Hides calories remaining, energy-budget, and offset-exercise language.
           Logging continues. Allergen and nutrient-ceiling reports are
           unchanged.
         </p>
@@ -97,7 +97,7 @@ export function ResponseSettingsPanel({
         </div>
         <p className="mt-2 text-xs text-white" aria-live="polite">
           {safetyModeEnabled
-            ? "On — calorie remaining and energy-budget language is hidden."
+            ? "On — calories remaining and energy-budget language is hidden."
             : "Off — calorie totals and remaining language are shown."}
         </p>
       </fieldset>

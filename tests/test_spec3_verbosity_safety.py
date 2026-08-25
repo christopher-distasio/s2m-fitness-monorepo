@@ -18,6 +18,7 @@ from backend.services.allergen_readback import (
 from backend.services.confirmation import evaluate_confirmation
 from backend.services.response_compose import (
     PROTECTED_RESPONSE_TYPES,
+    SAFETY_MODE_TEMPLATES,
     VERBOSITY_TABLE,
     compose_response,
     contains_calorie_metric,
@@ -213,3 +214,22 @@ def test_verbosity_changes_routine_length_but_not_protected_types():
     assert len(careful) > len(quick)
     assert "calories" not in quick.lower()
     assert "calories" in careful.lower()
+
+
+def test_compose_templates_do_not_use_singular_calorie_remaining():
+    blob = f"{VERBOSITY_TABLE}{SAFETY_MODE_TEMPLATES}"
+    assert "calorie remaining" not in blob.lower()
+    careful_summary = compose_response(
+        "daily_summary",
+        {
+            "calories": 400,
+            "protein": 20,
+            "carbs": 30,
+            "fat": 10,
+            "calorie_goal": 2000,
+            "entry_count": 2,
+        },
+        verbosity_level="careful",
+    )
+    assert "calories left" in careful_summary.lower()
+    assert "calorie remaining" not in careful_summary.lower()
