@@ -385,3 +385,38 @@ test.describe("response settings panel is labeled and accessible", () => {
     expect(violations, formatAxeViolations(violations)).toEqual([]);
   });
 });
+
+test.describe("recapture panel is labeled and accessible", () => {
+  test.beforeEach(async ({ page }) => {
+    const email = process.env.TEST_USER_EMAIL;
+    const password = process.env.TEST_USER_PASSWORD;
+    if (!email || !password) {
+      throw new Error(
+        "Missing TEST_USER_EMAIL or TEST_USER_PASSWORD. Create frontend/.env.test with those keys (gitignored).",
+      );
+    }
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: /^Sign in$/i }).click();
+    await expect(page).toHaveURL("/");
+  });
+
+  test("recapture panel is labeled and accessible", async ({ page }) => {
+    await expect(page.locator("#main-content")).toBeVisible({ timeout: 15000 });
+    await page.goto("/?e2e_recapture=1");
+    await expect(page.locator("#main-content")).toBeVisible({ timeout: 15000 });
+    const panel = page.getByRole("region", { name: /fill that in/i });
+    await expect(panel).toBeVisible();
+    await expect(panel.getByText(/chicken sandwich/i).first()).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /type instead/i }),
+    ).toBeVisible();
+
+    const { violations } = await new AxeBuilder({ page })
+      .include("#recapture-panel")
+      .analyze();
+    expect(violations, formatAxeViolations(violations)).toEqual([]);
+  });
+});

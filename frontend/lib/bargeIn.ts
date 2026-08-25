@@ -6,6 +6,7 @@
  * clips ("two" → garbage → "didn't catch a number"). Capturing PCM from the
  * barge moment and encoding WAV is much more reliable.
  */
+import { ENDPOINTING_SILENCE_TIMEOUT_MS } from "./endpointing";
 import { speak, stopSpeaking, isSpeaking } from "./speak";
 
 export type SpeakOptions = {
@@ -20,7 +21,7 @@ export type BargeInResult =
 
 const IGNORE_MS = 1000;
 const SPEECH_HOLD_MS = 120;
-const SILENCE_END_MS = 1000;
+const SILENCE_END_MS = ENDPOINTING_SILENCE_TIMEOUT_MS;
 const MAX_AFTER_BARGE_MS = 5000;
 const RMS_FLOOR = 0.03;
 const BARGE_OVER_BASELINE = 2.4;

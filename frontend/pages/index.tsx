@@ -14,7 +14,9 @@ import {
 } from "../lib/dietaryPreferences";
 import { DietaryPreferencesPanel } from "../components/DietaryPreferencesPanel";
 import { EditLogForm } from "../components/EditLogForm";
+import { RecapturePanel } from "../components/RecapturePanel";
 import { ResponseSettingsPanel } from "../components/ResponseSettingsPanel";
+import { conversationHistoryAfterDismissRecapture } from "../lib/recaptureSession";
 import {
   logConfirmationSpeech,
   type VerbosityLevel,
@@ -150,6 +152,8 @@ const HOW_IT_WORKS_TEXT =
 
 const RECORDING_TIMEOUT_MS = 8000;
 const MIN_RECORDING_BYTES = 8000;
+// RECORDING_TIMEOUT_MS is a max clip length, not silence endpointing.
+// End-of-utterance silence lives in lib/endpointing.ts (barge-in VAD).
 // After any 8s mic silence (clarification, greet, manual speak), ask this —
 // yes → listen another 8s; no → stop. Not the old "say that again / be more specific".
 const MORE_TIME_MESSAGE = "Do you need more time?";
@@ -734,6 +738,12 @@ export default function Home() {
     raw_input: string;
     uid: string;
   } | null>(null);
+  const [pendingRecapture, setPendingRecapture] = useState<{
+    prompt: string;
+    capturedFood?: string;
+    modalitySwitch?: boolean;
+    uid: string;
+  } | null>(null);
   const [selectedVoice, setSelectedVoice] = useState("alloy");
   const [menuOpen, setMenuOpen] = useState(false);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
@@ -747,6 +757,7 @@ export default function Home() {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const hasOnOpenSpokenRef = useRef(false);
   const pendingParseRef = useRef(pendingParse);
+  const pendingRecaptureRef = useRef(pendingRecapture);
   const postLoginVoiceSessionRef = useRef(false);
   const recordingTimedOutRef = useRef(false);
   const recordingTimeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -1010,7 +1021,8 @@ export default function Home() {
     if (uiChoiceInFlightRef.current) {
       return;
     }
-    const awaitingClarification = pendingParseRef.current !== null;
+    const awaitingClarification =
+      pendingParseRef.current !== null || pendingRecaptureRef.current !== null;
     // While a Less Sure card is up, always listen for "log it" / "options" /
     // a number. Do not let a leftover suppress flag skip that wait.
     if (awaitingClarification) {
@@ -1167,6 +1179,24 @@ export default function Home() {
   useEffect(() => {
     pendingParseRef.current = pendingParse;
   }, [pendingParse]);
+
+  useEffect(() => {
+    pendingRecaptureRef.current = pendingRecapture;
+  }, [pendingRecapture]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.hostname !== "localhost") return;
+    if (new URLSearchParams(window.location.search).get("e2e_recapture") !== "1") {
+      return;
+    }
+    setPendingRecapture({
+      prompt: "I caught 'chicken sandwich' but missed what came after.",
+      capturedFood: "chicken sandwich",
+      modalitySwitch: true,
+      uid: userId || "e2e",
+    });
+  }, [userId]);
 
   useEffect(() => {
     conversationHistoryRef.current = conversationHistory;
@@ -1450,7 +1480,8 @@ export default function Home() {
     }
     if (
       shouldAutoListen ||
-      (pendingParseRef.current != null && !uiChoiceInFlightRef.current)
+      (pendingParseRef.current != null && !uiChoiceInFlightRef.current) ||
+      (pendingRecaptureRef.current != null && !uiChoiceInFlightRef.current)
     ) {
       await maybeAutoListen();
     }
@@ -1563,6 +1594,16 @@ export default function Home() {
           claim?: string;
           log_id?: string;
           message?: string;
+        };
+        recapture?: {
+          pending?: boolean;
+          prompt?: string;
+          message?: string;
+          captured?: { food?: string };
+          modality_switch?: boolean;
+          failures?: number;
+          kind?: string;
+          input_modality?: string;
         };
         clarification?: {
           type:
@@ -1798,6 +1839,36 @@ export default function Home() {
           return;
         }
 
+        if (data.recapture?.pending) {
+          const prompt =
+            data.spoken_message ||
+            data.recapture.message ||
+            data.recapture.prompt ||
+            "What did you eat?";
+          setPendingRecapture({
+            prompt,
+            capturedFood: data.recapture.captured?.food,
+            modalitySwitch: Boolean(data.recapture.modality_switch),
+            uid,
+          });
+          setConversationHistoryBoth((prev) => [
+            ...prev,
+            { role: "user", content: data.transcription ?? "" },
+            {
+              role: "assistant",
+              content: JSON.stringify({ recapture: data.recapture }),
+            },
+          ]);
+          setStatus(prompt);
+          const barged = await speakClarificationWithBargeIn(prompt, uid);
+          if (uiChoiceInFlightRef.current) {
+            shouldAutoListen = false;
+          } else if (!barged) {
+            shouldAutoListen = true;
+          }
+          return;
+        }
+
         if (data.message && !data.parsed) {
           setStatus(data.message);
           await speak(data.message);
@@ -1932,6 +2003,8 @@ export default function Home() {
           await fetchSummary(uid);
           setPendingParse(null);
           pendingParseRef.current = null;
+          setPendingRecapture(null);
+          pendingRecaptureRef.current = null;
           setConversationHistoryBoth([]);
           clearSpokenClarifyOptions();
           endPostLoginVoiceSession();
@@ -1970,7 +2043,7 @@ export default function Home() {
         body: voiceResponseBody,
         error: err,
       });
-      const errMsg = "Error processing audio. Please try again.";
+      const errMsg = "What did you eat?";
       setStatus(errMsg);
       await speak(errMsg);
       if (wasAwaitingClarification) shouldAutoListen = true;
@@ -1979,7 +2052,8 @@ export default function Home() {
     }
     if (
       shouldAutoListen ||
-      (pendingParseRef.current != null && !uiChoiceInFlightRef.current)
+      (pendingParseRef.current != null && !uiChoiceInFlightRef.current) ||
+      (pendingRecaptureRef.current != null && !uiChoiceInFlightRef.current)
     ) {
       await maybeAutoListen();
     }
@@ -2417,8 +2491,10 @@ export default function Home() {
     abortVoiceForUiChoice();
     setPendingParse(null);
     pendingParseRef.current = null;
+    setPendingRecapture(null);
+    pendingRecaptureRef.current = null;
     setStatus("");
-    setConversationHistoryBoth([]);
+    setConversationHistoryBoth(conversationHistoryAfterDismissRecapture());
     clearSpokenClarifyOptions();
     setClarifyExpandedBoth(false);
   }
@@ -2427,6 +2503,26 @@ export default function Home() {
   // (candidates/portions or the brand question) stays on screen and manageable
   // rather than vanishing with an ephemeral status line. Returns null when
   // there's nothing pending. One definition = no drift between the two modes.
+  function renderRecapturePanel() {
+    if (!pendingRecapture) return null;
+    return (
+      <div className="mt-6 w-full max-w-md">
+        <RecapturePanel
+          prompt={pendingRecapture.prompt}
+          capturedFood={pendingRecapture.capturedFood}
+          modalitySwitch={pendingRecapture.modalitySwitch}
+          onTypeInstead={() => {
+            const food = pendingRecapture.capturedFood || "";
+            setTextInput((prev) => prev || food);
+            dismissPending();
+            textInputRef.current?.focus();
+          }}
+          onDismiss={dismissPending}
+        />
+      </div>
+    );
+  }
+
   function renderClarificationCard() {
     if (!pendingParse) return null;
     const parsed = pendingParse.parsed;
@@ -3230,6 +3326,7 @@ export default function Home() {
                   </p>
                 </div>
               )}
+              {renderRecapturePanel()}
               {/* Same persistent clarification card as text mode */}
               {pendingParse && (
                 <div className="mt-6 w-full max-w-md">
@@ -3765,6 +3862,7 @@ export default function Home() {
               </section>
 
               {/* Pending parse / clarification (same card also shown in speak mode) */}
+              {renderRecapturePanel()}
               {renderClarificationCard()}
 
               {/* Status live region */}
