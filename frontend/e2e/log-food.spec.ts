@@ -334,21 +334,25 @@ test.describe("tap-to-edit form is labeled and accessible", () => {
 
 test.describe("response settings panel is labeled and accessible", () => {
   test.beforeEach(async ({ page }) => {
+    const profile = {
+      user_id: "e2e",
+      calorie_goal: 2000,
+      verbosity_level: "standard",
+      safety_mode_enabled: false,
+    };
     await page.route("**/user/*/profile", async (route) => {
       const method = route.request().method();
       if (method !== "GET" && method !== "PATCH") {
         await route.continue();
         return;
       }
+      if (method === "PATCH") {
+        Object.assign(profile, route.request().postDataJSON() ?? {});
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({
-          user_id: "e2e",
-          calorie_goal: 2000,
-          verbosity_level: "standard",
-          safety_mode_enabled: false,
-        }),
+        body: JSON.stringify(profile),
       });
     });
 
@@ -378,6 +382,11 @@ test.describe("response settings panel is labeled and accessible", () => {
     await expect(
       page.getByRole("switch", { name: /safety mode/i }),
     ).toBeVisible();
+
+    await page.getByRole("radio", { name: /quick/i }).click();
+    await expect(page.getByRole("radio", { name: /quick/i })).toBeChecked();
+    await expect(page.getByRole("radio", { name: /standard/i })).not.toBeChecked();
+    await expect(page.getByRole("radio", { name: /careful/i })).not.toBeChecked();
 
     const { violations } = await new AxeBuilder({ page })
       .include("#response-settings")

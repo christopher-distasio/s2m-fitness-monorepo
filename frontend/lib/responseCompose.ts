@@ -5,8 +5,30 @@
  */
 export type VerbosityLevel = "quick" | "standard" | "careful";
 
+export function isVerbosityLevel(value: unknown): value is VerbosityLevel {
+  return value === "quick" || value === "standard" || value === "careful";
+}
+
+/** Keep local verbosity/Safety Mode while a save is in flight. */
+export function applyFetchedResponseSettings(
+  fetched: {
+    verbosity_level?: unknown;
+    safety_mode_enabled?: unknown;
+  },
+  local: { verbosityLevel: VerbosityLevel; safetyModeEnabled: boolean },
+  dirty: boolean,
+): { verbosityLevel: VerbosityLevel; safetyModeEnabled: boolean } {
+  if (dirty) return local;
+  return {
+    verbosityLevel: isVerbosityLevel(fetched.verbosity_level)
+      ? fetched.verbosity_level
+      : local.verbosityLevel,
+    safetyModeEnabled: Boolean(fetched.safety_mode_enabled),
+  };
+}
+
 const ENERGY_RE =
-  /calories?\s+left|remaining\s+calories?|calorie\s+budget|energy\s+budget|calorie\s+goal|daily\s+goal|burn(?:ing)?\s+(?:off|it)|work\s+off|\boffset\b/i;
+  /calories?\s+left|remaining\s+calories?|calories?\s+remaining|calorie\s+budget|energy\s+budget|calorie\s+goal|daily\s+goal|burn(?:ing)?\s+(?:off|it)|work\s+off|\boffset\b/i;
 
 export function containsEnergyLanguage(text: string): boolean {
   return ENERGY_RE.test(text);

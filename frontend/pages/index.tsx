@@ -7,6 +7,7 @@ import { speak as _speak, stopSpeaking, onSpeakingChange, isSpeaking } from "../
 import { speakWithBargeIn } from "../lib/bargeIn";
 import { formatBrandedName } from "../lib/foodName";
 import {
+  applyFetchedDietaryPreferences,
   defaultDietaryPreferences,
   dietaryPreferencesPayload,
   normalizeDietaryPreferences,
@@ -18,6 +19,7 @@ import { RecapturePanel } from "../components/RecapturePanel";
 import { ResponseSettingsPanel } from "../components/ResponseSettingsPanel";
 import { conversationHistoryAfterDismissRecapture } from "../lib/recaptureSession";
 import {
+  applyFetchedResponseSettings,
   logConfirmationSpeech,
   type VerbosityLevel,
 } from "../lib/responseCompose";
@@ -726,6 +728,18 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [savingDietaryPrefs, setSavingDietaryPrefs] = useState(false);
   const [dietaryPrefsStatus, setDietaryPrefsStatus] = useState("");
+  const dietaryPrefsDirtyRef = useRef(false);
+  const responseSettingsDirtyRef = useRef(false);
+  const responseSettingsSavesRef = useRef(0);
+  const responseSettingsEpochRef = useRef(0);
+  const summaryRef = useRef(summary);
+  summaryRef.current = summary;
+  const calorieGoalRef = useRef(calorieGoal);
+  calorieGoalRef.current = calorieGoal;
+  const verbosityLevelRef = useRef(verbosityLevel);
+  verbosityLevelRef.current = verbosityLevel;
+  const safetyModeEnabledRef = useRef(safetyModeEnabled);
+  safetyModeEnabledRef.current = safetyModeEnabled;
   const settingsDetailsRef = useRef<HTMLDetailsElement>(null);
   const dietaryHeadingRef = useRef<HTMLHeadingElement>(null);
   const editInputRef = useRef<HTMLInputElement | null>(null);
@@ -882,6 +896,7 @@ export default function Home() {
   );
 
   const fetchProfile = useCallback(async (uid?: string) => {
+    const epochAtStart = responseSettingsEpochRef.current;
     const id =
       uid ??
       (
@@ -891,14 +906,17 @@ export default function Home() {
     const res = await fetch(`${API_BASE}/user/${id}/profile`);
     const data = await res.json();
     setCalorieGoal(data.calorie_goal);
-    if (
-      data.verbosity_level === "quick" ||
-      data.verbosity_level === "standard" ||
-      data.verbosity_level === "careful"
-    ) {
-      setVerbosityLevel(data.verbosity_level);
-    }
-    setSafetyModeEnabled(Boolean(data.safety_mode_enabled));
+    const stale = epochAtStart !== responseSettingsEpochRef.current;
+    const next = applyFetchedResponseSettings(
+      data,
+      {
+        verbosityLevel: verbosityLevelRef.current,
+        safetyModeEnabled: safetyModeEnabledRef.current,
+      },
+      responseSettingsDirtyRef.current || stale,
+    );
+    setVerbosityLevel(next.verbosityLevel);
+    setSafetyModeEnabled(next.safetyModeEnabled);
     return data as { calorie_goal: number };
   }, []);
 
@@ -913,7 +931,13 @@ export default function Home() {
       const res = await fetch(`${API_BASE}/user/${id}/dietary-preferences`);
       if (!res.ok) return;
       const data = await res.json();
-      setDietaryPrefs(normalizeDietaryPreferences(data));
+      setDietaryPrefs((local) =>
+        applyFetchedDietaryPreferences(
+          data,
+          local,
+          dietaryPrefsDirtyRef.current,
+        ),
+      );
     } catch {
       // Keep defaults if preferences endpoint is unreachable.
     }
@@ -1049,9 +1073,9 @@ export default function Home() {
       if (!userId) return;
       markVoiceSetupStarted();
       const summaryData =
-        (await fetchSummary(userId)) ?? summary;
+        (await fetchSummary(userId)) ?? summaryRef.current;
       const profileData = await fetchProfile(userId);
-      const goal = profileData?.calorie_goal ?? calorieGoal;
+      const goal = profileData?.calorie_goal ?? calorieGoalRef.current;
 
       if (options?.isRecovery) {
         await speak(CONTINUE_VOICE_MESSAGE);
@@ -1074,8 +1098,6 @@ export default function Home() {
     },
     [
       userId,
-      summary,
-      calorieGoal,
       greetOnOpen,
       summaryOnOpen,
       autoListen,
@@ -1128,6 +1150,10 @@ export default function Home() {
 
   useEffect(() => {
     if (!userId || !mounted) return;
+    // After the first open-load, do not refetch profile/prefs on every
+    // summary or callback identity change — that was overwriting in-progress
+    // settings edits (allergy toggles, verbosity radios).
+    if (hasOnOpenSpokenRef.current) return;
     let cancelled = false;
     (async () => {
       await fetchLogs(userId);
@@ -1253,7 +1279,13 @@ export default function Home() {
   }, [router]);
 
   useEffect(() => {
-    if (!userId) hasOnOpenSpokenRef.current = false;
+    if (!userId) {
+      hasOnOpenSpokenRef.current = false;
+      dietaryPrefsDirtyRef.current = false;
+      responseSettingsDirtyRef.current = false;
+      responseSettingsSavesRef.current = 0;
+      responseSettingsEpochRef.current = 0;
+    }
   }, [userId]);
 
   useEffect(() => {
@@ -2215,8 +2247,17 @@ export default function Home() {
       setResponseSettingsStatus("Sign in to save these settings");
       return;
     }
+    const prevVerbosity = verbosityLevel;
+    const prevSafety = safetyModeEnabled;
     const verbosity = next?.verbosity_level ?? verbosityLevel;
     const safety = next?.safety_mode_enabled ?? safetyModeEnabled;
+    // Optimistic: radios are controlled, so local state must change on click
+    // or the previously selected radio stays checked alongside the native one.
+    responseSettingsDirtyRef.current = true;
+    responseSettingsSavesRef.current += 1;
+    responseSettingsEpochRef.current += 1;
+    setVerbosityLevel(verbosity);
+    setSafetyModeEnabled(safety);
     setResponseSettingsStatus("");
     const res = await fetch(`${API_BASE}/user/${uid}/profile`, {
       method: "PATCH",
@@ -2226,12 +2267,19 @@ export default function Home() {
         safety_mode_enabled: safety,
       }),
     });
+    responseSettingsSavesRef.current -= 1;
     if (!res.ok) {
+      setVerbosityLevel((cur) => (cur === verbosity ? prevVerbosity : cur));
+      setSafetyModeEnabled((cur) => (cur === safety ? prevSafety : cur));
+      if (responseSettingsSavesRef.current === 0) {
+        responseSettingsDirtyRef.current = false;
+      }
       setResponseSettingsStatus("Could not save — try again");
       return;
     }
-    setVerbosityLevel(verbosity);
-    setSafetyModeEnabled(safety);
+    if (responseSettingsSavesRef.current === 0) {
+      responseSettingsDirtyRef.current = false;
+    }
     setResponseSettingsStatus("Saved");
     await fetchSummary(uid);
     await speak("Response settings saved");
@@ -2259,6 +2307,7 @@ export default function Home() {
         return;
       }
       const data = await res.json();
+      dietaryPrefsDirtyRef.current = false;
       setDietaryPrefs(normalizeDietaryPreferences(data));
       setDietaryPrefsStatus("Saved");
       speak("Dietary preferences saved");
@@ -3684,7 +3733,11 @@ export default function Home() {
                     </svg>
                     Settings
                   </summary>
-                  <div className="mt-3 flex flex-col gap-6 border-t border-white/20 pt-4">
+                  <div
+                    className="mt-3 flex flex-col gap-6 border-t border-white/20 pt-4"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <ResponseSettingsPanel
                       verbosityLevel={verbosityLevel}
                       safetyModeEnabled={safetyModeEnabled}
@@ -3729,7 +3782,10 @@ export default function Home() {
 
                     <DietaryPreferencesPanel
                       value={dietaryPrefs}
-                      onChange={setDietaryPrefs}
+                      onChange={(next) => {
+                        dietaryPrefsDirtyRef.current = true;
+                        setDietaryPrefs(next);
+                      }}
                       onSave={saveDietaryPrefs}
                       saving={savingDietaryPrefs}
                       statusMessage={dietaryPrefsStatus}

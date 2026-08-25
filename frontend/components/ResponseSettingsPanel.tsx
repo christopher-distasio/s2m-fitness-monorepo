@@ -38,26 +38,43 @@ export function ResponseSettingsPanel({
           How much the app says for routine logs and summaries. Safety
           questions and allergen read-backs are never shortened.
         </p>
-        <div className="flex flex-col gap-2">
-          {LEVELS.map((level) => (
-            <label
-              key={level.id}
-              className="flex items-start gap-2 text-sm text-white"
-            >
-              <input
-                type="radio"
-                name="verbosity-level"
-                value={level.id}
-                checked={verbosityLevel === level.id}
-                onChange={() => onVerbosityChange(level.id)}
-                className="mt-1"
-              />
-              <span>
-                <span className="font-medium">{level.label}</span>
-                <span className="block text-xs text-white">{level.hint}</span>
-              </span>
-            </label>
-          ))}
+        <div
+          className="flex flex-col gap-2"
+          role="radiogroup"
+          aria-label="Verbosity level"
+        >
+          {LEVELS.map((level) => {
+            const selected = verbosityLevel === level.id;
+            return (
+              <button
+                key={level.id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onVerbosityChange(level.id);
+                }}
+                className={`flex min-h-11 items-start rounded-lg border px-3 py-2 text-left text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-white ${
+                  selected
+                    ? "border-white bg-white text-blue-800"
+                    : "border-white/30 bg-white/10 text-white hover:bg-white/15"
+                }`}
+              >
+                <span>
+                  <span className="font-medium">{level.label}</span>
+                  <span
+                    className={`block text-xs ${
+                      selected ? "text-blue-800" : "text-white"
+                    }`}
+                  >
+                    {level.hint}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       </fieldset>
 
@@ -66,7 +83,7 @@ export function ResponseSettingsPanel({
           Safety Mode
         </legend>
         <p className="text-xs text-white mb-3">
-          Hides calorie remaining, energy-budget, and offset-exercise language.
+          Hides calories remaining, energy-budget, and offset-exercise language.
           Logging continues. Allergen and nutrient-ceiling reports are
           unchanged.
         </p>
@@ -97,7 +114,7 @@ export function ResponseSettingsPanel({
         </div>
         <p className="mt-2 text-xs text-white" aria-live="polite">
           {safetyModeEnabled
-            ? "On — calorie remaining and energy-budget language is hidden."
+            ? "On — calories remaining and energy-budget language is hidden."
             : "Off — calorie totals and remaining language are shown."}
         </p>
       </fieldset>

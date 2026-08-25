@@ -194,6 +194,19 @@ export function normalizeDietaryPreferences(
   };
 }
 
+/**
+ * Apply a GET snapshot without wiping in-progress edits.
+ * Spurious refetches (voice-setup effect, overlapping loads) must not
+ * clobber toggles the user has already flipped.
+ */
+export function applyFetchedDietaryPreferences(
+  raw: Partial<DietaryPreferences> | null | undefined,
+  local: DietaryPreferences,
+  dirty: boolean,
+): DietaryPreferences {
+  return dirty ? local : normalizeDietaryPreferences(raw);
+}
+
 /** Body for PUT — omit client-only noise; server sets updated_at. */
 export function dietaryPreferencesPayload(
   prefs: DietaryPreferences,

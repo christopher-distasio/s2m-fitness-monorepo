@@ -12,3 +12,8 @@ test("standard verbosity includes calories when safety mode is off", () => {
   expect(text).toContain("400");
   expect(text.toLowerCase()).toContain("calorie");
 });
+
+test("energy-language detector matches calories remaining phrasing", () => {
+  expect(containsEnergyLanguage("calories remaining")).toBe(true);
+  expect(containsEnergyLanguage("calorie remaining")).toBe(true);
+});
