@@ -24,3 +24,16 @@ test("recapture panel names the caught food and offers type-instead when asked",
   fireEvent.click(screen.getByRole("button", { name: /type instead/i }));
   expect(onTypeInstead).toHaveBeenCalled();
 });
+
+test("dismiss button calls onDismiss (dismissPending)", () => {
+  const onDismiss = jest.fn();
+  render(
+    <RecapturePanel
+      prompt="What did you eat?"
+      onTypeInstead={jest.fn()}
+      onDismiss={onDismiss}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /dismiss recapture/i }));
+  expect(onDismiss).toHaveBeenCalledTimes(1);
+});

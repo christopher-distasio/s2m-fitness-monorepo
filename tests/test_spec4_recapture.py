@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from backend.models.food_event import CONFIDENCE_FIELD_KEYS
 from backend.services.confidence import ASR_MEDIUM, compute_band
 from backend.services.confirmation import attach_confirmation, evaluate_confirmation
@@ -9,13 +14,13 @@ from backend.services.recapture import (
     BREAKER_VARIED_PROMPT,
     MODALITY_SWITCH_PROMPT,
     NOTHING_USABLE_PROMPT,
-    PARTIAL_PROMPT,
     RECAPTURE_FAILURES_BEFORE_BREAKER,
     food_identity_trusted,
     merge_recapture_text,
     next_recapture_state,
     recapture_from_history,
     recapture_prompt,
+    reset_recapture_state,
     should_enter_recapture,
     unparsed_tail,
 )
@@ -94,19 +99,97 @@ def test_typed_input_does_not_enter_recapture():
     assert not should_enter_recapture(parsed, "asdf", asr=-1.0, input_modality=None)
 
 
-def test_successful_recapture_merge_then_spec2_uses_real_bands():
+_GPT_PARSE_NO_BANDS = {
+    "food": "chicken sandwich",
+    "amount": 2,
+    "serving_size": "2",
+    "confidence": "high",
+    "alternatives": [],
+}
+
+
+@pytest.mark.asyncio
+async def test_merged_recapture_amount_band_comes_from_compute_band():
+    """Recaptured 'two' gets compute_band() through the real parse path.
+
+    Merge → _continue_recapture → _parse_log_utterance → parse_food_input →
+    field_confidence/compute_band → attach_confirmation. The GPT stub has no
+    confidence_detail. asr=-0.50 yields medium; a recapture high/low stamp fails.
+    """
+    from backend.routes.food import _continue_recapture, _parse_log_utterance
+
     merged = merge_recapture_text({"food": "chicken sandwich"}, "two")
     assert merged == "chicken sandwich two"
-    parsed = _parsed({"amount": "medium", "food": "high"}, food="chicken sandwich")
-    parsed["amount"] = 2
+    assert "confidence_detail" not in _GPT_PARSE_NO_BANDS
+    assert "band" not in _GPT_PARSE_NO_BANDS
+
+    asr = -0.50
+    expected_band = compute_band(asr=asr, semantic=None)
+    assert expected_band == "medium"
+
+    history = [
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "recapture": {
+                        "pending": True,
+                        "captured": {"food": "chicken sandwich"},
+                        "failures": 0,
+                        "missing_field": "trailing",
+                    }
+                }
+            ),
+        }
+    ]
+    seen_user_text: dict[str, str] = {}
+
+    async def fake_create(**kwargs):
+        seen_user_text["content"] = kwargs["messages"][-1]["content"]
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps(_GPT_PARSE_NO_BANDS)
+        mock_response.choices[0].logprobs = None
+        return mock_response
+
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=fake_create,
+    ), patch(
+        "backend.services.food_parser.lookup_food",
+        new_callable=AsyncMock,
+        return_value={
+            "calories": 420,
+            "carbs": 40,
+            "protein": 30,
+            "fat": 12,
+        },
+    ), patch(
+        "backend.services.food_parser._fetch_dietary_preferences",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        continued = await _continue_recapture("user-1", "two", history, asr)
+        first_pass = await _parse_log_utterance(
+            merged,
+            [],
+            user_id="user-1",
+            input_modality="voice",
+            activation="push_to_talk",
+            asr=asr,
+        )
+
+    assert continued.get("raw_input") == merged
+    assert not continued.get("recapture")
+    parsed = continued["parsed"]
+    assert seen_user_text["content"] == merged
+    amount = parsed["confidence_detail"]["amount"]
+    assert amount["band"] == expected_band
+    assert amount["asr"] == asr
+    assert amount["band"] == first_pass["confidence_detail"]["amount"]["band"]
     attach_confirmation(parsed, merged)
-    amount_band = parsed["confidence_detail"]["amount"]["band"]
-    assert amount_band in {"high", "medium", "low"}
-    assert amount_band == "medium"
+    assert parsed["confidence_detail"]["amount"]["band"] == expected_band
     decision = evaluate_confirmation(parsed, merged)
     assert decision.action in {"SILENT", "CONFIRM", "ASK"}
-    band = compute_band(asr=-0.4, semantic=-0.3)
-    assert band in {"high", "medium", "low"}
 
 
 def test_low_asr_food_identity_is_not_trusted():
@@ -203,6 +286,41 @@ def test_failure_counter_resets_after_success():
     )
     assert fresh["failures"] == 0
     assert fresh["prompt"] == NOTHING_USABLE_PROMPT
+
+
+def test_failure_counter_resets_on_dismiss():
+    """dismissPending() clears conversation history; the next attempt starts at 0."""
+    pending = recapture_prompt(
+        parsed={"error": "unparseable"},
+        transcript="xx",
+        asr=-1.0,
+        failures=2,
+        input_modality="voice",
+    )
+    assert pending["failures"] == 2
+    history = [
+        {
+            "role": "assistant",
+            "content": json.dumps({"recapture": pending}),
+        }
+    ]
+    assert recapture_from_history(history)["failures"] == 2
+
+    dismissed_history: list = []
+    assert recapture_from_history(dismissed_history) is None
+    assert reset_recapture_state()["failures"] == 0
+
+    later = next_recapture_state(
+        recapture_from_history(dismissed_history),
+        parsed={"error": "unparseable"},
+        transcript="yy",
+        asr=-1.0,
+        input_modality="voice",
+        failed=True,
+    )
+    assert later["failures"] == 1
+    assert later["prompt"] == NOTHING_USABLE_PROMPT
+    assert later["prompt"] != pending["prompt"]
 
 
 def test_breaker_uses_contrastive_helper_not_a_copy():

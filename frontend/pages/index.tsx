@@ -16,6 +16,7 @@ import { DietaryPreferencesPanel } from "../components/DietaryPreferencesPanel";
 import { EditLogForm } from "../components/EditLogForm";
 import { RecapturePanel } from "../components/RecapturePanel";
 import { ResponseSettingsPanel } from "../components/ResponseSettingsPanel";
+import { conversationHistoryAfterDismissRecapture } from "../lib/recaptureSession";
 import {
   logConfirmationSpeech,
   type VerbosityLevel,
@@ -2493,7 +2494,7 @@ export default function Home() {
     setPendingRecapture(null);
     pendingRecaptureRef.current = null;
     setStatus("");
-    setConversationHistoryBoth([]);
+    setConversationHistoryBoth(conversationHistoryAfterDismissRecapture());
     clearSpokenClarifyOptions();
     setClarifyExpandedBoth(false);
   }
