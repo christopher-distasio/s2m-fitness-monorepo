@@ -38,7 +38,10 @@ test("verbosity and Safety Mode are always available, not paywalled", () => {
   );
 
   expect(screen.getByRole("radio", { name: /quick/i })).toBeInTheDocument();
-  expect(screen.getByRole("radio", { name: /standard/i })).toBeChecked();
+  expect(screen.getByRole("radio", { name: /standard/i })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   expect(screen.getByRole("radio", { name: /careful/i })).toBeInTheDocument();
   expect(screen.queryByText(/upgrade|subscribe|premium/i)).not.toBeInTheDocument();
 
@@ -50,20 +53,47 @@ test("selecting a verbosity level deselects the others and keeps the persisted c
   const persisted: VerbosityLevel[] = [];
   render(<VerbosityHarness onPersist={(level) => persisted.push(level)} />);
 
-  expect(screen.getByRole("radio", { name: /standard/i })).toBeChecked();
-  expect(screen.getByRole("radio", { name: /quick/i })).not.toBeChecked();
-  expect(screen.getByRole("radio", { name: /careful/i })).not.toBeChecked();
+  expect(screen.getByRole("radio", { name: /standard/i })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect(screen.getByRole("radio", { name: /quick/i })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  expect(screen.getByRole("radio", { name: /careful/i })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
 
   fireEvent.click(screen.getByRole("radio", { name: /quick/i }));
-  expect(screen.getByRole("radio", { name: /quick/i })).toBeChecked();
-  expect(screen.getByRole("radio", { name: /standard/i })).not.toBeChecked();
-  expect(screen.getByRole("radio", { name: /careful/i })).not.toBeChecked();
+  expect(screen.getByRole("radio", { name: /quick/i })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect(screen.getByRole("radio", { name: /standard/i })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  expect(screen.getByRole("radio", { name: /careful/i })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
   expect(persisted).toEqual(["quick"]);
 
   fireEvent.click(screen.getByRole("radio", { name: /careful/i }));
-  expect(screen.getByRole("radio", { name: /careful/i })).toBeChecked();
-  expect(screen.getByRole("radio", { name: /quick/i })).not.toBeChecked();
-  expect(screen.getByRole("radio", { name: /standard/i })).not.toBeChecked();
+  expect(screen.getByRole("radio", { name: /careful/i })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect(screen.getByRole("radio", { name: /quick/i })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  expect(screen.getByRole("radio", { name: /standard/i })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
   expect(persisted).toEqual(["quick", "careful"]);
 });
 

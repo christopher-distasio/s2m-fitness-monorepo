@@ -3733,7 +3733,11 @@ export default function Home() {
                     </svg>
                     Settings
                   </summary>
-                  <div className="mt-3 flex flex-col gap-6 border-t border-white/20 pt-4">
+                  <div
+                    className="mt-3 flex flex-col gap-6 border-t border-white/20 pt-4"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <ResponseSettingsPanel
                       verbosityLevel={verbosityLevel}
                       safetyModeEnabled={safetyModeEnabled}
