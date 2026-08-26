@@ -20,6 +20,8 @@ Design (validated via multi-AI review + real-data extraction, 2026-08-04):
 
 from qdrant_client.http import models as qmodels
 from backend.models import DietaryPreferences, Tier1Preferences, Tier2Preferences
+from backend.services.confirmation import contrastive_question
+from backend.services.modifier_extract import query_mentions_lactose_free
 
 FDA_ALLERGENS = [
     "milk", "egg", "fish", "shellfish", "tree_nut",
@@ -70,9 +72,30 @@ def build_tier_1_filter(tier_1: Tier1Preferences | None) -> qmodels.Filter | Non
             )
 
     for constraint_name in NON_ALLERGEN_TIER_1:
-        if getattr(tier_1, constraint_name, False):
+        if not getattr(tier_1, constraint_name, False):
+            continue
+        if constraint_name == "lactose_free":
+            # Dairy-free food is necessarily lactose-free. The reverse is not
+            # safe (lactose-free cow's milk is still dairy).
             must.append(
-                qmodels.FieldCondition(key=constraint_name, match=qmodels.MatchValue(value=constraint_name))
+                qmodels.Filter(
+                    should=[
+                        qmodels.FieldCondition(
+                            key="lactose_free",
+                            match=qmodels.MatchValue(value="lactose_free"),
+                        ),
+                        qmodels.FieldCondition(
+                            key="dairy_free",
+                            match=qmodels.MatchValue(value="dairy_free"),
+                        ),
+                    ]
+                )
+            )
+        else:
+            must.append(
+                qmodels.FieldCondition(
+                    key=constraint_name, match=qmodels.MatchValue(value=constraint_name)
+                )
             )
 
     if not must and not must_not:
@@ -146,3 +169,85 @@ def apply_tier_2_boosts(
 
     matches.sort(key=lambda m: m.get("final_score", m.get("score", 0.0)), reverse=True)
     return matches
+
+
+LACTOSE_SCORE_GAP = 0.08
+
+
+def _match_meta(match: dict) -> dict:
+    return match.get("metadata") or {}
+
+
+def is_literal_lactose_free(match: dict) -> bool:
+    return _match_meta(match).get("lactose_free") == "lactose_free"
+
+
+def is_dairy_free_not_lactose(match: dict) -> bool:
+    meta = _match_meta(match)
+    return (
+        meta.get("dairy_free") == "dairy_free"
+        and meta.get("lactose_free") != "lactose_free"
+    )
+
+
+def wants_lactose_avoidance(
+    query: str,
+    tier_1: Tier1Preferences | None,
+) -> bool:
+    if tier_1 is not None and getattr(tier_1, "lactose_free", False):
+        return True
+    return query_mentions_lactose_free(query)
+
+
+def lactose_or_nested_filter() -> qmodels.Filter:
+    return qmodels.Filter(
+        should=[
+            qmodels.FieldCondition(
+                key="lactose_free", match=qmodels.MatchValue(value="lactose_free")
+            ),
+            qmodels.FieldCondition(
+                key="dairy_free", match=qmodels.MatchValue(value="dairy_free")
+            ),
+        ]
+    )
+
+
+def rank_lactose_preference(matches: list[dict]) -> list[dict]:
+    """Literal lactose-free tags outrank dairy-free-only (plant) tags."""
+    matches.sort(
+        key=lambda m: (
+            1 if is_literal_lactose_free(m) else 0,
+            m.get("final_score", m.get("score", 0.0)),
+        ),
+        reverse=True,
+    )
+    return matches
+
+
+def lactose_groups_need_clarification(matches: list[dict]) -> bool:
+    """True only when ranking cannot separate lactose-free dairy from plant milk."""
+    literal = [m for m in matches if is_literal_lactose_free(m)]
+    plant = [m for m in matches if is_dairy_free_not_lactose(m)]
+    if not literal or not plant:
+        return False
+    s_lit = literal[0].get("final_score", literal[0].get("score", 0.0))
+    s_plant = plant[0].get("final_score", plant[0].get("score", 0.0))
+    return abs(s_lit - s_plant) < LACTOSE_SCORE_GAP
+
+
+def lactose_contrastive_resolution() -> dict:
+    question, kind = contrastive_question(
+        ["dairy milk without lactose", "a plant milk"],
+        "food",
+    )
+    return {
+        "status": "needs_clarification",
+        "axis": "lactose",
+        "reason": "Could be dairy milk without lactose, or a plant milk.",
+        "question": question,
+        "kind": kind,
+        "options": [
+            {"label": "dairy milk without lactose", "kind": "food"},
+            {"label": "a plant milk", "kind": "food"},
+        ],
+    }

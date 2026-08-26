@@ -773,6 +773,7 @@ async def _enrich_with_nutrition(
             source_filter is None
             and not stated_brand
             and resolution.get("status") == "needs_clarification"
+            and resolution.get("axis") != "lactose"
         ):
             parsed["confidence"] = "medium"
             brand_reason = (

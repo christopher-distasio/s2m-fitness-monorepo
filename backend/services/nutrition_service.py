@@ -20,6 +20,11 @@ from backend.services.dietary_filters import (
     has_active_allergen_constraint,
     relax_non_allergen_constraints,
     apply_tier_2_boosts,
+    wants_lactose_avoidance,
+    lactose_or_nested_filter,
+    rank_lactose_preference,
+    lactose_groups_need_clarification,
+    lactose_contrastive_resolution,
 )
 from backend.services.nutrient_fields import extras_from_scaled, scale_extra_nutrients
 from backend.models import DietaryPreferences
@@ -31,7 +36,10 @@ logger = logging.getLogger(__name__)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 # Fail fast on a down store instead of hanging the parse/voice request.
-QDRANT_TIMEOUT_SECONDS = 5.0
+# 5s was too tight: a 2M-point 3072-d search with unindexed allergen payload
+# filters (or a grey/stalled-optimizer collection) measured ~11s and 503'd
+# every log. Two _number_variants queries run sequentially, so keep headroom.
+QDRANT_TIMEOUT_SECONDS = 20.0
 COLLECTION_NAME = "food-vectors"
 EMBEDDING_MODEL = "text-embedding-3-large"
 SCORE_THRESHOLD = 0.3
@@ -709,7 +717,12 @@ async def _retrieve_best(
                 with_payload=True,
             )
         except (ResponseHandlingException, TimeoutError, OSError, ConnectionError) as exc:
-            logger.warning("Qdrant query failed: %s", exc)
+            logger.warning(
+                "Qdrant query failed (%s): %r",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
             raise NutritionStoreUnavailable("Nutrition search is temporarily unavailable.") from exc
         matches = _qdrant_results_to_matches(response.points)
         top_score = matches[0]["score"] if matches else 0
@@ -741,6 +754,18 @@ async def lookup_food(
     modifier_conditions = _modifiers_qdrant_conditions(modifiers)
     tier_1_filter = build_tier_1_filter(tier_1)
     combined_filter = _combine_filters(source_condition, modifier_conditions, tier_1_filter)
+    lactose_active = wants_lactose_avoidance(query, tier_1)
+    if lactose_active and not (tier_1 is not None and getattr(tier_1, "lactose_free", False)):
+        extra = lactose_or_nested_filter()
+        if combined_filter is None:
+            combined_filter = qmodels.Filter(must=[extra])
+        else:
+            must = list(combined_filter.must or [])
+            must.append(extra)
+            combined_filter = qmodels.Filter(
+                must=must or None,
+                must_not=combined_filter.must_not,
+            )
 
     print("RAG tier_1 filter:", tier_1_filter)
     print("RAG combined filter:", combined_filter)
@@ -798,6 +823,8 @@ async def lookup_food(
     # polish pass -- boosts ranking within the semantically/name relevant
     # set, never overrides it (capped multiplicative boost).
     matches = apply_tier_2_boosts(matches, tier_2)
+    if lactose_active:
+        matches = rank_lactose_preference(matches)
 
     match = _pick_match_with_usable_calories(query, matches)
     if match is None or match.get("score", 0) < SCORE_THRESHOLD:
@@ -849,6 +876,8 @@ async def lookup_food(
     portion_options = build_portion_options(metadata)
 
     resolution = assess_resolution(metadata.get("name"), candidates, portion_options)
+    if lactose_active and lactose_groups_need_clarification(matches):
+        resolution = lactose_contrastive_resolution()
     print(
         f"resolution: {resolution['status']}"
         + (f" (ask about {resolution['axis']})" if resolution["axis"] else "")
