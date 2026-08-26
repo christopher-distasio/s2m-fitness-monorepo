@@ -38,10 +38,16 @@ Resume support: set RESUME_OFFSET if interrupted.
 
 import os
 import re
+import sys
 import pandas as pd
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from backend.services.modifier_extract import extract_modifiers_from_maps
 
 dotenv_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=dotenv_path)
@@ -87,7 +93,7 @@ COOKING_METHOD_MAP = {
     "oil roasted": "COOKING_FAT",
 
     "smoked": "COOKING_SMOKE",
-    "rotisserie": "COOKING_SMOKE",
+    "rotisserie": "COOKING_DRY",
 
     "baked": "COOKING_OVEN",
     "broiled": "COOKING_OVEN",
@@ -160,7 +166,6 @@ FAT_LEVEL_MAP = {
     "fat free": "FAT_LEVEL_FREE",
     "nonfat": "FAT_LEVEL_FREE",
     "light": "FAT_LEVEL_REDUCED",
-    "low calorie": "FAT_LEVEL_REDUCED",
 }
 
 FAT_ADDED_MAP = {
@@ -186,7 +191,6 @@ FAT_TRIM_MAP = {
 GRAIN_TYPE_MAP = {
     "whole grain": "GRAIN_WHOLE",
     "whole wheat": "GRAIN_WHOLE",
-    "multigrain": "GRAIN_WHOLE",
     "gluten-free": "GRAIN_GLUTENFREE",
     "gluten free": "GRAIN_GLUTENFREE",
 }
@@ -233,7 +237,7 @@ ALL_MAPPINGS = {
     "fat_trim": FAT_TRIM_MAP,
     "grain_type": GRAIN_TYPE_MAP,
     "sauce_profile": SAUCE_PROFILE_MAP,
-    "source": SOURCE_MAP,
+    "preparation_source": SOURCE_MAP,
     "temperature": TEMP_MAP,
 }
 
@@ -263,23 +267,7 @@ def extract_modifiers(description):
     a matched canonical value, or the NONE_VALUE sentinel if nothing
     matched.
     """
-    desc_lower = (description or "").lower().strip()
-
-    modifiers = {category: NONE_VALUE for category in ALL_MAPPINGS}
-
-    for category, term_map in ALL_MAPPINGS.items():
-        for usda_term, canonical_value in term_map.items():
-            if not word_match(usda_term, desc_lower):
-                continue
-
-            excluded_phrases = EXCLUSIONS.get(usda_term, [])
-            if any(phrase in desc_lower for phrase in excluded_phrases):
-                continue
-
-            modifiers[category] = canonical_value
-            break  # Only one value per category (mutually exclusive)
-
-    return modifiers
+    return extract_modifiers_from_maps(description, ALL_MAPPINGS, EXCLUSIONS)
 
 
 def main():

@@ -15,6 +15,8 @@ modifier tags as the database would assign to that description.
 
 import re
 
+from backend.services.modifier_extract import extract_modifiers_from_maps
+
 NONE_VALUE = "NONE"
 
 # All 13 categories with mappings (USDA term -> canonical value)
@@ -43,7 +45,7 @@ COOKING_METHOD_MAP = {
     "pan-broiled": "COOKING_FAT",
     "oil roasted": "COOKING_FAT",
     "smoked": "COOKING_SMOKE",
-    "rotisserie": "COOKING_SMOKE",
+    "rotisserie": "COOKING_DRY",
     "baked": "COOKING_OVEN",
     "broiled": "COOKING_OVEN",
     "microwaved": "COOKING_SPECIAL",
@@ -111,7 +113,6 @@ FAT_LEVEL_MAP = {
     "fat free": "FAT_LEVEL_FREE",
     "nonfat": "FAT_LEVEL_FREE",
     "light": "FAT_LEVEL_REDUCED",
-    "low calorie": "FAT_LEVEL_REDUCED",
 }
 
 FAT_ADDED_MAP = {
@@ -135,7 +136,7 @@ FAT_TRIM_MAP = {
 GRAIN_TYPE_MAP = {
     "whole grain": "GRAIN_WHOLE",
     "whole wheat": "GRAIN_WHOLE",
-    "multigrain": "GRAIN_WHOLE",
+    # `multigrain` is not whole grain (may be all refined). Do not map it.
     "gluten-free": "GRAIN_GLUTENFREE",
     "gluten free": "GRAIN_GLUTENFREE",
 }
@@ -181,7 +182,7 @@ ALL_MAPPINGS = {
     "fat_trim": FAT_TRIM_MAP,
     "grain_type": GRAIN_TYPE_MAP,
     "sauce_profile": SAUCE_PROFILE_MAP,
-    "source": SOURCE_MAP,
+    "preparation_source": SOURCE_MAP,
     "temperature": TEMP_MAP,
 }
 
@@ -221,28 +222,7 @@ def parse_query_modifiers(user_input: str) -> dict:
     that the database assigns.
     """
     
-    text_lower = (user_input or "").lower().strip()
-    
-    # Start with NONE for all 13 categories
-    modifiers = {category: NONE_VALUE for category in ALL_MAPPINGS}
-    
-    # Match against each category
-    for category, term_map in ALL_MAPPINGS.items():
-        for usda_term, canonical_value in term_map.items():
-            # Word-boundary match (no bare substring)
-            if not word_match(usda_term, text_lower):
-                continue
-            
-            # Check exclusions
-            excluded_phrases = EXCLUSIONS.get(usda_term, [])
-            if any(phrase in text_lower for phrase in excluded_phrases):
-                continue
-            
-            # Match found — use it and stop (only one value per category)
-            modifiers[category] = canonical_value
-            break
-    
-    return modifiers
+    return extract_modifiers_from_maps(user_input, ALL_MAPPINGS, EXCLUSIONS)
 
 
 # Test

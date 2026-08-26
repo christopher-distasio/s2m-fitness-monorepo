@@ -222,7 +222,7 @@ class TestNoneSentinelPattern:
         expected_categories = {
             "cooking_method", "prep_form", "skin_status", "coating_status",
             "sodium_level", "sweetness", "fat_level", "fat_added",
-            "fat_trim", "grain_type", "sauce_profile", "source", "temperature",
+            "fat_trim", "grain_type", "sauce_profile", "preparation_source", "temperature",
         }
         assert set(result.keys()) == expected_categories
         assert all(v == "NONE" for v in result.values())
@@ -232,7 +232,7 @@ class TestNoneSentinelPattern:
         Regression test for the specific bug: bare 'whole' matched inside
         'Milk, whole' and got wrongly tagged GRAIN_WHOLE. Fixed by
         removing bare 'whole' from GRAIN_TYPE_MAP (kept 'whole grain',
-        'whole wheat', 'multigrain' only).
+        'whole wheat' only). `multigrain` is not whole grain and is not mapped.
         """
         result = extract_fndds("Milk, whole")
         assert result["grain_type"] == "NONE"
@@ -241,3 +241,159 @@ class TestNoneSentinelPattern:
         """Sanity check: legitimate whole grain matches should still work."""
         result = extract_fndds("Bread, whole grain, white")
         assert result["grain_type"] == "GRAIN_WHOLE"
+
+
+# ============================================================================
+# Branded-name rule fixes (2026-08-25 sample review)
+# Applied to both extractors so query-side and DB-side stay aligned.
+# ============================================================================
+
+class TestBrandedRuleFixes:
+    """Six term-list fixes from the branded 200-row review. Not LLM."""
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_multigrain_is_not_whole_grain(self, extract):
+        assert extract("ORGANICS MULTIGRAIN BREAD")["grain_type"] == "NONE"
+        assert extract("HOT CEREAL, TART CHERRY MULTIGRAIN")["grain_type"] == "NONE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_whole_grain_and_whole_wheat_still_fire(self, extract):
+        assert extract("WHITE WHOLE GRAIN BREAD")["grain_type"] == "GRAIN_WHOLE"
+        assert extract("WHOLE WHEAT TORTILLA")["grain_type"] == "GRAIN_WHOLE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_light_suppressed_in_non_fat_senses(self, extract):
+        assert extract("CHUNK LIGHT TUNA IN WATER")["fat_level"] == "NONE"
+        assert extract("CHUNK LIGHT TONGOL TUNA")["fat_level"] == "NONE"
+        assert extract("WILD-CAUGHT LIGHT TUNA")["fat_level"] == "NONE"
+        assert extract("EXTRA LIGHT SYRUP")["fat_level"] == "NONE"
+        assert extract("NECTAR, LIGHT GUAVA")["fat_level"] == "NONE"
+        assert extract("LIGHT ROAST COFFEE")["fat_level"] == "NONE"
+        assert extract("LIGHT BROWN SUGAR")["fat_level"] == "NONE"
+        assert extract("LIGHT CORN SYRUP")["fat_level"] == "NONE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_light_still_fires_for_reduced_fat_products(self, extract):
+        assert extract("LIGHT RANCH DRESSING")["fat_level"] == "FAT_LEVEL_REDUCED"
+        assert extract("VANILLA LIGHT ICE CREAM")["fat_level"] == "FAT_LEVEL_REDUCED"
+        assert extract("Progresso Light Chicken Pot Pie Style Soup")["fat_level"] == "FAT_LEVEL_REDUCED"
+        assert extract("LIGHT & LEAN SOFT TACO FIESTA")["fat_level"] == "FAT_LEVEL_REDUCED"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_raw_honey_and_raw_sugar_not_cooking_raw(self, extract):
+        assert extract("WATER WITH RAW HONEY")["cooking_method"] == "NONE"
+        assert extract("RAW HONEY, BLACKBERRY BLOSSOM")["cooking_method"] == "NONE"
+        assert extract("SOUTHWEST LOCAL RAW HONEY")["cooking_method"] == "NONE"
+        assert extract("RAW SUGAR")["cooking_method"] == "NONE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_raw_shrimp_still_fires(self, extract):
+        assert extract("RAW PINWHEEL SHRIMP SKEWERS")["cooking_method"] == "COOKING_RAW"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_dry_roasted_does_not_also_tag_dried(self, extract):
+        result = extract("DRY ROASTED WHOLE ALMOND")
+        assert result["cooking_method"] == "COOKING_DRY"
+        assert result["prep_form"] == "NONE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_standalone_dry_still_tags_dried(self, extract):
+        assert extract("DRY PASTA")["prep_form"] == "PREP_FORM_DRIED"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_rotisserie_is_dry_heat_not_smoke(self, extract):
+        result = extract("DELI STYLE ROTISSERIE SEASONED CHICKEN BREAST")
+        assert result["cooking_method"] == "COOKING_DRY"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_smoked_still_tags_smoke(self, extract):
+        assert extract("NATURAL SMOKED TURKEY BREAST")["cooking_method"] == "COOKING_SMOKE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_brand_denylist_suppresses_trigger_only(self, extract):
+        assert extract("CANADA DRY GINGER ALE")["prep_form"] == "NONE"
+        fresh_market = extract("FRESH FOODS MARKET, SMOKED GOUDA")
+        assert fresh_market["prep_form"] == "NONE"
+        creative = extract("FRESH CREATIVE FOODS, SMOKED GOUDA PIMENTO SPREAD")
+        assert creative["prep_form"] == "NONE"
+        assert creative["cooking_method"] == "COOKING_SMOKE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_fresh_still_fires_when_not_a_denied_brand(self, extract):
+        assert extract("FRESH SALSA")["prep_form"] == "PREP_FORM_FRESH"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_low_calorie_is_not_low_fat(self, extract):
+        assert extract("COCONUT WATER LOW CALORIE DRINK STICKS")["fat_level"] == "NONE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_light_comma_split_chunk_tuna(self, extract):
+        assert extract("CHUNK LIGHT TUNA IN WATER, CHUNK LIGHT IN WATER")["fat_level"] == "NONE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_light_beverage_and_color_senses(self, extract):
+        assert extract("BLUEBERRY LEMONADE LIGHT LOW CALORIE DRINK MIX STICKS")["fat_level"] == "NONE"
+        assert extract("WYLER'S LIGHT, LOW CALORIE SOFT DRINK MIX, PINK LEMONADE")["fat_level"] == "NONE"
+        assert extract("MOLASSES, LIGHT & SWEET")["fat_level"] == "NONE"
+        assert extract("LIGHT YELLOW CLING SLICED PEACHES")["fat_level"] == "NONE"
+        assert extract("EXTRA LIGHT IN TASTE OLIVE OIL")["fat_level"] == "NONE"
+        assert extract("LIGHT & CRISPY HAND BREADED RAVIOLI")["fat_level"] == "NONE"
+        assert extract("REFRESHINGLY LIGHT PREMIUM INDIAN TONIC WATER")["fat_level"] == "NONE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_light_must_keep_reduced_fat_products(self, extract):
+        keep = [
+            "LIGHT ICE CREAM",
+            "LIGHT SOUR CREAM",
+            "LIGHT CREAM CHEESE",
+            "LIGHT RANCH DRESSING",
+            "LIGHT CAESAR DRESSING",
+            "LIGHT ITALIAN DRESSING",
+            "LIGHT BALSAMIC VINAIGRETTE DRESSING",
+            "Progresso Light Chicken Pot Pie Style Soup",
+            "Yoplait Light",
+            "LIGHT BUTTER FLAVORED MICROWAVE POPCORN",
+            "WHIPPED LIGHT CREAM",
+            "UNSWEETENED LIGHT COCONUT MILK",
+        ]
+        for name in keep:
+            assert extract(name)["fat_level"] == "FAT_LEVEL_REDUCED", name
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_raw_marketing_and_cane_sugar(self, extract):
+        assert extract("ORGANIC RAW! GO SPROUTED SUNFLOWER SEEDS")["cooking_method"] == "NONE"
+        assert extract("RAW CANE SUGAR")["cooking_method"] == "NONE"
+        assert extract("RAW TURBINADO")["cooking_method"] == "NONE"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_raw_seafood_and_seeds_still_fire(self, extract):
+        assert extract("RAW SHRIMP")["cooking_method"] == "COOKING_RAW"
+        assert extract("RAW CHOPPED SEA CLAMS")["cooking_method"] == "COOKING_RAW"
+        assert extract("RAW WHOLE POPPY SEEDS")["cooking_method"] == "COOKING_RAW"
+        assert extract("RAW CHICKEN")["cooking_method"] == "COOKING_RAW"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_iced_baked_goods_vs_drinks(self, extract):
+        assert extract("ICED DEVIL'S FOOD CAKE")["temperature"] == "NONE"
+        assert extract("TULIPS STRAWBERRY ICED COOKIES")["temperature"] == "NONE"
+        assert extract("ICED TEA")["temperature"] == "TEMP_COLD"
+        assert extract("ICED COFFEE")["temperature"] == "TEMP_COLD"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_boston_baked_beans_candy_vs_baked_beans(self, extract):
+        candy = extract("BOSTON BAKED BEANS CANDY COATED PEANUTS")
+        assert candy["cooking_method"] == "NONE"
+        beans = extract("BAKED BEANS")
+        assert beans["cooking_method"] == "COOKING_OVEN"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_salted_caramel_does_not_fire_sodium(self, extract):
+        assert extract("SALTED CARAMEL BLONDIE")["sodium_level"] == "NONE"
+        assert extract("SALTED BUTTER")["sodium_level"] == "SODIUM_ADDED"
+        assert extract("ROASTED SALTED CASHEWS")["sodium_level"] == "SODIUM_ADDED"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_preparation_source_does_not_use_source_key(self, extract):
+        result = extract("prepared from recipe")
+        assert "source" not in result or result.get("source") is None
+        assert result["preparation_source"] == "SOURCE_HOME"
