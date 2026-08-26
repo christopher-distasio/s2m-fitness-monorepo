@@ -4,6 +4,8 @@ Import vectors from Pinecone export JSON into Qdrant.
 
 import json
 import os
+import sys
+from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
@@ -30,6 +32,13 @@ def main():
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
         )
+
+    # Payload indexes are not created by create_collection or upsert.
+    # Restore from a storage-dir backup also omits them. See docs/qdrant-setup.md.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from setup_qdrant_indexes import ensure_payload_indexes
+    print("Ensuring payload indexes (idempotent)...")
+    ensure_payload_indexes(client, COLLECTION_NAME)
     
     # Load JSON and upsert
     print(f"\nLoading vectors from JSON...")

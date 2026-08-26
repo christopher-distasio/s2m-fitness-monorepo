@@ -1,4 +1,7 @@
 """
+DEPRECATED one-off. Use scripts/setup_qdrant_indexes.py instead
+(docs/qdrant-setup.md). Kept only as history of the original `source` index.
+
 Create a payload index on 'source' -- this field is filtered on constantly
 (SOURCE_GROUPS in nutrition_service.py, plus diagnostic scripts like this
 week's allergen-coverage check) but, unlike qdrant_id, was never explicitly

@@ -156,6 +156,14 @@ def main():
             vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
         )
         print()
+
+    # Payload indexes are not created by create_collection or upsert.
+    # Restore from a storage-dir backup also omits them. See docs/qdrant-setup.md.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from setup_qdrant_indexes import ensure_payload_indexes
+    print("Ensuring payload indexes (idempotent)...")
+    ensure_payload_indexes(client, COLLECTION_NAME)
+    print()
     
     # Embed and upsert in batches
     points_batch = []
