@@ -376,6 +376,10 @@ scripts/branded_clean_test.json
 ### Playwright (frontend already ignores its own /test-results/; this covers a repo-root run) ###
 test-results/
 playwright-report/
+.playwright-mcp/
+
+### Cursor local MCP config (machine paths; not for the repo) ###
+.cursor/mcp.json
 
 ### Large diagnostic dumps (keep locally, don't commit) ###
 diagnostic/pinecone_export.json
