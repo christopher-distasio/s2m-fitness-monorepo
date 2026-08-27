@@ -11,6 +11,7 @@ import {
   defaultDietaryPreferences,
   dietaryPreferencesPayload,
   normalizeDietaryPreferences,
+  putDefaultDietaryPreferences,
   type DietaryPreferences,
 } from "../lib/dietaryPreferences";
 import { DietaryPreferencesPanel } from "../components/DietaryPreferencesPanel";
@@ -2909,6 +2910,9 @@ export default function Home() {
     if (!confirm("Clear all demo data?")) return;
     const uid = session.user.id;
     await fetch(`${API_BASE}/food/${uid}/all`, { method: "DELETE" });
+    await putDefaultDietaryPreferences(API_BASE, uid);
+    dietaryPrefsDirtyRef.current = false;
+    setDietaryPrefs(defaultDietaryPreferences());
     await fetchLogs(uid);
     await fetchSummary(uid);
   }

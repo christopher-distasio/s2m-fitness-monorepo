@@ -217,3 +217,16 @@ export function dietaryPreferencesPayload(
     optional: prefs.optional,
   };
 }
+
+/** Wipe allergens/diet flags back to empty defaults (shared demo account). */
+export async function putDefaultDietaryPreferences(
+  apiBase: string,
+  userId: string,
+): Promise<boolean> {
+  const res = await fetch(`${apiBase}/user/${userId}/dietary-preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(dietaryPreferencesPayload(defaultDietaryPreferences())),
+  });
+  return res.ok;
+}

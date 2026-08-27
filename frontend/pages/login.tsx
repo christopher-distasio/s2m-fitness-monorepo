@@ -1,7 +1,10 @@
 import Head from "next/head";
 import { useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { putDefaultDietaryPreferences } from "../lib/dietaryPreferences";
 import { useRouter } from "next/router";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -11,15 +14,19 @@ export default function Login() {
   const router = useRouter();
 
   async function handleGuestLogin() {
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: process.env.NEXT_PUBLIC_GUEST_EMAIL!,
       password: process.env.NEXT_PUBLIC_GUEST_PASSWORD!,
     });
     if (error) {
       setError(error.message);
-    } else {
-      router.push("/");
+      return;
     }
+    const uid = data.session?.user.id;
+    if (uid) {
+      await putDefaultDietaryPreferences(API_BASE, uid);
+    }
+    router.push("/");
   }
 
   async function handleSubmit() {
