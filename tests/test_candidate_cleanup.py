@@ -58,6 +58,57 @@ def test_dedupes_identical_display_clones():
     assert out[0]["fdc_id"] == "1"
 
 
+def test_collapses_same_display_name_across_calorie_skus():
+    clones = [
+        _c("Yoplait Light Strawberry Yogurt", brand="Yoplait", calories=48.59, fdc_id="a"),
+        _c("Yoplait Light Strawberry Yogurt", brand="Yoplait", calories=49.72, fdc_id="b"),
+        _c("Yoplait Light Strawberry Yogurt", brand="Yoplait", calories=43.0, fdc_id="c"),
+        _c("Yoplait Light Strawberry Yogurt", brand="Yoplait", calories=51.0, fdc_id="d"),
+    ]
+    out = clean_clarification_candidates(clones, primary=None, query="yogurt")
+    assert len(out) == 1
+    assert out[0]["fdc_id"] == "a"
+
+
+def test_stated_brand_keeps_great_value_drops_yoplait():
+    from backend.services.nutrition_service import filter_candidates_to_stated_brand
+
+    rows = [
+        _c("GREAT VALUE GREEK LIGHT NON FAT YOGURT", brand="GREAT VALUE", calories=90, fdc_id="gv"),
+        _c("Yoplait Light Strawberry Yogurt", brand="Yoplait", calories=49, fdc_id="yo"),
+        _c("Yoplait Light Strawberry Yogurt", brand="Yoplait", calories=43, fdc_id="yo2"),
+    ]
+    out = filter_candidates_to_stated_brand(rows, "Great Value")
+    assert [c["fdc_id"] for c in out] == ["gv"]
+
+
+def test_stated_brand_filter_is_noop_when_brand_omitted():
+    from backend.services.nutrition_service import filter_candidates_to_stated_brand
+
+    rows = [
+        _c("Yoplait Light Strawberry Yogurt", brand="Yoplait", calories=49, fdc_id="yo"),
+    ]
+    assert filter_candidates_to_stated_brand(rows, "") == rows
+    assert filter_candidates_to_stated_brand(rows, None) == rows
+
+
+def test_filter_matches_falls_back_when_brand_absent_from_hits():
+    from backend.services.nutrition_service import filter_matches_to_stated_brand
+
+    matches = [
+        {
+            "id": "yo",
+            "score": 0.68,
+            "metadata": {
+                "name": "Yoplait Light Strawberry Yogurt",
+                "brand_name": "Yoplait",
+            },
+        }
+    ]
+    out = filter_matches_to_stated_brand(matches, "Great Value")
+    assert out == matches
+
+
 def test_filters_placeholder_name_and_zero_cal():
     junk = [
         _c("100 g", calories=0, fdc_id="1"),
@@ -69,6 +120,21 @@ def test_filters_placeholder_name_and_zero_cal():
     assert [c["fdc_id"] for c in out] == ["4"]
 
 
+def test_stated_brand_tokens_must_all_appear():
+    from backend.services.nutrition_service import stated_brand_matches
+
+    assert stated_brand_matches(
+        "Great Value",
+        brand="GREAT VALUE",
+        name="GREAT VALUE GREEK LIGHT NON FAT YOGURT",
+    )
+    assert not stated_brand_matches(
+        "Great Value",
+        brand="Yoplait",
+        name="Yoplait Light Strawberry Yogurt",
+    )
+
+
 def test_allows_zero_cal_for_diet_soda_query():
     out = clean_clarification_candidates(
         [_c("Diet Coke", calories=0, fdc_id="1")],
@@ -76,3 +142,36 @@ def test_allows_zero_cal_for_diet_soda_query():
         query="diet coke",
     )
     assert len(out) == 1
+
+
+def test_collapse_retrieval_clones_keeps_one_great_value_row():
+    from backend.services.nutrition_service import collapse_retrieval_clones
+
+    matches = [
+        {
+            "id": "1",
+            "score": 0.75,
+            "metadata": {
+                "name": "GREAT VALUE GREEK LIGHT NON FAT YOGURT",
+                "brand_name": "GREAT VALUE",
+            },
+        },
+        {
+            "id": "2",
+            "score": 0.75,
+            "metadata": {
+                "name": "GREAT VALUE GREEK LIGHT NON FAT YOGURT",
+                "brand_name": "GREAT VALUE",
+            },
+        },
+        {
+            "id": "3",
+            "score": 0.68,
+            "metadata": {
+                "name": "Yoplait Light Strawberry Yogurt",
+                "brand_name": "Yoplait",
+            },
+        },
+    ]
+    out = collapse_retrieval_clones(matches)
+    assert [m["id"] for m in out] == ["1", "3"]

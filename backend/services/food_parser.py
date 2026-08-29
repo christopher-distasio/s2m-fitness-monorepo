@@ -247,6 +247,16 @@ _VAGUE_SERVING_RE = re.compile(
 )
 
 
+def _utterance_mentions_brand(brand: str, raw_input: str) -> bool:
+    """GPT sometimes invents a brand (Chobani for 'yogurt'). Only treat it as
+    stated when the user actually said it."""
+    tokens = [t for t in re.findall(r"[a-z0-9]+", (brand or "").lower()) if len(t) > 1]
+    if not tokens:
+        return False
+    hay = set(re.findall(r"[a-z0-9]+", (raw_input or "").lower()))
+    return all(tok in hay for tok in tokens)
+
+
 def _apply_confidence_guards(parsed: dict, raw_input: str) -> dict:
     """Never treat vague quantity-only input as high confidence."""
     confidence = parsed.get("confidence")
@@ -657,6 +667,9 @@ async def _enrich_with_nutrition(
     dietary_preferences,
 ) -> dict:
     stated_brand = (parsed.get("brand") or "").strip()
+    if stated_brand and not _utterance_mentions_brand(stated_brand, raw_input):
+        stated_brand = ""
+        parsed["brand"] = ""
     effective_source = source_filter
     if effective_source is None and stated_brand:
         effective_source = "brand"

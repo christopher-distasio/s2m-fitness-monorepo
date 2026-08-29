@@ -387,9 +387,104 @@ def _candidate_dedupe_key(c: dict) -> str:
 
 
 def _candidate_soft_dedupe_key(c: dict) -> str:
-    """Collapse SKU clones that only differ on serving label wording."""
-    name = _candidate_display_name(c).lower()
-    return f"{name}|{_candidate_calories_int(c)}"
+    """Collapse SKU clones of the same display name.
+
+    USDA branded rows often repeat one label (e.g. Yoplait Light Strawberry)
+    under many fdc_ids with 43 vs 49 vs 51 kcal. Those are not distinct
+    foods the user can choose between.
+    """
+    return _candidate_display_name(c).lower()
+
+
+_BRAND_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def stated_brand_matches(
+    stated: str,
+    *,
+    brand: str = "",
+    name: str = "",
+    owner: str = "",
+) -> bool:
+    """True when every token of the user's stated brand appears in the record.
+
+    Empty stated brand matches everything (no restriction).
+    """
+    tokens = _BRAND_TOKEN_RE.findall((stated or "").lower())
+    if not tokens:
+        return True
+    hay = set(_BRAND_TOKEN_RE.findall(f"{brand} {owner} {name}".lower()))
+    return all(tok in hay for tok in tokens)
+
+
+def _match_product_key(match: dict) -> str:
+    meta = match.get("metadata") or {}
+    name = meta.get("name") or meta.get("description") or ""
+    return format_branded_name(name, get_brand(meta)).strip().lower()
+
+
+def collapse_retrieval_clones(matches: list[dict]) -> list[dict]:
+    """Keep one hit per display name so SKU duplicates don't fake a close race."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for match in matches:
+        key = _match_product_key(match)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(match)
+    return out
+
+
+def _retrieval_gap(matches: list[dict]) -> tuple[float | None, float | None, float | None]:
+    top1 = matches[0]["score"] if matches else None
+    top2 = matches[1]["score"] if matches and len(matches) > 1 else None
+    gap = (
+        top1 - top2
+        if top1 is not None and top2 is not None
+        else None
+    )
+    return top1, top2, gap
+
+
+def filter_matches_to_stated_brand(matches: list[dict], stated_brand: str | None) -> list[dict]:
+    """Keep retrieval hits that belong to a user-named brand.
+
+    If none match, return the original list so lookup can still succeed.
+    """
+    stated = (stated_brand or "").strip()
+    if not stated or not matches:
+        return matches
+    kept = []
+    for match in matches:
+        meta = match.get("metadata") or {}
+        name = meta.get("name") or meta.get("description") or ""
+        if stated_brand_matches(
+            stated,
+            brand=get_brand(meta),
+            name=name,
+            owner=str(meta.get("brand_owner") or ""),
+        ):
+            kept.append(match)
+    return kept or matches
+
+
+def filter_candidates_to_stated_brand(
+    candidates: list[dict], stated_brand: str | None
+) -> list[dict]:
+    stated = (stated_brand or "").strip()
+    if not stated:
+        return candidates
+    kept = [
+        c
+        for c in candidates
+        if stated_brand_matches(
+            stated,
+            brand=str(c.get("brand") or ""),
+            name=str(c.get("name") or ""),
+        )
+    ]
+    return kept
 
 
 def _is_junk_clarification_candidate(c: dict, *, allow_zero_cal: bool) -> bool:
@@ -798,6 +893,7 @@ async def lookup_food(
     source_filter: str | None = None,
     modifiers: dict | None = None,
     dietary_preferences: DietaryPreferences | None = None,
+    stated_brand: str | None = None,
 ) -> dict | None:
     """
     dietary_preferences is passed in by the caller (route layer), already
@@ -877,6 +973,7 @@ async def lookup_food(
     # what the user said (plus a small near-zero-kcal demotion for caloric
     # foods) before picking the primary + candidate list.
     matches = rerank_matches_by_query(query, matches)
+    matches = filter_matches_to_stated_brand(matches, stated_brand)
 
     # Tier 2 soft preferences (organic, keto, grass-fed, ...) get the final
     # polish pass -- boosts ranking within the semantically/name relevant
@@ -885,7 +982,9 @@ async def lookup_food(
     if lactose_active:
         matches = rank_lactose_preference(matches)
 
+    matches = collapse_retrieval_clones(matches)
     matches = filter_phantom_matches(matches)
+    retrieval_top1, retrieval_top2, retrieval_gap = _retrieval_gap(matches)
 
     match = _pick_match_with_usable_calories(query, matches)
     if match is None or match.get("score", 0) < SCORE_THRESHOLD:
@@ -937,7 +1036,10 @@ async def lookup_food(
         raw_candidates,
         primary=primary_summary,
         query=query,
-    )[:MAX_CANDIDATES]
+    )
+    candidates = filter_candidates_to_stated_brand(candidates, stated_brand)[
+        :MAX_CANDIDATES
+    ]
 
     portion_options = build_portion_options(metadata)
 
