@@ -70,6 +70,20 @@ def test_consumption_fraction_not_inferred():
     assert event.consumption_fraction == 1.0
 
 
+def test_food_event_from_parsed_accepts_dumped_confidence_map():
+    """POST /food re-walks food_events dumps where confidence is per-field dicts."""
+    dumped = food_event_from_parsed(
+        {"food": "yogurt", "serving_size": "1", "calories": 90, "confidence": "high"},
+        raw_input="great value light greek yogurt",
+    ).model_dump(mode="python")
+    assert isinstance(dumped["confidence"], dict)
+    event = food_event_from_parsed(dumped, raw_input="great value light greek yogurt")
+    assert event.food == "yogurt"
+    assert event.calories == 90
+    legacy = event.to_legacy_parsed()
+    assert legacy["confidence"] in {"high", "medium", "low"}
+
+
 def test_utterance_result_is_list_and_explicit_user():
     banana = FoodEvent(food="banana")
     toast = FoodEvent(food="toast")

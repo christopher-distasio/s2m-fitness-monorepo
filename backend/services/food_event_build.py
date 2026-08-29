@@ -22,6 +22,27 @@ _HEDGE_RE = re.compile(
     r"\b(i think|i thought|maybe|not sure|probably|might have been|kind of|sort of)\b",
     re.IGNORECASE,
 )
+
+
+def _sanity_band(confidence: Any) -> Literal["high", "medium", "low"] | None:
+    """GPT overall band, or min field band if this dict is a dumped FoodEvent."""
+    if isinstance(confidence, str) and confidence in {"high", "medium", "low"}:
+        return confidence  # type: ignore[return-value]
+    if not isinstance(confidence, dict):
+        return None
+    rank = {"high": 3, "medium": 2, "low": 1}
+    bands: list[str] = []
+    top = confidence.get("band")
+    if top in rank:
+        bands.append(top)
+    for value in confidence.values():
+        if isinstance(value, dict) and value.get("band") in rank:
+            bands.append(value["band"])
+    if not bands:
+        return None
+    return min(bands, key=lambda b: rank[b])  # type: ignore[return-value]
+
+
 _MEASURE_UNITS = {
     "cup",
     "cups",
@@ -171,7 +192,7 @@ def food_event_from_parsed(
     field_prov: Literal["user_approximate", "user_stated", "inferred", "record_default"]
     field_prov = "user_approximate" if hedged else "user_stated"
 
-    sanity = parsed.get("confidence") if parsed.get("confidence") in {"high", "medium", "low"} else None
+    sanity = _sanity_band(parsed.get("confidence"))
     database = parsed.get("database_score")
     database_gap = parsed.get("database_score_gap")
     try:

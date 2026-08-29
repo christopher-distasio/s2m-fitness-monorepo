@@ -396,3 +396,4 @@ scripts/manual_ns_check.py
 scripts/full_iced_hot_check.py
 scripts/full_fndds_hot_iced_check.py
 repomix-output.xml
+logs/
