@@ -349,3 +349,105 @@ async def test_logprob_extraction_failure_still_returns_parse():
     assert result["calories"] == 89
     assert result["confidence"] == "low"
     assert result["confidence_detail"]["food"]["band"] == "low"
+
+
+def test_one_serving_not_vague_once_usda_container_is_known():
+    from backend.services.food_parser import _apply_confidence_guards
+
+    parsed = {
+        "food": "great value light greek yogurt",
+        "serving_size": "1 serving",
+        "serving_label": "1 CONTAINER",
+        "confidence": "high",
+        "alternatives": [],
+    }
+    out = _apply_confidence_guards(parsed, "great value light greek yogurt")
+    assert out["confidence"] == "high"
+    assert out["alternatives"] == []
+
+
+def test_utterance_must_contain_brand_tokens():
+    from backend.services.food_parser import _utterance_mentions_brand
+
+    assert _utterance_mentions_brand("Great Value", "great value light greek yogurt")
+    assert not _utterance_mentions_brand("CHOBANI", "I had some yogurt")
+
+
+def test_amount_axis_drops_identity_candidates():
+    from backend.services.food_parser import _keep_clarification_axis
+
+    parsed = {
+        "candidates": [{"name": "Yogurt, soy", "calories": 135}],
+        "portion_options": [
+            {"label": "1 4 oz container", "calories": 106},
+            {"label": "1 cup", "calories": 230},
+        ],
+    }
+    _keep_clarification_axis(parsed, "amount")
+    assert parsed["candidates"] == []
+    assert len(parsed["portion_options"]) == 2
+
+
+def test_amount_axis_alternatives_are_portions_not_other_foods():
+    from backend.services.food_parser import (
+        _build_grounded_alternatives,
+        _keep_clarification_axis,
+    )
+
+    parsed = {
+        "food": "Yogurt, NFS",
+        "candidates": [{"name": "Yogurt, soy", "calories": 135}],
+        "portion_options": [
+            {"label": "1 4 oz container", "calories": 106},
+            {"label": "1 cup", "calories": 230},
+        ],
+    }
+    nutrition = {
+        "food_name": "Yogurt, NFS",
+        "candidates": parsed["candidates"],
+        "portion_options": parsed["portion_options"],
+    }
+    _keep_clarification_axis(parsed, "amount")
+    alts = _build_grounded_alternatives(parsed, nutrition)
+    assert alts
+    assert not any("soy" in a.lower() for a in alts)
+    assert any("4 oz" in a or "cup" in a.lower() for a in alts)
+
+
+@pytest.mark.asyncio
+async def test_resolved_branded_yogurt_does_not_keep_invented_portions():
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": "great value light greek yogurt",
+            "brand": "Great Value",
+            "serving_size": "1 serving",
+            "confidence": "high",
+            "alternatives": [],
+            "reasoning": "serving size is typically one serving for yogurt",
+        })
+        return mock_response
+
+    with patch("backend.services.food_parser.client.chat.completions.create", side_effect=fake_create):
+        with patch("backend.services.food_parser.lookup_food", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = {
+                "food_name": "GREAT VALUE GREEK LIGHT NON FAT YOGURT",
+                "brand": "GREAT VALUE",
+                "calories": 90,
+                "carbs": 14,
+                "protein": 15,
+                "fat": 0,
+                "serving_label": "1 CONTAINER",
+                "candidates": [],
+                "portion_options": [
+                    {"label": "1 CONTAINER", "calories": 90, "gram_weight": 150}
+                ],
+                "resolution": {"status": "resolved"},
+                "database_score": 0.75,
+                "database_score_gap": 0.2,
+            }
+            result = await parse_food_input("great value light greek yogurt")
+
+    alts = result.get("alternatives") or []
+    assert not any("small portion" in str(a).lower() for a in alts)
+    assert result.get("serving_label") == "1 CONTAINER"

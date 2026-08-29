@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabaseClient";
 import { speak as _speak, stopSpeaking, onSpeakingChange, isSpeaking } from "../lib/speak";
 import { speakWithBargeIn } from "../lib/bargeIn";
 import { formatBrandedName } from "../lib/foodName";
+import { shouldAutoLog, clarificationAxis } from "../lib/autoLog";
 import {
   applyFetchedDietaryPreferences,
   defaultDietaryPreferences,
@@ -405,15 +406,6 @@ function spec2AskSpeech(parsed: ParsedResult): string {
   return parsed.confirmation?.question || "Can you confirm that?";
 }
 
-function shouldAutoLog(parsed: ParsedResult): boolean {
-  if (isUnresolved(parsed) || isBrandChoice(parsed) || isSpec2Ask(parsed)) {
-    return false;
-  }
-  const action = parsed.confirmation?.action;
-  if (action === "SILENT" || action === "CONFIRM") return true;
-  return parsed.confidence === "high";
-}
-
 function confirmMarkerSpeech(
   markers?: Array<{ field: string; label: string }>,
 ): string {
@@ -501,8 +493,18 @@ function allClarifyOptions(
   rawInput: string,
 ): ClarifyOption[] {
   const spoken = parsed.confirmation?.spoken_candidates || [];
+  const axis = clarificationAxis(parsed);
+  const lookupClarify = parsed.resolution?.status === "needs_clarification";
   if (spoken.length > 0) {
-    return spoken.map((c, i) => {
+    let rows = spoken;
+    if (lookupClarify && axis === "amount") {
+      const only = spoken.filter((c) => c.kind === "portion");
+      if (only.length) rows = only;
+    } else if (lookupClarify && axis === "identity") {
+      const only = spoken.filter((c) => c.kind !== "portion");
+      if (only.length) rows = only;
+    }
+    return rows.map((c, i) => {
       const title =
         formatBrandedName(c.name, c.brand) || c.label || `Option ${i + 1}`;
       return {
@@ -526,9 +528,15 @@ function allClarifyOptions(
       };
     });
   }
-  const candidates = clarificationCandidates(parsed);
+  const candidates =
+    axis === "amount" ? [] : clarificationCandidates(parsed);
   const allPortions = parsed.portion_options || [];
-  const portions = allPortions.length > 1 ? allPortions : [];
+  const portions =
+    axis === "identity"
+      ? []
+      : allPortions.length > 1
+        ? allPortions
+        : [];
   const foodName = formatBrandedName(parsed.food, parsed.brand);
   const options: ClarifyOption[] = [];
   for (const c of candidates) {
@@ -2496,7 +2504,9 @@ export default function Home() {
         return false;
       }
 
-      if (parsed.confidence === "high") {
+      // Same gate as submitText: needs_clarification with candidates must
+      // show the list even when the overall band is high / Spec 2 is SILENT.
+      if (shouldAutoLog(parsed)) {
         await logResolved(uid, {
           food_name: formatBrandedName(parsed.food, parsed.brand),
           calories: parsed.calories,

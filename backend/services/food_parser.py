@@ -257,15 +257,35 @@ def _utterance_mentions_brand(brand: str, raw_input: str) -> bool:
     return all(tok in hay for tok in tokens)
 
 
+def _keep_clarification_axis(parsed: dict, axis: str | None) -> None:
+    """Ask one question. Amount → portions only; identity → other foods only."""
+    if axis == "amount":
+        parsed["candidates"] = []
+    elif axis == "identity":
+        parsed["portion_options"] = []
+
+
+def _has_concrete_database_serving(parsed: dict) -> bool:
+    """True when lookup already filled a real household/branded serving label."""
+    label = (parsed.get("serving_label") or "").strip()
+    if not label:
+        return False
+    return _VAGUE_SERVING_RE.match(label) is None
+
+
 def _apply_confidence_guards(parsed: dict, raw_input: str) -> dict:
     """Never treat vague quantity-only input as high confidence."""
     confidence = parsed.get("confidence")
     serving = (parsed.get("serving_size") or "").strip()
     if confidence != "high":
         return parsed
-    if _VAGUE_QUANTIFIER_RE.search(raw_input) or (
-        serving and _VAGUE_SERVING_RE.match(serving)
-    ):
+    utterance_vague = bool(_VAGUE_QUANTIFIER_RE.search(raw_input or ""))
+    serving_vague = bool(serving and _VAGUE_SERVING_RE.match(serving))
+    # GPT often emits serving_size "1 serving" for yogurt/cups; after lookup
+    # that means one USDA container, not an unknown handful.
+    if serving_vague and _has_concrete_database_serving(parsed) and not utterance_vague:
+        return parsed
+    if utterance_vague or serving_vague:
         parsed["confidence"] = "medium"
         parsed["reasoning"] = (
             parsed.get("reasoning") or "Quantity or portion was vague."
@@ -386,11 +406,12 @@ def _build_grounded_alternatives(parsed: dict, nutrition: dict) -> list[str]:
     foods (identity) and, when the food is clear but the amount isn't, real
     portion sizes (amount). Returns [] when nothing grounded is available so
     the caller can fall back to the model's suggestions."""
-    chosen_name = (nutrition.get("food_name") or "").strip().lower()
+    chosen_name = (nutrition.get("food_name") or parsed.get("food") or "").strip().lower()
     alternatives: list[str] = []
 
     # Other candidate foods the user might have meant.
-    for candidate in nutrition.get("candidates", []):
+    # Use parsed lists so amount/identity axis trimming already applied.
+    for candidate in parsed.get("candidates") or []:
         name = (candidate.get("name") or "").strip()
         if not name or name.lower() == chosen_name:
             continue
@@ -406,13 +427,13 @@ def _build_grounded_alternatives(parsed: dict, nutrition: dict) -> list[str]:
             break
 
     # If the food itself is clear, offer real portion sizes instead.
-    portion_options = nutrition.get("portion_options", [])
+    portion_options = parsed.get("portion_options") or []
     if not alternatives and len(portion_options) > 1:
         for option in portion_options[:3]:
             alternatives.append(
                 _format_alt(
-                    nutrition.get("food_name") or "food",
-                    nutrition.get("brand"),
+                    nutrition.get("food_name") or parsed.get("food") or "food",
+                    nutrition.get("brand") or parsed.get("brand"),
                     option.get("calories"),
                     extra=option.get("label"),
                 )
@@ -695,6 +716,7 @@ async def _enrich_with_nutrition(
             source_filter=effective_source,
             modifiers=parsed.get("modifiers"),
             dietary_preferences=dietary_preferences,
+            stated_brand=stated_brand or None,
         )
     except NutritionStoreUnavailable:
         logger.warning("Nutrition store unavailable for query %r", food_query)
@@ -781,30 +803,6 @@ async def _enrich_with_nutrition(
             parsed.get("serving_size"),
         )
 
-        cal = parsed.get("calories")
-        try:
-            cal_f = float(cal) if cal is not None else None
-        except (TypeError, ValueError):
-            cal_f = None
-        if (
-            cal_f is not None
-            and cal_f <= 0.5
-            and not is_zero_calorie_query(food_query)
-            and not is_zero_calorie_query(raw_input or "")
-        ):
-            parsed["confidence"] = "low"
-            parsed["resolution_status"] = "unresolved"
-            parsed["resolution"] = {
-                "status": "unresolved",
-                "reason": "Nutrition data looks incomplete (0 calories for this food).",
-            }
-            note = "Nutrition data looks incomplete (0 calories for this food)."
-            parsed["reasoning"] = (
-                f"{parsed['reasoning']} {note}".strip()
-                if parsed.get("reasoning")
-                else note
-            )
-
         resolution = nutrition.get("resolution") or {}
         parsed["resolution"] = resolution
 
@@ -839,11 +837,46 @@ async def _enrich_with_nutrition(
             data_reason = resolution.get("reason")
             if data_reason:
                 parsed["reasoning"] = data_reason
+            _keep_clarification_axis(parsed, resolution.get("axis"))
 
-        if parsed.get("confidence") != "high":
-            parsed["alternatives"] = _build_grounded_alternatives(
-                parsed, nutrition
-            ) or parsed.get("alternatives")
+        cal = parsed.get("calories")
+        try:
+            cal_f = float(cal) if cal is not None else None
+        except (TypeError, ValueError):
+            cal_f = None
+        if (
+            cal_f is not None
+            and cal_f <= 0.5
+            and not is_zero_calorie_query(food_query)
+            and not is_zero_calorie_query(raw_input or "")
+        ):
+            parsed["confidence"] = "low"
+            parsed["resolution_status"] = "unresolved"
+            note = "Nutrition data looks incomplete (0 calories for this food)."
+            parsed["resolution"] = {
+                "status": "unresolved",
+                "reason": note,
+            }
+            parsed["reasoning"] = (
+                f"{parsed['reasoning']} {note}".strip()
+                if parsed.get("reasoning")
+                else note
+            )
+            parsed["candidates"] = []
+            parsed["alternatives"] = []
+            return _apply_confidence_guards(parsed, raw_input)
+
+        grounded = _build_grounded_alternatives(parsed, nutrition)
+        resolved = resolution.get("status") == "resolved"
+        if (
+            resolved
+            and _has_concrete_database_serving(parsed)
+            and not _VAGUE_QUANTIFIER_RE.search(raw_input or "")
+        ):
+            parsed["confidence"] = "high"
+            parsed["alternatives"] = grounded
+        elif parsed.get("confidence") != "high":
+            parsed["alternatives"] = grounded or parsed.get("alternatives")
     else:
         _apply_unrecognized(parsed)
 

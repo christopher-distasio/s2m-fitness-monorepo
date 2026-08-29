@@ -214,6 +214,109 @@ test.describe("logged-in food log", () => {
     expect(logBody?.raw_input).toBe("banana");
   });
 
+  test("specific brand banana shows candidate list instead of auto-logging", async ({
+    page,
+  }) => {
+    await page.route("**/food/parse", async (route) => {
+      const body = JSON.parse(route.request().postData() || "{}") as {
+        source_filter?: string;
+      };
+      if (body.source_filter === "brand") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            food: "banana",
+            brand: "NUTTY & FRUITY",
+            calories: 94.08,
+            serving_label: "1 ONZ",
+            confidence: "high",
+            resolution_status: "needs_clarification",
+            resolution: {
+              status: "needs_clarification",
+              axis: "identity",
+              reason:
+                "NUTTY & FRUITY BANANA could be different foods with very different calories.",
+            },
+            confirmation: { action: "SILENT", asked_fields: [] },
+            candidates: [
+              {
+                fdc_id: "407274",
+                name: "BANANAS",
+                brand: "NEXT ORGANICS",
+                calories: 170,
+                serving_label: "6 PIECES | ABOUT",
+              },
+              {
+                fdc_id: "2012128",
+                name: "BETTER'N PEANUT BUTTER BANANA",
+                brand: "BETTER'N PEANUT BUTTER",
+                calories: 99.84,
+                serving_label: "2 Tbsp",
+              },
+              {
+                fdc_id: "1186855",
+                name: "CASALI CHOCO-BANANAS",
+                brand: "CASALI",
+                calories: 100,
+                serving_label: "2 PIECES",
+              },
+            ],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          food: "banana",
+          calories: 94,
+          confidence: "medium",
+          resolution: { status: "needs_brand_choice" },
+        }),
+      });
+    });
+
+    let logged = false;
+    await page.route("**/food", async (route) => {
+      const req = route.request();
+      if (req.method() !== "POST" || req.url().includes("/food/parse")) {
+        await route.continue();
+        return;
+      }
+      logged = true;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: "Logged NUTTY & FRUITY banana.",
+          id: "should-not-log",
+          parsed: { food: "banana", calories: 94, confidence: "high" },
+        }),
+      });
+    });
+
+    await page.getByLabel(/Type it instead/i).fill("banana");
+    await page.getByRole("button", { name: /^Log Food$/i }).click();
+
+    await page.getByRole("button", { name: /a specific brand/i }).click();
+
+    await expect(
+      page.getByRole("heading", { name: /^(Unsure|Less Sure)$/i }),
+    ).toBeVisible({ timeout: 10000 });
+    await expect(
+      page.getByRole("button", { name: /NEXT ORGANICS/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /BETTER'N PEANUT BUTTER/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /CASALI CHOCO-BANANAS/i }),
+    ).toBeVisible();
+    expect(logged).toBe(false);
+  });
+
   test("shows clarification UI on low confidence parse", async ({ page }) => {
     await page.route("**/food/parse", async (route) => {
       await route.fulfill({
