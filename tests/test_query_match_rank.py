@@ -176,3 +176,18 @@ def test_caloric_query_penalizes_near_zero_candidate():
         )
         == 0.0
     )
+
+
+def test_missing_calories_penalized_like_zero_for_caloric_query():
+    """Sparse payload (calories key absent) must not outrank a real food."""
+    assert near_zero_calorie_penalty("yogurt", {}) > 0
+    matches = [
+        {
+            "id": "phantom",
+            "score": 0.80,
+            "metadata": {"description": "Light + Fit Dannon"},
+        },
+        _match("DANNON LIGHT + FIT VANILLA YOGURT", 0.62, calories=80),
+    ]
+    ranked = rerank_matches_by_query("Dan and Light and Fit Yogurt", matches)
+    assert ranked[0]["id"] == "DANNON LIGHT + FIT VANILLA YOGURT"

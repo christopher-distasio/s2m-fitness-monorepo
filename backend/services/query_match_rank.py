@@ -142,9 +142,10 @@ def near_zero_calorie_penalty(query: str, metadata: dict | None) -> float:
     if is_zero_calorie_query(query):
         return 0.0
     cal = effective_calories_per_100g(metadata)
-    if cal is None:
-        return 0.0
-    if cal <= _NEAR_ZERO_KCAL:
+    # Missing calories must not outrank an explicit 0 — both are unusable
+    # for a caloric food. Sparse/backfill-gap rows previously scored *better*
+    # than 0-kcal rows because None skipped this penalty.
+    if cal is None or cal <= _NEAR_ZERO_KCAL:
         return _NEAR_ZERO_CAL_PENALTY
     return 0.0
 
@@ -153,7 +154,7 @@ def _promote_caloric_alternative(query: str, ranked: list[dict]) -> list[dict]:
     if not ranked or is_zero_calorie_query(query):
         return ranked
     top_cal = effective_calories_per_100g(ranked[0].get("metadata") or {})
-    if top_cal is None or top_cal > _DEGENERATE_ZERO_KCAL:
+    if top_cal is not None and top_cal > _DEGENERATE_ZERO_KCAL:
         return ranked
     for i, match in enumerate(ranked):
         if i == 0:

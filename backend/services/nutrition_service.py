@@ -233,6 +233,63 @@ def get_serving_size_g(metadata: dict) -> tuple[float, str]:
     return 100, "no_serving_data_fallback"
 
 
+def record_display_name(metadata: dict | None) -> str:
+    """Human-readable name from payload. Qdrant stores `description` at embed
+    time; nutrition backfill may also set `name`. Either is usable."""
+    meta = metadata or {}
+    return str(meta.get("name") or meta.get("description") or "").strip()
+
+
+def is_phantom_record(metadata: dict | None) -> bool:
+    """True for searchable-but-unusable rows: 100g serving fallback plus
+    either no calories or no display name.
+
+    These are typically branded vectors that were embedded from a description
+    but never received nutrition backfill. They can still score 0.70–0.80
+    against a real query because the description embedding is fine — only
+    the nutrition payload is empty. They must never silently resolve.
+    """
+    meta = metadata or {}
+    _, serving_source = get_serving_size_g(meta)
+    if serving_source != "no_serving_data_fallback":
+        return False
+    name = record_display_name(meta)
+    calories = scale_nutrients(meta, 100.0).get("calories")
+    try:
+        cal_f = float(calories) if calories is not None else 0.0
+    except (TypeError, ValueError):
+        cal_f = 0.0
+    return (not name) or cal_f <= 0.5
+
+
+def is_phantom_match(match: dict | None) -> bool:
+    if not match:
+        return True
+    return is_phantom_record(match.get("metadata") or {})
+
+
+def filter_phantom_matches(matches: list[dict]) -> list[dict]:
+    """Drop phantom rows from the retrieved set so they cannot win or appear
+    as the only clarification options."""
+    return [m for m in matches if not is_phantom_match(m)]
+
+
+def is_phantom_lookup_result(nutrition: dict | None) -> bool:
+    """Same guard on the lookup_food return shape (parser safety net)."""
+    if not nutrition:
+        return False
+    if nutrition.get("serving_source") != "no_serving_data_fallback":
+        return False
+    name = str(
+        nutrition.get("food_name") or nutrition.get("name") or ""
+    ).strip()
+    try:
+        cal_f = float(nutrition.get("calories") if nutrition.get("calories") is not None else 0)
+    except (TypeError, ValueError):
+        cal_f = 0.0
+    return (not name) or cal_f <= 0.5
+
+
 def scale_nutrients(metadata: dict, serving_size_g: float) -> dict:
     """Qdrant stores nutrient values per 100g. Scale them to the given
     serving size in grams. Central helper so the primary result, the
@@ -263,20 +320,22 @@ def _pick_match_with_usable_calories(query: str, matches: list[dict]) -> dict | 
     """Prefer a hit whose effective calories aren't a degenerate zero.
 
     For caloric foods, skip rows that are still ~0 after Atwater. Zero-cal
-    queries (water, black coffee, …) keep the top lexical hit.
+    queries (water, black coffee, …) keep the top lexical hit that is not a
+    phantom record. Never fall back to a phantom — return None so lookup
+    misses instead of logging 0 calories.
     """
-    if not matches:
+    usable = [m for m in matches if not is_phantom_match(m)]
+    if not usable:
         return None
     if is_zero_calorie_query(query):
-        return matches[0]
-    for match in matches:
+        return usable[0]
+    for match in usable:
         if match.get("score", 0) < SCORE_THRESHOLD:
             continue
         cal = effective_calories_per_100g(match.get("metadata") or {})
         if cal is not None and cal > 0.5:
             return match
-    # Nothing usable — return top match and let the parser refuse high-confidence.
-    return matches[0]
+    return None
 
 
 def get_brand(metadata: dict) -> str:
@@ -514,7 +573,7 @@ def summarize_match(match: dict) -> dict:
     household = metadata.get("household_serving_fulltext", "")
     return {
         "fdc_id": match.get("id"),
-        "name": metadata.get("name"),
+        "name": record_display_name(metadata) or None,
         "brand": get_brand(metadata),
         "serving_label": build_serving_label(metadata, serving_size_g, serving_source),
         "serving_size_g": serving_size_g,
@@ -826,21 +885,28 @@ async def lookup_food(
     if lactose_active:
         matches = rank_lactose_preference(matches)
 
+    matches = filter_phantom_matches(matches)
+
     match = _pick_match_with_usable_calories(query, matches)
     if match is None or match.get("score", 0) < SCORE_THRESHOLD:
+        return None
+    if is_phantom_match(match):
         return None
 
     metadata = match.get("metadata", {})
     fdc_id = match["id"]
+    display_name = record_display_name(metadata) or None
 
     print(
-        f"Top match: {metadata.get('name')} — score: {match['score']} "
+        f"Top match: {display_name} — score: {match['score']} "
         f"(after query-match re-rank)"
     )
 
     serving_size_g, serving_source = get_serving_size_g(metadata)
     macros = scale_nutrients(metadata, serving_size_g)
     calories = macros["calories"]
+    if is_phantom_record(metadata):
+        return None
     protein = macros["protein"]
     carbs = macros["carbs"]
     fat = macros["fat"]
@@ -854,7 +920,7 @@ async def lookup_food(
     serving_label = build_serving_label(metadata, serving_size_g, serving_source)
     primary_summary = {
         "fdc_id": fdc_id,
-        "name": metadata.get("name"),
+        "name": display_name,
         "brand": get_brand(metadata),
         "serving_label": serving_label,
         "calories": calories,
@@ -875,7 +941,7 @@ async def lookup_food(
 
     portion_options = build_portion_options(metadata)
 
-    resolution = assess_resolution(metadata.get("name"), candidates, portion_options)
+    resolution = assess_resolution(display_name, candidates, portion_options)
     if lactose_active and lactose_groups_need_clarification(matches):
         resolution = lactose_contrastive_resolution()
     print(
@@ -896,7 +962,7 @@ async def lookup_food(
     }
 
     return {
-        "food_name": metadata.get("name"),
+        "food_name": display_name,
         "brand": get_brand(metadata),
         "calories": calories,
         "protein": protein,

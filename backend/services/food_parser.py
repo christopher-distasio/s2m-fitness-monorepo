@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from backend.services.nutrition_service import (
     NutritionStoreUnavailable,
     format_branded_name,
+    is_phantom_lookup_result,
     lookup_food,
 )
 from backend.services.query_match_rank import is_zero_calorie_query
@@ -207,6 +208,28 @@ UNRECOGNIZED_MESSAGE = (
     "I didn't recognize that as a food I can look up. "
     "Please try a different name or more detail."
 )
+
+
+def _apply_unrecognized(parsed: dict) -> dict:
+    parsed["calories"] = None
+    parsed["macronutrients"] = {
+        "carbohydrates": None,
+        "protein": None,
+        "fats": None,
+        "sugar": None,
+    }
+    parsed["confidence"] = "low"
+    parsed["reasoning"] = UNRECOGNIZED_MESSAGE
+    parsed["data_source"] = None
+    parsed["resolution_status"] = "unresolved"
+    parsed["resolution"] = {
+        "status": "unresolved",
+        "reason": UNRECOGNIZED_MESSAGE,
+    }
+    parsed["candidates"] = []
+    parsed["portion_options"] = []
+    parsed["alternatives"] = parsed.get("alternatives") or []
+    return parsed
 
 # The single upfront disambiguating question, before any mixed candidate list.
 # Shared by text and voice so the two flows can't diverge.
@@ -683,6 +706,9 @@ async def _enrich_with_nutrition(
         parsed["resolution_status"] = "needs_clarification"
         return parsed
 
+    if nutrition and is_phantom_lookup_result(nutrition):
+        return _apply_confidence_guards(_apply_unrecognized(parsed), raw_input)
+
     if nutrition:
         parsed["calories"] = nutrition["calories"]
         parsed["macronutrients"] = {
@@ -806,22 +832,6 @@ async def _enrich_with_nutrition(
                 parsed, nutrition
             ) or parsed.get("alternatives")
     else:
-        parsed["calories"] = None
-        parsed["macronutrients"] = {
-            "carbohydrates": None,
-            "protein": None,
-            "fats": None,
-            "sugar": None,
-        }
-        parsed["confidence"] = "low"
-        parsed["reasoning"] = UNRECOGNIZED_MESSAGE
-        parsed["data_source"] = None
-        parsed["resolution_status"] = "unresolved"
-        parsed["resolution"] = {
-            "status": "unresolved",
-            "reason": UNRECOGNIZED_MESSAGE,
-        }
-        parsed["candidates"] = []
-        parsed["alternatives"] = parsed.get("alternatives") or []
+        _apply_unrecognized(parsed)
 
     return _apply_confidence_guards(parsed, raw_input)
