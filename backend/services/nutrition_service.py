@@ -61,6 +61,16 @@ MAX_PORTION_OPTIONS = 8
 # Cheap on the query side and needs no re-embedding.
 RETRIEVAL_TOP_K = 25
 
+# A duplicated cluster of unbackfilled stub rows can fill the whole top-K and
+# starve out every real product: 2026-08-30, 48 identical "Light + Fit Dannon"
+# phantoms all scored 0.847, so filter_phantom_matches emptied the set and
+# "dannon light and fit yogurt" reported not-recognized while 131 real Dannon
+# rows sat below the window. ~7.7% of branded rows are such stubs, so this is
+# not brand-specific. Escalate only when EVERY hit in the window is a phantom:
+# one extra Qdrant call, no extra embedding call, and no change to a query that
+# already had at least one usable hit.
+RETRIEVAL_TOP_K_PHANTOM_ESCALATION = 200
+
 # Brand-vs-generic disambiguation. When the user tells us whether they want a
 # specific brand or a general item, we restrict retrieval to the matching
 # `source` values stored at embed time.
@@ -835,6 +845,32 @@ def _qdrant_results_to_matches(results) -> list[dict]:
     return matches
 
 
+def _query_qdrant_points(
+    vector: list[float], limit: int, qdrant_filter: qmodels.Filter | None
+):
+    # NOTE (2026-08-05): qdrant_client.search() was renamed to
+    # query_points() in this client version -- .search() doesn't exist
+    # at all here, confirmed against a real AttributeError during the
+    # first live end-to-end test. query_points() returns a QueryResponse
+    # object with a .points attribute (not a bare list like .search() did).
+    try:
+        return qdrant_client.query_points(
+            collection_name=COLLECTION_NAME,
+            query=vector,
+            limit=limit,
+            query_filter=qdrant_filter,
+            with_payload=True,
+        )
+    except (ResponseHandlingException, TimeoutError, OSError, ConnectionError) as exc:
+        logger.warning(
+            "Qdrant query failed (%s): %r",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        raise NutritionStoreUnavailable("Nutrition search is temporarily unavailable.") from exc
+
+
 async def _retrieve_best(
     query: str, qdrant_filter: qmodels.Filter | None = None
 ) -> tuple[list[dict], str]:
@@ -857,28 +893,13 @@ async def _retrieve_best(
     best_score = -1.0
     best_variant = query
     for variant, vector in zip(variants, vectors):
-        # NOTE (2026-08-05): qdrant_client.search() was renamed to
-        # query_points() in this client version -- .search() doesn't exist
-        # at all here, confirmed against a real AttributeError during the
-        # first live end-to-end test. query_points() returns a QueryResponse
-        # object with a .points attribute (not a bare list like .search() did).
-        try:
-            response = qdrant_client.query_points(
-                collection_name=COLLECTION_NAME,
-                query=vector,
-                limit=RETRIEVAL_TOP_K,
-                query_filter=qdrant_filter,
-                with_payload=True,
-            )
-        except (ResponseHandlingException, TimeoutError, OSError, ConnectionError) as exc:
-            logger.warning(
-                "Qdrant query failed (%s): %r",
-                type(exc).__name__,
-                exc,
-                exc_info=True,
-            )
-            raise NutritionStoreUnavailable("Nutrition search is temporarily unavailable.") from exc
+        response = _query_qdrant_points(vector, RETRIEVAL_TOP_K, qdrant_filter)
         matches = _qdrant_results_to_matches(response.points)
+        if matches and not filter_phantom_matches(matches):
+            response = _query_qdrant_points(
+                vector, RETRIEVAL_TOP_K_PHANTOM_ESCALATION, qdrant_filter
+            )
+            matches = _qdrant_results_to_matches(response.points)
         top_score = matches[0]["score"] if matches else 0
         if top_score > best_score:
             best_score = top_score

@@ -1,5 +1,6 @@
 """Phantom Qdrant rows (no serving data + 0 kcal / empty name) must not resolve."""
 import json
+from types import SimpleNamespace
 
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -91,6 +92,78 @@ def test_normal_caloric_pick_still_wins():
     picked = _pick_match_with_usable_calories("banana", [real])
     assert picked is not None
     assert picked["id"] == "banana"
+
+
+def _fake_retrieval(shallow_points, deep_points):
+    """(patched query_points, recorded limits) for a two-depth Qdrant stub."""
+    from backend.services import nutrition_service as ns
+
+    limits: list[int] = []
+
+    def fake_query_points(**kwargs):
+        limits.append(kwargs["limit"])
+        points = (
+            deep_points
+            if kwargs["limit"] == ns.RETRIEVAL_TOP_K_PHANTOM_ESCALATION
+            else shallow_points
+        )
+        return SimpleNamespace(points=points)
+
+    return fake_query_points, limits
+
+
+async def _fake_embed(**kwargs):
+    return SimpleNamespace(
+        data=[SimpleNamespace(embedding=[0.0]) for _ in kwargs["input"]]
+    )
+
+
+@pytest.mark.asyncio
+async def test_all_phantom_window_escalates_retrieval_depth():
+    """A duplicated stub cluster must not starve out every real product.
+
+    2026-08-30: 48 identical "Light + Fit Dannon" phantoms filled the whole
+    top-25, so the filtered set was empty and the query reported
+    not-recognized while 131 real Dannon rows sat below the window.
+    """
+    from backend.services import nutrition_service as ns
+
+    phantoms = [
+        SimpleNamespace(payload=_phantom_meta(), score=0.847)
+        for _ in range(ns.RETRIEVAL_TOP_K)
+    ]
+    deep = phantoms + [SimpleNamespace(payload=_real_meta(), score=0.84)]
+    fake_query_points, limits = _fake_retrieval(phantoms, deep)
+
+    with patch.object(ns.qdrant_client, "query_points", side_effect=fake_query_points):
+        with patch.object(
+            ns.openai_client.embeddings, "create", side_effect=_fake_embed
+        ):
+            matches, _variant = await ns._retrieve_best("dannon light and fit yogurt")
+
+    assert ns.RETRIEVAL_TOP_K_PHANTOM_ESCALATION in limits
+    assert any(not ns.is_phantom_match(m) for m in matches)
+
+
+@pytest.mark.asyncio
+async def test_window_with_a_real_hit_does_not_escalate():
+    """Escalation is a miss-only path — it must not re-query working queries."""
+    from backend.services import nutrition_service as ns
+
+    points = [
+        SimpleNamespace(payload=_phantom_meta(), score=0.847),
+        SimpleNamespace(payload=_real_meta(), score=0.72),
+    ]
+    fake_query_points, limits = _fake_retrieval(points, points)
+
+    with patch.object(ns.qdrant_client, "query_points", side_effect=fake_query_points):
+        with patch.object(
+            ns.openai_client.embeddings, "create", side_effect=_fake_embed
+        ):
+            await ns._retrieve_best("banana")
+
+    assert limits
+    assert ns.RETRIEVAL_TOP_K_PHANTOM_ESCALATION not in limits
 
 
 def test_lookup_result_shape_is_phantom():
