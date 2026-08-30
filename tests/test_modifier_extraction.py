@@ -360,6 +360,31 @@ class TestBrandedRuleFixes:
             assert extract(name)["fat_level"] == "FAT_LEVEL_REDUCED", name
 
     @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_light_and_fit_line_does_not_claim_reduced_fat(self, extract):
+        """Dannon Light + Fit is a product line, not a USDA fat-level claim.
+
+        Confirmed 2026-08-29: extracting FAT_LEVEL_REDUCED from 'light' and
+        applying it as a Qdrant must-filter excluded the real (mostly
+        FAT_LEVEL_FREE) cups. Suppress the 'light' trigger; do not remap
+        the line to FAT_LEVEL_FREE.
+        """
+        none = [
+            "dannon light and fit yogurt",
+            "Dannon Light & Fit yogurt",
+            "Dannon Light + Fit yogurt",
+            "dannon light+fit yogurt",
+            "LIGHT & FIT GREEK YOGURT",
+            "dannon light yogurt",
+        ]
+        for name in none:
+            assert extract(name)["fat_level"] == "NONE", name
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
+    def test_light_and_fit_does_not_block_unrelated_reduced_fat(self, extract):
+        assert extract("LIGHT RANCH DRESSING")["fat_level"] == "FAT_LEVEL_REDUCED"
+        assert extract("LIGHT & LEAN SOFT TACO FIESTA")["fat_level"] == "FAT_LEVEL_REDUCED"
+
+    @pytest.mark.parametrize("extract", [extract_fndds, extract_sr_legacy])
     def test_raw_marketing_and_cane_sugar(self, extract):
         assert extract("ORGANIC RAW! GO SPROUTED SUNFLOWER SEEDS")["cooking_method"] == "NONE"
         assert extract("RAW CANE SUGAR")["cooking_method"] == "NONE"
@@ -397,3 +422,15 @@ class TestBrandedRuleFixes:
         result = extract("prepared from recipe")
         assert "source" not in result or result.get("source") is None
         assert result["preparation_source"] == "SOURCE_HOME"
+
+
+def test_query_side_parser_shares_light_and_fit_suppression():
+    from backend.services.parse_query_modifiers import parse_query_modifiers
+
+    for q in (
+        "dannon light and fit yogurt",
+        "Dannon Light & Fit yogurt",
+        "dannon light yogurt",
+    ):
+        assert parse_query_modifiers(q)["fat_level"] == "NONE"
+    assert parse_query_modifiers("light ranch dressing")["fat_level"] == "FAT_LEVEL_REDUCED"

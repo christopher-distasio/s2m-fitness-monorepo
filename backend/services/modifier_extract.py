@@ -20,6 +20,10 @@ BRAND_DENYLIST = (
     "fresh foods market",
     "fresh creative foods",
     "crystal light",
+    # Product line, not a fat claim. Confirmed 2026-08-29: "dannon light
+    # yogurt" extracted FAT_LEVEL_REDUCED and hard-filtered out the real
+    # (mostly FAT_LEVEL_FREE) Light + Fit cups.
+    "dannon light",
 )
 
 # Phrases that consume a shorter trigger without themselves assigning a
@@ -70,6 +74,9 @@ BOSTON_CANDY_CUES = ("candy", "peanut", "peanuts")
 _TERM_BOUNDARY = r"(?<![a-z0-9]){term}(?![a-z0-9])"
 _LACTOSE_FREE_RE = re.compile(r"lactose[\s-]?free", re.I)
 _DAIRY_FREE_RE = re.compile(r"dairy[\s-]?free", re.I)
+# Product LINE name (Dannon Light + Fit and store-brand copies), not a
+# fat-content claim. Optional spaces so "light+fit" / "light & fit" match.
+_LIGHT_AND_FIT_RE = re.compile(r"light\s*(?:and|[&+])\s*fit")
 
 
 @lru_cache(maxsize=512)
@@ -159,6 +166,8 @@ def _phrase_in_words(words: list[str], phrase: tuple[str, ...]) -> bool:
 
 
 def _light_suppressed(span: tuple[int, int], tokens: list[tuple[str, int, int]], text: str) -> bool:
+    if _LIGHT_AND_FIT_RE.search(text):
+        return True
     if any(_term_re(p).search(text) for p in LIGHT_DOC_PHRASES):
         return True
     words = _window_words(span, tokens, LIGHT_TOKEN_WINDOW)

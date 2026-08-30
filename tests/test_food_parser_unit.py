@@ -451,3 +451,58 @@ async def test_resolved_branded_yogurt_does_not_keep_invented_portions():
     alts = result.get("alternatives") or []
     assert not any("small portion" in str(a).lower() for a in alts)
     assert result.get("serving_label") == "1 CONTAINER"
+
+
+def _dannon_lookup_ok():
+    return {
+        "food_name": "DANNON, LIGHT & FIT, NONFAT YOGURT, BLUEBERRY",
+        "brand": "DANNON",
+        "calories": 80,
+        "carbs": 9,
+        "protein": 12,
+        "fat": 0,
+        "serving_source": "branded_serving_size",
+        "serving_label": "1 CONTAINER",
+        "candidates": [],
+        "portion_options": [],
+        "resolution": {"status": "resolved"},
+        "database_score": 0.7,
+        "database_score_gap": 0.1,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "utterance,food",
+    [
+        ("dannon light and fit yogurt", "dannon light and fit yogurt"),
+        ("dannon light yogurt", "dannon light yogurt"),
+    ],
+)
+async def test_dannon_light_queries_do_not_hard_filter_reduced_fat(utterance, food):
+    """'light' in Light + Fit / Dannon Light is a line name, not FAT_LEVEL_REDUCED."""
+
+    async def fake_create(**kwargs):
+        mock_response = AsyncMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "food": food,
+            "brand": "Dannon",
+            "serving_size": "1",
+            "confidence": "high",
+            "alternatives": [],
+        })
+        return mock_response
+
+    with patch("backend.services.food_parser.client.chat.completions.create", side_effect=fake_create):
+        with patch("backend.services.food_parser.lookup_food", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = _dannon_lookup_ok()
+            result = await parse_food_input(utterance, conversation_history=[])
+
+    assert mock_lookup.await_count == 1
+    kwargs = mock_lookup.await_args.kwargs
+    mods = kwargs.get("modifiers") or {}
+    assert mods.get("fat_level") == "NONE"
+    assert result.get("resolution_status") != "unresolved"
+    assert (result.get("resolution") or {}).get("status") != "unresolved"
+    assert result.get("calories") == 80
+    assert "dannon" in (result.get("brand") or result.get("food") or "").lower()
