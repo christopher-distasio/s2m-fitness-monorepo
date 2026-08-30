@@ -120,23 +120,57 @@ def _modifiers_qdrant_conditions(modifiers: dict | None) -> list[qmodels.FieldCo
     ]
 
 
+def _modifier_gate(
+    modifier_conditions: list[qmodels.FieldCondition],
+) -> qmodels.Filter | None:
+    """Hard-filter modifiers only where the record's tags came from USDA.
+
+    Branded modifier tags are a text heuristic over the product name, and they
+    disagree with how users phrase the same product often enough to erase real
+    results: measured 2026-08-30, "great value light yogurt" tags
+    FAT_LEVEL_REDUCED while 0 of 54 rows carry REDUCED and 25 carry
+    FAT_LEVEL_FREE, and "oikos light yogurt" drops all 112 true matches. As a
+    must clause that returns nothing; as a ranking signal it is still useful.
+
+    So branded rows are admitted here regardless of their tags and ordered by
+    modifier_match_bonus instead, while SR Legacy / FNDDS rows keep the hard
+    filter. Keyed on `source` rather than `modifier_provenance` even though
+    provenance names the distinction (333,122 branded_text_heuristic vs 7,593
+    usda_extractor): provenance is only written to rows that got at least one
+    tag, so it cannot speak for a branded row the heuristic found nothing on,
+    whereas `source` is present on every point and marks the same partition.
+    """
+    if not modifier_conditions:
+        return None
+    return qmodels.Filter(
+        should=[
+            qmodels.FieldCondition(
+                key="source", match=qmodels.MatchAny(any=SOURCE_GROUPS["brand"])
+            ),
+            qmodels.Filter(must=list(modifier_conditions)),
+        ]
+    )
+
+
 def _combine_filters(
     source_condition: qmodels.FieldCondition | None,
     modifier_conditions: list[qmodels.FieldCondition],
     tier_1_filter: qmodels.Filter | None,
 ) -> qmodels.Filter | None:
     """
-    Merge source + modifier conditions (both simple `must` clauses) with the
-    Tier 1 dietary filter (which may carry its own must_not clauses for
-    allergen exclusion). Qdrant filters combine by merging must/must_not
-    lists, not by nesting Filter objects inside each other.
+    Merge source + modifier conditions with the Tier 1 dietary filter (which
+    may carry its own must_not clauses for allergen exclusion). Qdrant filters
+    combine by merging must/must_not lists; the one nested Filter is the
+    modifier gate, whose branded-vs-USDA branch cannot be flattened.
     """
     must: list = []
     must_not: list = []
 
     if source_condition:
         must.append(source_condition)
-    must.extend(modifier_conditions)
+    modifier_gate = _modifier_gate(modifier_conditions)
+    if modifier_gate:
+        must.append(modifier_gate)
 
     if tier_1_filter:
         if tier_1_filter.must:
@@ -992,8 +1026,10 @@ async def lookup_food(
     # Vector score alone often buries the everyday food (e.g. "Bananas, raw")
     # under chips/branded neighbors. Re-rank by how closely the name matches
     # what the user said (plus a small near-zero-kcal demotion for caloric
-    # foods) before picking the primary + candidate list.
-    matches = rerank_matches_by_query(query, matches)
+    # foods) before picking the primary + candidate list. Modifiers ride along
+    # as a capped bonus so the branded tags _modifier_gate stopped filtering on
+    # still order the result.
+    matches = rerank_matches_by_query(query, matches, modifiers)
     matches = filter_matches_to_stated_brand(matches, stated_brand)
 
     # Tier 2 soft preferences (organic, keto, grass-fed, ...) get the final

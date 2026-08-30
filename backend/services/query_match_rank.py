@@ -27,6 +27,16 @@ _NEAR_ZERO_KCAL = 5.0
 _DEGENERATE_ZERO_KCAL = 0.5
 _NEAR_ZERO_CAL_PENALTY = 0.25
 
+# Branded modifier tags are a text heuristic over the product name, so they
+# rank instead of filtering (see _modifier_gate in nutrition_service).
+# Additive on the lexical scale and capped: coverage plus head bonus spans
+# roughly 0..1.4, so a fully tagged but irrelevant row (coverage 0) can never
+# outrank a relevant one. That is the failure mode review flagged when Tier 2
+# boosts were additive on the vector score.
+_MODIFIER_BONUS_PER_HIT = 0.05
+_MODIFIER_BONUS_CAP = 0.15
+_NONE_MODIFIER = "NONE"
+
 _ZERO_CAL_ANCHORS = frozenset({"water", "seltzer", "espresso", "americano", "tea"})
 _COFFEE_CALORIE_CONFLICTS = frozenset({
     "latte", "cappuccino", "mocha", "macchiato", "frappe", "frappuccino",
@@ -201,11 +211,33 @@ def query_match_score(query: str, name: str, brand: str = "") -> float:
     return coverage + head_bonus - extra_penalty - brand_penalty - length_penalty
 
 
-def rerank_matches_by_query(query: str, matches: list[dict]) -> list[dict]:
+def modifier_match_bonus(modifiers: dict | None, metadata: dict | None) -> float:
+    """Capped lexical bonus for each query modifier the record actually carries.
+
+    Used where a modifier cannot be a hard filter because the record's tag came
+    from a branded-name heuristic rather than the USDA extractor.
+    """
+    if not modifiers:
+        return 0.0
+    meta = metadata or {}
+    hits = sum(
+        1
+        for category, value in modifiers.items()
+        if value and value != _NONE_MODIFIER and meta.get(category) == value
+    )
+    return min(hits * _MODIFIER_BONUS_PER_HIT, _MODIFIER_BONUS_CAP)
+
+
+def rerank_matches_by_query(
+    query: str, matches: list[dict], modifiers: dict | None = None
+) -> list[dict]:
     """Stable re-rank: query-match (minus near-zero kcal penalty), then vector score.
 
     After sorting, if the top hit is a degenerate 0-kcal row for a food that
     should have calories, promote the best remaining hit with real calories.
+
+    `modifiers` (optional) adds the capped modifier bonus, so soft-filtered
+    branded tags still influence order without overturning relevance.
     """
 
     def sort_key(match: dict) -> tuple[float, float]:
@@ -216,6 +248,7 @@ def rerank_matches_by_query(query: str, matches: list[dict]) -> list[dict]:
         brand = (meta.get("brand_name") or meta.get("brand_owner") or "").strip()
         lexical = query_match_score(query, name, brand)
         lexical -= near_zero_calorie_penalty(query, meta)
+        lexical += modifier_match_bonus(modifiers, meta)
         return (
             lexical,
             float(match.get("score") or 0),

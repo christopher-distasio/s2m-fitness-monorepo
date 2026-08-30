@@ -1,6 +1,7 @@
 """Unit tests for query-match re-ranking (no Pinecone / network)."""
 from backend.services.query_match_rank import (
     is_zero_calorie_query,
+    modifier_match_bonus,
     near_zero_calorie_penalty,
     query_match_score,
     rerank_matches_by_query,
@@ -19,6 +20,56 @@ def _match(
     if calories is not None:
         meta["calories"] = calories
     return {"id": name, "score": score, "metadata": meta}
+
+
+def test_modifier_bonus_counts_only_real_tag_matches():
+    mods = {"cooking_method": "COOKING_FAT", "skin_status": "SKIN_OFF", "fat_level": "NONE"}
+    assert modifier_match_bonus(mods, {}) == 0.0
+    assert modifier_match_bonus(None, {"cooking_method": "COOKING_FAT"}) == 0.0
+    assert modifier_match_bonus(mods, {"cooking_method": "COOKING_FAT"}) == 0.05
+    assert modifier_match_bonus(
+        mods, {"cooking_method": "COOKING_FAT", "skin_status": "SKIN_OFF"}
+    ) == 0.10
+    # "NONE" is a sentinel, never a tag to match against.
+    assert modifier_match_bonus({"fat_level": "NONE"}, {"fat_level": "NONE"}) == 0.0
+
+
+def test_modifier_bonus_is_capped():
+    mods = {f"cat_{i}": "V" for i in range(10)}
+    meta = {f"cat_{i}": "V" for i in range(10)}
+    assert modifier_match_bonus(mods, meta) == 0.15
+
+
+def test_modifier_tag_breaks_a_tie_between_equal_names():
+    """Soft-filtered branded tags must still order the result."""
+    plain = _match("Great Value Greek Yogurt", 0.80, brand="Great Value", calories=90)
+    tagged = _match("Great Value Greek Yogurt", 0.80, brand="Great Value", calories=90)
+    tagged["id"] = "tagged"
+    tagged["metadata"]["fat_level"] = "FAT_LEVEL_FREE"
+
+    ranked = rerank_matches_by_query(
+        "great value greek yogurt", [plain, tagged], {"fat_level": "FAT_LEVEL_FREE"}
+    )
+    assert ranked[0]["id"] == "tagged"
+
+
+def test_modifier_bonus_cannot_outrank_a_relevant_name():
+    """A capped bonus must not promote an irrelevant but fully tagged row."""
+    relevant = _match("Bananas, raw", 0.81, calories=89)
+    irrelevant = _match("PORK SAUSAGE PATTY", 0.80, calories=300)
+    irrelevant["metadata"]["cooking_method"] = "COOKING_FAT"
+
+    ranked = rerank_matches_by_query(
+        "banana", [irrelevant, relevant], {"cooking_method": "COOKING_FAT"}
+    )
+    assert ranked[0]["metadata"]["name"] == "Bananas, raw"
+
+
+def test_rerank_without_modifiers_is_unchanged():
+    matches = [_match("Banana chips", 0.88), _match("Bananas, raw", 0.81)]
+    assert rerank_matches_by_query("banana", list(matches)) == rerank_matches_by_query(
+        "banana", list(matches), None
+    )
 
 
 def test_banana_raw_beats_chips_and_bread():
