@@ -26,7 +26,11 @@ from backend.services.dietary_filters import (
     lactose_groups_need_clarification,
     lactose_contrastive_resolution,
 )
-from backend.services.nutrient_fields import extras_from_scaled, scale_extra_nutrients
+from backend.services.nutrient_fields import (
+    EXTRA_NUTRIENT_FIELDS,
+    extras_from_scaled,
+    scale_extra_nutrients,
+)
 from backend.models import DietaryPreferences
 
 load_dotenv()
@@ -275,6 +279,80 @@ def get_serving_size_g(metadata: dict) -> tuple[float, str]:
             return grams, "sr_legacy_default_portion"
 
     return 100, "no_serving_data_fallback"
+
+
+# ============================================================================
+# NUTRIENT BASIS NORMALIZATION
+# ============================================================================
+# USDA branded rows store food_nutrient.amount per 100 g, which is the basis
+# every scaling helper below assumes. The ~2.5k US rows whose data_source is
+# "Euromonitor" break that rule: they carry the package label's per-SERVING
+# numbers verbatim. Scaling those by serving_size_g/100 counts the serving
+# twice -- Dannon Light + Fit (fdc_id 2756921) stores 80 kcal against a
+# 150.25 g cup and was reported as 80 * 1.5025 = 120.2 kcal.
+#
+# Measured on branded_food.csv 2026-04-30, restricted to plain fluid milk
+# because its energy density is physically pinned to 0.30-0.70 kcal/g: of 92
+# Euromonitor rows, 0 land inside that band read as per-100g and 86 land inside
+# it read as per-serving. The same test on GDSN rows inverts (2/2 per-100g),
+# and reading LI/GDSN as per-serving would push 40% of the whole dataset past
+# the 9.2 kcal/g ceiling of pure fat. So this is one provider's convention,
+# not a global flip -- hence a data_source allowlist rather than a heuristic.
+PER_SERVING_DATA_SOURCES = frozenset({"euromonitor"})
+
+# Nutrient keys carried on the per-100g basis, i.e. everything the scaling
+# helpers multiply by serving_size_g/100.
+_BASIS_SCALED_NUTRIENT_KEYS: tuple[str, ...] = (
+    "calories",
+    "protein",
+    "carbs",
+    "fat",
+) + EXTRA_NUTRIENT_FIELDS
+
+# Stamped once normalization has run so a second pass cannot divide again.
+NUTRIENT_BASIS_NORMALIZED_KEY = "nutrient_basis_per_100g"
+
+
+def stores_nutrients_per_serving(metadata: dict | None) -> bool:
+    """True when this row's provider stores label per-serving values rather
+    than the per-100g amounts the rest of the branded dataset uses."""
+    source = str((metadata or {}).get("data_source") or "").strip().lower()
+    return source in PER_SERVING_DATA_SOURCES
+
+
+def normalize_nutrients_to_per_100g(metadata: dict | None) -> dict:
+    """Put a per-serving provider's nutrients onto the per-100g basis. Returns
+    the mapping untouched for the ~99.9% of rows already stored per 100 g.
+
+    Divides by the same sanitized gram weight get_serving_size_g reports, so
+    scale_nutrients(meta, get_serving_size_g(meta)[0]) reproduces the
+    provider's original label numbers instead of squaring the serving factor.
+    Converting here rather than special-casing scale_nutrients keeps portion
+    options, candidate summaries, and ranking on one consistent basis.
+    """
+    meta = metadata or {}
+    if not stores_nutrients_per_serving(meta):
+        return meta
+    if meta.get(NUTRIENT_BASIS_NORMALIZED_KEY):
+        return meta
+    serving_size_g, _ = get_serving_size_g(meta)
+    if serving_size_g <= 0:
+        return meta
+
+    converted = dict(meta)
+    converted[NUTRIENT_BASIS_NORMALIZED_KEY] = True
+    if serving_size_g == 100:
+        return converted
+    factor = 100.0 / serving_size_g
+    for key in _BASIS_SCALED_NUTRIENT_KEYS:
+        raw = meta.get(key)
+        if raw is None:
+            continue
+        try:
+            converted[key] = float(raw) * factor
+        except (TypeError, ValueError):
+            continue
+    return converted
 
 
 def record_display_name(metadata: dict | None) -> str:
@@ -867,6 +945,9 @@ def _qdrant_results_to_matches(results) -> list[dict]:
 
     Uses payload["qdrant_id"] (the original fdc_id, stored at embed time) as
     "id" — NOT Qdrant's internal point id, which is meaningless outside Qdrant.
+
+    Nutrients are put on the per-100g basis here so ranking, phantom detection,
+    portion options, and the primary result all read one basis.
     """
     matches = []
     for point in results:
@@ -874,7 +955,7 @@ def _qdrant_results_to_matches(results) -> list[dict]:
         matches.append({
             "id": payload.get("qdrant_id"),
             "score": point.score,
-            "metadata": payload,
+            "metadata": normalize_nutrients_to_per_100g(payload),
         })
     return matches
 
