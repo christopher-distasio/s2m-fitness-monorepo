@@ -1,0 +1,40 @@
+---
+description: Standing engineering workflow — verification, bug triage, production-data safety, decision logging, commit hygiene
+alwaysApply: true
+---
+
+# Engineering Workflow
+
+Canonical copy: `docs/engineering-workflow.md`. This is standing process, not a status update. Apply it to every non-trivial change.
+
+## Before writing a fix or feature
+
+- Produce a numbered verification checklist **before** commit/PR, not after: diff-stat, quoted test names, exact file output.
+- Schema-diff real documents before building any extraction or migration script.
+- When verifying a claim, show literal output — line-numbered file reads or raw diffs. Never a re-typed summary; a paraphrased paste has already caused a phantom bug report.
+
+## When a bug is found
+
+1. Reproduce with the cleanest possible input before writing it up. Voice/transcription noise has twice masqueraded as a backend defect.
+2. Retype voice queries as text to separate Whisper error from real backend error before concluding anything.
+3. Quantify blast radius immediately — count how many of the ~2M records share the pattern — before deciding urgency. Two examples is not a scope estimate.
+
+## Before any write to production data
+
+- TEST_MODE / dry-run first, always. Real writes require explicit user sign-off after the dry run.
+- Never run a destructive command (`docker rm`, collection drop, bulk update) against a container holding data without a verified backup. Say so and stop rather than proceeding.
+- Manually review a real sample of automated extraction output (not just the aggregate error rate) before trusting it at scale. Aggregates hide false-positive patterns.
+- Prefer a staging copy of Qdrant/Mongo over the live instance. Testing against the only instance is currently tolerable only because there are no real users.
+
+## Decision discipline
+
+- Flag consequential, hard-to-reverse decisions (schema, tiering, scope definitions) in the moment; do not finalize them mid-debugging. Recommend a separate review instead.
+- Append one line per consequential decision to `DECISIONS.md` at the repo root: date, decision, one-line rationale. Do this as part of the change, not later.
+- Recommend multi-AI review (GPT + Gemini + Claude synthesis) for significant architectural decisions.
+
+## Commit hygiene
+
+- Land isolated, independently-verified fixes. Do not batch unrelated in-progress work into one commit while other issues in the same area are still open.
+- Commit frequently with verb-led, detailed messages; `git add -A` consistently.
+- Propose grouping and messages for everything since the last push and wait for approval before `git commit`. See `.cursor/rules/git-commit-flow.mdc`.
+- Four-tier testing for any data/ranking/parsing logic change: Tier 1 the specific bug, Tier 2 adjacent cases, Tier 3 promote to the pytest eval suite, Tier 4 both voice and text paths for shared logic.

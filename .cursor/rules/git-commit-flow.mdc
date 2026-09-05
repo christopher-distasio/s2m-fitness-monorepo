@@ -1,0 +1,17 @@
+---
+description: Propose commit grouping and messages since last push; wait for approval before committing
+alwaysApply: true
+---
+
+# Git commit flow
+
+Never `git commit` until the user approves the proposed messages. "Suggest a commit" is not approval to run it.
+
+## Before every commit (or when asked to commit / wrap up)
+
+1. Inspect `origin` tracking, `git log @{u}..HEAD`, unstaged/staged diffs, and untracked files.
+2. Group into isolated, independently-verified commits. Do not batch unrelated work. Match existing style: conventional type (`fix`/`feat`/`test`/`docs`/`chore`), lowercase subject, why-not-what body.
+3. Show the proposed sequence **since the last push** (unpushed commits stay as-is; new work is additional commits). For each proposed commit: files, subject, body.
+4. Wait. Commit only the approved set, in order, with HEREDOC messages. Do not push unless asked.
+
+If `DECISIONS.md` should gain a line for a consequential choice in the same change, say so in the proposal rather than silently omitting it.
