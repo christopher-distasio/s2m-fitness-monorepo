@@ -176,6 +176,7 @@ with open(get_file("branded_food.csv"), newline="", encoding="utf-8") as f:
             "material_code": (row.get("material_code") or "").strip(),
             "modified_date": row.get("modified_date", ""),
             "serving_size_g": serving_size_g,
+            "serving_size_unit": serving_size_unit,
         }
 
 print(f"Found {len(us_fdc_ids):,} US branded food IDs")
@@ -210,6 +211,7 @@ with open(get_file("food.csv"), newline="", encoding="utf-8") as f:
             "description": description,
             "modified_date": meta.get("modified_date", ""),
             "serving_size_g": meta.get("serving_size_g"),
+            "serving_size_unit": meta.get("serving_size_unit", ""),
             "brand_name": meta.get("brand_name", ""),
             "brand_owner": meta.get("brand_owner", ""),
             "subbrand_name": meta.get("subbrand_name", ""),

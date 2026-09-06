@@ -12,6 +12,7 @@ Add an entry as part of the change that makes the decision, not afterward. Forma
 
 ## Entries
 
+- **2026-09-05 — Restrict serving_size_g ×1000 sanitizer to USDA MG/mc units.** ×1000 is the correct undo of process_branded's MG/1000 (mc/1e6) on 7,422 LI mg + 63 LI mc rows; applying it to g/ml sub-gram servings and the 35 Euromonitor cup-fractions was a false positive. Unit is not on live Qdrant payloads, so a CSV-derived fdc_id map is the read-path fallback. Spice/spray and Euromonitor serving rules stay deferred.
 - **2026-09-04 — Normalize Euromonitor branded nutrients from per-serving onto the per-100g basis at Qdrant-read time, via a `data_source` allowlist.** Measured on branded_food.csv 2026-04-30: Euromonitor fluid-milk energy densities only make sense as label-per-serving; GDSN/LI invert, so this is one provider's convention, not a global flip.
 - **2026-08-30 — Scoped the `lactose_free` definition rather than inferring it broadly.** TODO: confirm rationale in a calm review; flagged mid-session and should not be treated as final until reviewed.
 - **2026-08-30 — Adopted a suppression list for `light` / `raw` modifier terms during modifier extraction.** These terms produced false-positive modifier matches in the two-round manual review of 200 branded records.

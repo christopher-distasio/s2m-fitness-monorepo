@@ -61,7 +61,7 @@ TEXT_METADATA_FIELDS = [
     "ingredients", "not_a_significant_source_of", "data_source",
     "household_serving_fulltext", "branded_food_category", "package_weight",
     "preparation_state_code", "discontinued_date", "short_description",
-    "available_date", "trade_channel", "material_code",
+    "available_date", "trade_channel", "material_code", "serving_size_unit",
 ]
 
 # Per-field character caps. "ingredients" gets generous room since it's the

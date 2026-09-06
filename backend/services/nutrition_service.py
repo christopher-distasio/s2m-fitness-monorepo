@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -225,13 +227,44 @@ def _parse_portions(metadata: dict) -> list[dict]:
     return portions if isinstance(portions, list) else []
 
 
-def _sanitize_serving_size_g(serving_size_g: float) -> tuple[float, str | None]:
-    """Fix implausibly small branded serving weights.
+# USDA branded_food.csv 2026-04-30, US market, serving_size_unit in {mg, mc}.
+# Live Qdrant payloads do not store the unit (process_branded converted it
+# away); this map is the read-path fallback so MG-means-grams still undoes
+# ingest /1000 (mc /1e6) without also rewriting spices/sprays/Euromonitor.
+_MG_MC_UNIT_MAP_PATH = Path(__file__).with_name("usda_mg_mc_serving_units.json")
+_MG_UNITS = frozenset({"mg"})
+_MC_UNITS = frozenset({"mc"})
+_X1000_MIN_G = 5.0
+_X1000_MAX_G = 2000.0
 
-    Some USDA branded rows store grams off by 1000 (e.g. 0.056 instead of 56),
-    which scales a real 125 kcal/100g food down to ~0.07 kcal per serving.
-    If ×1000 lands in a normal serving range, use that; otherwise fall back
-    to 100g so we never silently log ~0 for a caloric food.
+
+@lru_cache(maxsize=1)
+def _mg_mc_serving_units() -> dict[str, str]:
+    try:
+        return json.loads(_MG_MC_UNIT_MAP_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+
+
+def _serving_size_unit_from_metadata(metadata: dict) -> str:
+    raw = metadata.get("serving_size_unit")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip().lower()
+    fid = metadata.get("fdc_id") or metadata.get("qdrant_id")
+    if fid is None or fid == "":
+        return ""
+    return _mg_mc_serving_units().get(str(fid), "")
+
+
+def _sanitize_serving_size_g(
+    serving_size_g: float,
+    serving_size_unit: str | None = None,
+) -> tuple[float, str | None]:
+    """Undo ingest when USDA labeled grams as MG/mc.
+
+    process_branded divides MG by 1000 (mc by 1e6). Multiplying back is
+    correct only for that unit class — sub-gram g/ml servings (spices,
+    sprays) and Euromonitor cup-fractions must stay as stored.
     """
     try:
         grams = float(serving_size_g)
@@ -241,8 +274,14 @@ def _sanitize_serving_size_g(serving_size_g: float) -> tuple[float, str | None]:
         return grams, None
     if grams <= 0:
         return 100.0, "serving_size_g_nonpositive_fallback"
-    bumped = grams * 1000.0
-    if 5.0 <= bumped <= 2000.0:
+    unit = (serving_size_unit or "").strip().lower()
+    if unit in _MG_UNITS:
+        bumped = grams * 1000.0
+    elif unit in _MC_UNITS:
+        bumped = grams * 1_000_000.0
+    else:
+        return grams, None
+    if _X1000_MIN_G <= bumped <= _X1000_MAX_G:
         return bumped, "serving_size_g_x1000_fix"
     return 100.0, "serving_size_g_implausible_fallback"
 
@@ -265,7 +304,8 @@ def get_serving_size_g(metadata: dict) -> tuple[float, str]:
         except (TypeError, ValueError):
             raw_f = None
         if raw_f is not None and raw_f != 0:
-            grams, fix = _sanitize_serving_size_g(raw_f)
+            unit = _serving_size_unit_from_metadata(metadata)
+            grams, fix = _sanitize_serving_size_g(raw_f, serving_size_unit=unit)
             if fix:
                 return grams, fix
             return grams, "branded_serving_size"
@@ -273,6 +313,8 @@ def get_serving_size_g(metadata: dict) -> tuple[float, str]:
     for portion in _parse_portions(metadata):
         gram_weight = portion.get("gram_weight")
         if gram_weight:
+            # Portions already store gram_weight; do not apply the branded
+            # MG-means-grams undo here.
             grams, fix = _sanitize_serving_size_g(gram_weight)
             if fix:
                 return grams, fix
