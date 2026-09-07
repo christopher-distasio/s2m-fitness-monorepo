@@ -354,6 +354,15 @@ _BASIS_SCALED_NUTRIENT_KEYS: tuple[str, ...] = (
 # Stamped once normalization has run so a second pass cannot divide again.
 NUTRIENT_BASIS_NORMALIZED_KEY = "nutrient_basis_per_100g"
 
+# Passive Atwater-vs-stored-calorie inconsistency marker. USDA branded source
+# data is internally inconsistent on ~9% of rows; nothing identifies which of
+# the four numbers is wrong, so this is metadata only — it must not rank,
+# block a log, or substitute another record. Tune here, not inline.
+CALORIE_MACRO_MISMATCH_REL_THRESHOLD = 0.15
+CALORIE_MACRO_MISMATCH_KEY = "calorie_macro_mismatch"
+CALORIE_MACRO_MISMATCH_REL_KEY = "calorie_macro_mismatch_rel"
+CALORIE_MACRO_MISMATCH_KCAL_KEY = "calorie_macro_mismatch_kcal"
+
 
 def stores_nutrients_per_serving(metadata: dict | None) -> bool:
     """True when this row's provider stores label per-serving values rather
@@ -395,6 +404,60 @@ def normalize_nutrients_to_per_100g(metadata: dict | None) -> dict:
         except (TypeError, ValueError):
             continue
     return converted
+
+
+def _nutrient_float(metadata: dict, key: str) -> float | None:
+    raw = metadata.get(key)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def calorie_macro_mismatch_fields(metadata: dict | None) -> dict | None:
+    """Atwater residual vs stored calories, or None when unknown.
+
+    computed = 4*protein + 4*carbs + 9*fat on the same basis the metadata
+    already uses (per-100g after normalize_nutrients_to_per_100g). None means
+    a macro is missing or stored calories <= 0 — that is unknown, not a
+    False flag. False is reserved for a computed residual at or under
+    CALORIE_MACRO_MISMATCH_REL_THRESHOLD.
+    """
+    meta = metadata or {}
+    calories = _nutrient_float(meta, "calories")
+    protein = _nutrient_float(meta, "protein")
+    carbs = _nutrient_float(meta, "carbs")
+    fat = _nutrient_float(meta, "fat")
+    if calories is None or protein is None or carbs is None or fat is None:
+        return None
+    if calories <= 0:
+        return None
+    computed = 4.0 * protein + 4.0 * carbs + 9.0 * fat
+    rel = abs(computed - calories) / calories
+    serving_g, _ = get_serving_size_g(meta)
+    abs_kcal = abs(computed - calories) * (serving_g / 100.0)
+    return {
+        CALORIE_MACRO_MISMATCH_KEY: rel > CALORIE_MACRO_MISMATCH_REL_THRESHOLD,
+        CALORIE_MACRO_MISMATCH_REL_KEY: rel,
+        CALORIE_MACRO_MISMATCH_KCAL_KEY: abs_kcal,
+    }
+
+
+def attach_calorie_macro_mismatch(metadata: dict) -> dict:
+    """Stamp mismatch fields when they can be computed; leave unknown absent.
+
+    Copies before stamping so a live Qdrant payload is not mutated. Ranking,
+    phantom detection, portion options, and _pick_match_with_usable_calories
+    do not read these keys.
+    """
+    fields = calorie_macro_mismatch_fields(metadata)
+    if fields is None:
+        return metadata
+    stamped = dict(metadata)
+    stamped.update(fields)
+    return stamped
 
 
 def record_display_name(metadata: dict | None) -> str:
@@ -989,7 +1052,9 @@ def _qdrant_results_to_matches(results) -> list[dict]:
     "id" — NOT Qdrant's internal point id, which is meaningless outside Qdrant.
 
     Nutrients are put on the per-100g basis here so ranking, phantom detection,
-    portion options, and the primary result all read one basis.
+    portion options, and the primary result all read one basis. The Atwater
+    mismatch marker is stamped on that same normalized metadata and is not
+    consulted by those consumers.
     """
     matches = []
     for point in results:
@@ -997,7 +1062,9 @@ def _qdrant_results_to_matches(results) -> list[dict]:
         matches.append({
             "id": payload.get("qdrant_id"),
             "score": point.score,
-            "metadata": normalize_nutrients_to_per_100g(payload),
+            "metadata": attach_calorie_macro_mismatch(
+                normalize_nutrients_to_per_100g(payload)
+            ),
         })
     return matches
 
@@ -1267,4 +1334,13 @@ async def lookup_food(
         "database_score_top1": retrieval_top1,
         "database_score_top2": retrieval_top2,
         **allergen_states,
+        **{
+            key: metadata[key]
+            for key in (
+                CALORIE_MACRO_MISMATCH_KEY,
+                CALORIE_MACRO_MISMATCH_REL_KEY,
+                CALORIE_MACRO_MISMATCH_KCAL_KEY,
+            )
+            if key in metadata
+        },
     }
