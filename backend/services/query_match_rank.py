@@ -228,6 +228,28 @@ def modifier_match_bonus(modifiers: dict | None, metadata: dict | None) -> float
     return min(hits * _MODIFIER_BONUS_PER_HIT, _MODIFIER_BONUS_CAP)
 
 
+def match_sort_tiebreak(match: dict) -> str:
+    """Ascending last sort key so equal scores don't inherit Qdrant's hit order.
+
+    Always `str`. USDA `fdc_id` is a string on some payloads and an int on
+    others; coercing here keeps the key type consistent. Lexicographic order
+    on numeric ids is not numeric order ("9" > "100") — that is fine for
+    determinism, which is the only job of this key.
+
+    Scores must be negated in the sort key (`(-score, match_sort_tiebreak(m))`)
+    so this id sorts ascending. `reverse=True` on the whole tuple would prefer
+    newer (higher) fdc_ids on every catalog tie, a silent ranking change.
+
+    Measured 2026-09-07: ritz crackers 2140021 vs 1690739 flipped across two
+    runs in one process when the key stopped at (lexical, vector).
+    """
+    raw = match.get("id")
+    if raw is None:
+        meta = match.get("metadata") or {}
+        raw = meta.get("fdc_id") or meta.get("qdrant_id")
+    return "" if raw is None else str(raw)
+
+
 def rerank_matches_by_query(
     query: str, matches: list[dict], modifiers: dict | None = None
 ) -> list[dict]:
@@ -240,7 +262,7 @@ def rerank_matches_by_query(
     branded tags still influence order without overturning relevance.
     """
 
-    def sort_key(match: dict) -> tuple[float, float]:
+    def sort_key(match: dict) -> tuple[float, float, str]:
         meta = match.get("metadata") or {}
         # Payload field is "description" in Qdrant; accept "name" too so unit
         # fixtures and any legacy metadata still re-rank correctly.
@@ -249,10 +271,13 @@ def rerank_matches_by_query(
         lexical = query_match_score(query, name, brand)
         lexical -= near_zero_calorie_penalty(query, meta)
         lexical += modifier_match_bonus(modifiers, meta)
+        # Negate score terms so the id tiebreak sorts ascending. reverse=True
+        # on (lexical, score, id) would rank newer fdc_ids above older ones.
         return (
-            lexical,
-            float(match.get("score") or 0),
+            -lexical,
+            -float(match.get("score") or 0),
+            match_sort_tiebreak(match),
         )
 
-    ranked = sorted(matches, key=sort_key, reverse=True)
+    ranked = sorted(matches, key=sort_key)
     return _promote_caloric_alternative(query, ranked)

@@ -1,8 +1,9 @@
 """Lactose-free filter accepts dairy-free; reverse is never inferred."""
 
-from backend.models import AllergyConstraint, Tier1Preferences
+from backend.models import AllergyConstraint, Tier1Preferences, Tier2Preferences
 from backend.services.confirmation import contrastive_question
 from backend.services.dietary_filters import (
+    apply_tier_2_boosts,
     build_tier_1_filter,
     is_dairy_free_not_lactose,
     is_literal_lactose_free,
@@ -110,3 +111,30 @@ def test_tag_helpers():
     assert is_literal_lactose_free(lit) is True
     assert is_dairy_free_not_lactose(lit) is False
     assert is_dairy_free_not_lactose(plant) is True
+
+
+def test_lactose_rank_tied_score_ignores_input_order():
+    a = {
+        "id": "2140021",
+        "score": 0.80,
+        "metadata": {"lactose_free": "lactose_free"},
+    }
+    b = {
+        "id": "1690739",
+        "score": 0.80,
+        "metadata": {"lactose_free": "lactose_free"},
+    }
+    order_ab = [m["id"] for m in rank_lactose_preference([a, b])]
+    order_ba = [m["id"] for m in rank_lactose_preference([b, a])]
+    assert order_ab == order_ba
+    assert order_ab[0] == "1690739"
+
+
+def test_tier_2_boost_tied_score_ignores_input_order():
+    prefs = Tier2Preferences(organic=True)
+    a = {"id": "2140021", "score": 0.80, "metadata": {}}
+    b = {"id": "1690739", "score": 0.80, "metadata": {}}
+    order_ab = [m["id"] for m in apply_tier_2_boosts([a, b], prefs)]
+    order_ba = [m["id"] for m in apply_tier_2_boosts([b, a], prefs)]
+    assert order_ab == order_ba
+    assert order_ab[0] == "1690739"

@@ -22,6 +22,7 @@ from qdrant_client.http import models as qmodels
 from backend.models import DietaryPreferences, Tier1Preferences, Tier2Preferences
 from backend.services.confirmation import contrastive_question
 from backend.services.modifier_extract import query_mentions_lactose_free
+from backend.services.query_match_rank import match_sort_tiebreak
 
 FDA_ALLERGENS = [
     "milk", "egg", "fish", "shellfish", "tree_nut",
@@ -167,7 +168,12 @@ def apply_tier_2_boosts(
         boost_factor = min(hit_count * weight_per_match, max_boost)
         m["final_score"] = m.get("score", 0.0) * (1.0 + boost_factor)
 
-    matches.sort(key=lambda m: m.get("final_score", m.get("score", 0.0)), reverse=True)
+    matches.sort(
+        key=lambda m: (
+            -m.get("final_score", m.get("score", 0.0)),
+            match_sort_tiebreak(m),
+        ),
+    )
     return matches
 
 
@@ -216,10 +222,10 @@ def rank_lactose_preference(matches: list[dict]) -> list[dict]:
     """Literal lactose-free tags outrank dairy-free-only (plant) tags."""
     matches.sort(
         key=lambda m: (
-            1 if is_literal_lactose_free(m) else 0,
-            m.get("final_score", m.get("score", 0.0)),
+            -(1 if is_literal_lactose_free(m) else 0),
+            -m.get("final_score", m.get("score", 0.0)),
+            match_sort_tiebreak(m),
         ),
-        reverse=True,
     )
     return matches
 

@@ -651,7 +651,11 @@ def _match_product_key(match: dict) -> str:
 
 
 def collapse_retrieval_clones(matches: list[dict]) -> list[dict]:
-    """Keep one hit per display name so SKU duplicates don't fake a close race."""
+    """Keep one hit per display name so SKU duplicates don't fake a close race.
+
+    First-wins: not a sort. Deterministic only if `matches` is already ordered
+    with an fdc_id tiebreaker (rerank / tier-2 / lactose preference).
+    """
     seen: set[str] = set()
     out: list[dict] = []
     for match in matches:

@@ -1,6 +1,7 @@
 """Unit tests for query-match re-ranking (no Pinecone / network)."""
 from backend.services.query_match_rank import (
     is_zero_calorie_query,
+    match_sort_tiebreak,
     modifier_match_bonus,
     near_zero_calorie_penalty,
     query_match_score,
@@ -242,3 +243,64 @@ def test_missing_calories_penalized_like_zero_for_caloric_query():
     ]
     ranked = rerank_matches_by_query("Dan and Light and Fit Yogurt", matches)
     assert ranked[0]["id"] == "DANNON LIGHT + FIT VANILLA YOGURT"
+
+
+def test_match_sort_tiebreak_always_returns_str():
+    assert match_sort_tiebreak({"id": 2140021}) == "2140021"
+    assert match_sort_tiebreak({"id": "2140021"}) == "2140021"
+    assert match_sort_tiebreak({"id": None, "metadata": {"fdc_id": 1690739}}) == "1690739"
+    assert isinstance(match_sort_tiebreak({"id": 1}), str)
+    assert match_sort_tiebreak({}) == ""
+
+
+def test_tiebreak_does_not_outrank_a_better_score():
+    """Lower fdc_id must not beat a strictly better lexical/vector score."""
+    worse = {
+        "id": "100",
+        "score": 0.50,
+        "metadata": {"name": "RITZ CRACKERS", "calories": 80},
+    }
+    better = {
+        "id": "9999999",
+        "score": 0.90,
+        "metadata": {"name": "RITZ CRACKERS", "calories": 80},
+    }
+    ranked = rerank_matches_by_query("ritz crackers", [worse, better])
+    assert ranked[0]["id"] == "9999999"
+
+
+def test_tied_score_same_name_ignores_input_order():
+    """Qdrant can return equal-score SKUs in either order; top-1 must not flip."""
+    a = {
+        "id": "2140021",
+        "score": 0.85,
+        "metadata": {"name": "RITZ CRACKERS", "calories": 80},
+    }
+    b = {
+        "id": "1690739",
+        "score": 0.85,
+        "metadata": {"name": "RITZ CRACKERS", "calories": 80},
+    }
+    order_ab = [m["id"] for m in rerank_matches_by_query("ritz crackers", [a, b])]
+    order_ba = [m["id"] for m in rerank_matches_by_query("ritz crackers", [b, a])]
+    assert order_ab == order_ba
+    assert order_ab[0] == "1690739"
+
+
+def test_collapse_after_rerank_keeps_the_tied_id_winner():
+    from backend.services.nutrition_service import collapse_retrieval_clones
+
+    a = {
+        "id": "2140021",
+        "score": 0.85,
+        "metadata": {"name": "RITZ CRACKERS", "calories": 80},
+    }
+    b = {
+        "id": "1690739",
+        "score": 0.85,
+        "metadata": {"name": "RITZ CRACKERS", "calories": 80},
+    }
+    for incoming in ([a, b], [b, a]):
+        ranked = rerank_matches_by_query("ritz crackers", incoming)
+        out = collapse_retrieval_clones(ranked)
+        assert [m["id"] for m in out] == ["1690739"]
