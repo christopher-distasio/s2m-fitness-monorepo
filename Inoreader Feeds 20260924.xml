@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="1.0">
+  <head>
+    <title>Feeds of Christopher DiStasio from Inoreader [https://www.inoreader.com]</title>
+  </head>
+  <body>
+    <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=AXON" htmlUrl="http://finance.yahoo.com/q/h?s=AXON"/>
+    <outline text="SEC EDGAR Filings (CIK: 0000896716)" title="SEC EDGAR Filings (CIK: 0000896716)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000896716&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000896716&amp;owner=exclude&amp;start=0&amp;count=40"/>
+    <outline text="AXON" title="AXON">
+      <outline text="&quot;Axon Enterprise OR AXON stock&quot; - Google News" title="&quot;Axon Enterprise OR AXON stock&quot; - Google News" type="rss" xmlUrl="https://news.google.com/rss/search?q=Axon+Enterprise+OR+AXON+stock&amp;hl=en-US&amp;gl=US&amp;ceid=US:en" htmlUrl="https://news.google.com/search?q=Axon+Enterprise+OR+AXON+stock&amp;hl=en-US&amp;gl=US&amp;ceid=US:en"/>
+    </outline>
+    <outline text="AMZN" title="AMZN">
+      <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=AMZN" htmlUrl="http://finance.yahoo.com/q/h?s=amzn"/>
+      <outline text="SEC EDGAR Filings (CIK: 0001018724)" title="SEC EDGAR Filings (CIK: 0001018724)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001018724&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001018724&amp;owner=exclude&amp;start=0&amp;count=40"/>
+    </outline>
+    <outline text="ASML" title="ASML">
+      <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=ASML" htmlUrl="http://finance.yahoo.com/q/h?s=ASML"/>
+      <outline text="SEC EDGAR Filings (CIK: 0001334926)" title="SEC EDGAR Filings (CIK: 0001334926)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001334926&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001334926&amp;owner=exclude&amp;start=0&amp;count=40"/>
+    </outline>
+    <outline text="AVGO" title="AVGO">
+      <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=AVGO" htmlUrl="http://finance.yahoo.com/q/h?s=AVGO"/>
+      <outline text="SEC EDGAR Filings (CIK: 0001121788)" title="SEC EDGAR Filings (CIK: 0001121788)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001121788&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001121788&amp;owner=exclude&amp;start=0&amp;count=40"/>
+    </outline>
+    <outline text="CRWD" title="CRWD">
+      <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=CRWD" htmlUrl="http://finance.yahoo.com/q/h?s=CRWD"/>
+      <outline text="SEC EDGAR Filings (CIK: 0001535527)" title="SEC EDGAR Filings (CIK: 0001535527)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001535527&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001535527&amp;owner=exclude&amp;start=0&amp;count=40"/>
+    </outline>
+    <outline text="GOOG" title="GOOG">
+      <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=GOOG" htmlUrl="http://finance.yahoo.com/q/h?s=goog"/>
+      <outline text="SEC EDGAR Filings (CIK: 0001652044)" title="SEC EDGAR Filings (CIK: 0001652044)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001652044&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001652044&amp;owner=exclude&amp;start=0&amp;count=40"/>
+    </outline>
+    <outline text="ISRG" title="ISRG">
+      <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=ISRG" htmlUrl="http://finance.yahoo.com/q/h?s=ISRG"/>
+      <outline text="SEC EDGAR Filings (CIK: 0001035267)" title="SEC EDGAR Filings (CIK: 0001035267)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001035267&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001035267&amp;owner=exclude&amp;start=0&amp;count=40"/>
+    </outline>
+    <outline text="NVDA" title="NVDA">
+      <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=NVDA" htmlUrl="http://finance.yahoo.com/q/h?s=NVDA"/>
+      <outline text="SEC EDGAR Filings (CIK: 0001045810)" title="SEC EDGAR Filings (CIK: 0001045810)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001045810&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001045810&amp;owner=exclude&amp;start=0&amp;count=40"/>
+    </outline>
+    <outline text="VEEV" title="VEEV">
+      <outline text="VEEVA SYSTEMS INC  (0001393052)" title="VEEVA SYSTEMS INC  (0001393052)" type="rss" xmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001393052&amp;type=&amp;dateb=&amp;owner=exclude&amp;count=40&amp;search_text=&amp;myHID=&amp;output=atom" htmlUrl="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001393052&amp;owner=exclude&amp;start=0&amp;count=40"/>
+      <outline text="Yahoo Finance News" title="Yahoo Finance News" type="rss" xmlUrl="http://finance.yahoo.com/rss/headline?s=VEEV" htmlUrl="http://finance.yahoo.com/q/h?s=VEEV"/>
+    </outline>
+  </body>
+</opml>
