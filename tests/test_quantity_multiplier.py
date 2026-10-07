@@ -10,10 +10,12 @@ import pytest
 
 from backend.services.food_parser import (
     SYSTEM_PROMPT,
+    grams_per_tablespoon,
     leading_fraction,
     parse_food_input,
     parse_quantity_multiplier,
     stated_fluid_grams,
+    stated_volume_unit,
     stated_weight_grams,
 )
 
@@ -354,6 +356,99 @@ async def test_8_fl_oz_of_milk_scales_by_volume():
     result = await _parse("8 oz of milk", "8 fl oz", "milk", MILK_NUTRITION)
     _assert_scaled(result, MILK_NUTRITION, 8 * 29.5735 / 244.0)
     assert result["amount"] == 8.0
+
+
+# --- kitchen volumes convert through the food's own volume portion ---
+
+OLIVE_OIL_NUTRITION = {
+    "calories": 2016,
+    "carbs": 0.0,
+    "protein": 0.0,
+    "fat": 224.0,
+    "nutrients": {},
+    "serving_size_g": 224.0,
+    "candidates": [],
+    "portion_options": [
+        {"label": "1 tablespoon", "gram_weight": 14.0, "calories": 126.0},
+        {"label": "1 cup", "gram_weight": 224.0, "calories": 2016.0},
+    ],
+    "resolution": {"status": "ok"},
+}
+
+DRY_RICE_NUTRITION = {
+    "calories": 150,
+    "carbs": 33.0,
+    "protein": 3.0,
+    "fat": 0.5,
+    "nutrients": {},
+    "serving_size_g": 45.0,
+    "candidates": [],
+    "portion_options": [{"label": "1/4 cup", "gram_weight": 45.0, "calories": 150.0}],
+    "resolution": {"status": "ok"},
+}
+
+ALMOND_NUTRITION = {
+    "calories": 160,
+    "carbs": 6.0,
+    "protein": 6.0,
+    "fat": 14.0,
+    "nutrients": {},
+    "serving_size_g": 28.0,
+    "candidates": [],
+    "portion_options": [{"label": "1 ONZ", "gram_weight": 28.0, "calories": 160.0}],
+    "resolution": {"status": "resolved", "axis": None},
+}
+
+
+def test_stated_volume_unit():
+    assert stated_volume_unit("1 tablespoon", "serving") == "tablespoon"
+    assert stated_volume_unit("1/4 cup", "cup") == "cup"
+    assert stated_volume_unit("2 tsp", "") == "tsp"
+    assert stated_volume_unit("2", "count") is None
+    assert stated_volume_unit("100 grams", "grams") is None
+
+
+def test_grams_per_tablespoon_from_portions():
+    assert grams_per_tablespoon(OLIVE_OIL_NUTRITION["portion_options"]) == 14.0
+    assert grams_per_tablespoon(DRY_RICE_NUTRITION["portion_options"]) == 45.0 / 4
+    assert grams_per_tablespoon([{"label": "1 Tbsp", "gram_weight": 14.0}]) == 14.0
+    assert grams_per_tablespoon(
+        [{"label": "1 teaspoon, NFS", "gram_weight": 4.6}]
+    ) == pytest.approx(13.8)
+
+
+def test_grams_per_tablespoon_none_without_volume_portion():
+    assert grams_per_tablespoon(ALMOND_NUTRITION["portion_options"]) is None
+    assert grams_per_tablespoon(
+        [{"label": "Guideline amount per fl oz of beverage", "gram_weight": 1.4}]
+    ) is None
+    assert grams_per_tablespoon([]) is None
+
+
+@pytest.mark.asyncio
+async def test_tablespoon_of_olive_oil_uses_tablespoon_portion():
+    """Regression: '1 tablespoon' logged the record's 1-cup default (2,016 kcal)."""
+    result = await _parse(
+        "a tablespoon of olive oil", "1 tablespoon", "olive oil", OLIVE_OIL_NUTRITION
+    )
+    _assert_scaled(result, OLIVE_OIL_NUTRITION, 14.0 / 224.0)
+    assert result["calories"] == 126
+
+
+@pytest.mark.asyncio
+async def test_cups_convert_through_quarter_cup_portion():
+    result = await _parse("2 cups of rice", "2 cups", "rice", DRY_RICE_NUTRITION)
+    _assert_scaled(result, DRY_RICE_NUTRITION, 8.0)
+
+
+@pytest.mark.asyncio
+async def test_unconvertible_volume_asks_instead_of_logging():
+    result = await _parse("a quarter cup of almonds", "1/4 cup", "almonds", ALMOND_NUTRITION)
+    assert result["resolution_status"] == "needs_clarification"
+    assert result["resolution"]["axis"] == "amount"
+    assert "cup measurement" in result["resolution"]["question"]
+    assert "1 ONZ (160 cal)" in result["resolution"]["question"]
+    assert result["confidence"] != "high"
 
 
 @pytest.mark.asyncio

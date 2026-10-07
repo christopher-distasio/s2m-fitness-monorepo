@@ -438,9 +438,11 @@ _GRAMS_PER_WEIGHT_UNIT = {
 
 
 def _unit_after_quantity(serving_size) -> str:
-    """'100 grams' -> 'grams', '8 oz' -> 'oz'. Empty when there is no unit."""
+    """'100 grams' -> 'grams', '1/4 cup' -> 'cup'. Empty when there is no unit."""
     text = str(serving_size or "").strip().lower()
-    match = re.match(r"^(?:\d+(?:\.\d+)?|[a-z]+)\s+(.+)$", text)
+    match = re.match(
+        r"^(?:\d+\s+\d+/\d+|\d+/\d+|\d+(?:\.\d+)?|[½⅓⅔¼¾]|[a-z]+)\s+(.+)$", text
+    )
     return match.group(1).strip().rstrip(".") if match else ""
 
 
@@ -464,6 +466,54 @@ def stated_fluid_grams(serving_size, unit, amount: float) -> float | None:
     for candidate in (rest, str(unit or "").strip().lower()):
         if candidate in _ML_PER_FLUID_UNIT:
             return amount * _ML_PER_FLUID_UNIT[candidate]
+    return None
+
+
+# Kitchen volumes, in tablespoons. Their grams depend on the food, so they
+# convert only through a volume portion the record itself lists.
+_TBSP_PER_VOLUME_UNIT = {
+    "cup": 16.0,
+    "cups": 16.0,
+    "c": 16.0,
+    "tablespoon": 1.0,
+    "tablespoons": 1.0,
+    "tbsp": 1.0,
+    "tbs": 1.0,
+    "teaspoon": 1.0 / 3.0,
+    "teaspoons": 1.0 / 3.0,
+    "tsp": 1.0 / 3.0,
+}
+
+
+def _volume_unit(token: str) -> str:
+    return token.strip().lower().rstrip(".,")
+
+
+def stated_volume_unit(serving_size, unit) -> str | None:
+    """'cup' / 'tablespoon' / ... when the user stated a kitchen volume, else None."""
+    rest = _unit_after_quantity(serving_size)
+    for candidate in (rest.split()[0] if rest else "", str(unit or "")):
+        if _volume_unit(candidate) in _TBSP_PER_VOLUME_UNIT:
+            return _volume_unit(candidate)
+    return None
+
+
+def grams_per_tablespoon(portion_options) -> float | None:
+    """The food's own density from a volume portion it lists ('1 tablespoon'
+    14 g, '1/4 cup' 45 g), or None when it lists no volume portion."""
+    for option in portion_options or []:
+        label = str(option.get("label") or "").strip().lower()
+        grams = option.get("gram_weight")
+        if not label or not grams:
+            continue
+        count = leading_fraction(label)
+        if count is None:
+            number = re.match(r"^(\d+(?:\.\d+)?)\b", label)
+            count = float(number.group(1)) if number else None
+        rest = _unit_after_quantity(label)
+        token = _volume_unit(rest.split()[0]) if rest else ""
+        if count and token in _TBSP_PER_VOLUME_UNIT:
+            return float(grams) / (count * _TBSP_PER_VOLUME_UNIT[token])
     return None
 
 
@@ -881,6 +931,17 @@ async def _enrich_with_nutrition(
             stated_grams = stated_weight_grams(
                 parsed.get("serving_size"), parsed.get("unit"), quantity
             )
+        # A kitchen volume ("1 tablespoon") converts through the food's own
+        # volume portion. Without one there is no honest gram figure.
+        unconverted_volume = None
+        if stated_grams is None:
+            volume_unit = stated_volume_unit(parsed.get("serving_size"), parsed.get("unit"))
+            if volume_unit:
+                per_tbsp = grams_per_tablespoon(nutrition.get("portion_options"))
+                if per_tbsp:
+                    stated_grams = quantity * _TBSP_PER_VOLUME_UNIT[volume_unit] * per_tbsp
+                else:
+                    unconverted_volume = volume_unit
         try:
             serving_g = float(nutrition.get("serving_size_g") or 0)
         except (TypeError, ValueError):
@@ -949,6 +1010,39 @@ async def _enrich_with_nutrition(
             if data_reason:
                 parsed["reasoning"] = data_reason
             _keep_clarification_axis(parsed, resolution.get("axis"))
+
+        # Ask rather than log a volume the record cannot convert. Only where
+        # it would otherwise have logged silently; an existing question stays.
+        if unconverted_volume and resolution.get("status") == "resolved":
+            food_name = parsed.get("food") or "this food"
+            options = [
+                {"label": p.get("label"), "calories": p.get("calories"), "kind": "portion"}
+                for p in parsed.get("portion_options") or []
+                if p.get("label")
+            ]
+            listed = "; ".join(
+                f"{o['label']} ({int(round(o['calories']))} cal)"
+                for o in options[:3]
+                if o.get("calories") is not None
+            )
+            reason = f"I don't have a {unconverted_volume} measurement for {food_name}."
+            question = (
+                f"{reason} Did you mean {listed}?" if listed
+                else f"{reason} How much did you have?"
+            )
+            resolution = {
+                "status": "needs_clarification",
+                "axis": "amount",
+                "reason": reason,
+                "question": question,
+                "options": options,
+            }
+            parsed["resolution"] = resolution
+            parsed["resolution_status"] = "needs_clarification"
+            if parsed.get("confidence") == "high":
+                parsed["confidence"] = "medium"
+            parsed["reasoning"] = reason
+            _keep_clarification_axis(parsed, "amount")
 
         cal = parsed.get("calories")
         try:
