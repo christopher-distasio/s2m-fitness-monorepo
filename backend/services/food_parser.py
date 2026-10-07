@@ -321,6 +321,27 @@ _WORD_TO_QUANTITY = {
 }
 
 
+_UNICODE_FRACTIONS = {"½": 0.5, "⅓": 1 / 3, "⅔": 2 / 3, "¼": 0.25, "¾": 0.75}
+
+
+def leading_fraction(serving_size) -> float | None:
+    """'1/4 cup' -> 0.25, '1 1/2 cups' -> 1.5, '½ cup' -> 0.5; None otherwise.
+
+    GPT writes the fraction correctly in serving_size text but has been seen
+    to put 1 in the numeric amount field ("1/4 cup" with amount 1.0).
+    """
+    text = str(serving_size or "").strip().lower()
+    mixed = re.match(r"^(\d+)\s+(\d+)/(\d+)\b", text)
+    if mixed and int(mixed.group(3)):
+        return int(mixed.group(1)) + int(mixed.group(2)) / int(mixed.group(3))
+    simple = re.match(r"^(\d+)/(\d+)\b", text)
+    if simple and int(simple.group(2)):
+        return int(simple.group(1)) / int(simple.group(2))
+    if text[:1] in _UNICODE_FRACTIONS:
+        return _UNICODE_FRACTIONS[text[:1]]
+    return None
+
+
 def parse_quantity_multiplier(serving_size) -> float:
     """Parse GPT serving_size into a numeric scale factor for per-item nutrition.
 
@@ -343,6 +364,10 @@ def parse_quantity_multiplier(serving_size) -> float:
         return float(text)
     except (TypeError, ValueError):
         pass
+
+    fraction = leading_fraction(text)
+    if fraction is not None:
+        return fraction
 
     dozen_match = re.match(r"^(?:a|an)\s+dozen\b", text)
     if dozen_match or text == "dozen" or text.startswith("dozen "):
@@ -841,6 +866,9 @@ async def _enrich_with_nutrition(
                 quantity = parse_quantity_multiplier(parsed.get("serving_size", "1"))
         else:
             quantity = parse_quantity_multiplier(parsed.get("serving_size", "1"))
+        text_fraction = leading_fraction(parsed.get("serving_size"))
+        if text_fraction is not None:
+            quantity = text_fraction
 
         # A stated weight ("100 grams", "8 oz") scales against the record's
         # serving grams, not against the serving itself. The logged amount

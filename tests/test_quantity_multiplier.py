@@ -10,6 +10,7 @@ import pytest
 
 from backend.services.food_parser import (
     SYSTEM_PROMPT,
+    leading_fraction,
     parse_food_input,
     parse_quantity_multiplier,
     stated_fluid_grams,
@@ -221,6 +222,40 @@ async def test_half_word_serving_size_scales_down():
 async def test_two_cups_of_rice_measured_quantity():
     result = await _parse("2 cups of rice", "2 cups", "rice", RICE_NUTRITION)
     _assert_scaled(result, RICE_NUTRITION, 2.0)
+
+
+# --- fractions written in serving_size text ---
+
+
+def test_leading_fraction_forms():
+    assert leading_fraction("1/4 cup") == 0.25
+    assert leading_fraction("1 1/2 cups") == 1.5
+    assert leading_fraction("½ cup") == 0.5
+    assert leading_fraction("3/4") == 0.75
+    assert leading_fraction("2 cups") is None
+    assert leading_fraction("1/0 cup") is None
+
+
+def test_parse_quantity_multiplier_reads_fractions():
+    assert parse_quantity_multiplier("1/4 cup") == 0.25
+    assert parse_quantity_multiplier("1 1/2 cups") == 1.5
+
+
+@pytest.mark.asyncio
+async def test_fraction_text_beats_gpt_amount_field():
+    """Regression: GPT wrote serving_size '1/4 cup' with amount 1.0, logging a whole serving."""
+    payload = json.loads(_gpt_payload("almonds", "1/4 cup"))
+    payload["amount"] = 1.0
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=_fake_gpt(json.dumps(payload)),
+    ):
+        with patch(
+            "backend.services.food_parser.lookup_food", new_callable=AsyncMock
+        ) as mock_lookup:
+            mock_lookup.return_value = dict(BANANA_NUTRITION)
+            result = await parse_food_input("a quarter cup of almonds", conversation_history=[])
+    _assert_scaled(result, BANANA_NUTRITION, 0.25)
 
 
 # --- stated weights convert to grams ---
