@@ -12,6 +12,7 @@ from backend.services.food_parser import (
     SYSTEM_PROMPT,
     parse_food_input,
     parse_quantity_multiplier,
+    stated_fluid_grams,
     stated_weight_grams,
 )
 
@@ -278,6 +279,46 @@ async def test_weight_without_serving_grams_keeps_count_scaling():
     """No serving_size_g to convert against: fall back to the leading number."""
     result = await _parse("100 grams of banana", "100 grams", "banana", BANANA_NUTRITION)
     _assert_scaled(result, BANANA_NUTRITION, 100.0)
+
+
+# --- drinks are fluid ounces ---
+
+MILK_NUTRITION = {
+    "calories": 149,
+    "carbs": 12.0,
+    "protein": 8.0,
+    "fat": 8.0,
+    "nutrients": {"calcium": 276.0},
+    "serving_size_g": 244.0,
+    "candidates": [],
+    "portion_options": [],
+    "resolution": {"status": "ok"},
+}
+
+
+def test_stated_fluid_grams_units():
+    assert stated_fluid_grams("8 fl oz", "", 8.0) == pytest.approx(236.588)
+    assert stated_fluid_grams("8 fluid ounces", "", 8.0) == pytest.approx(236.588)
+    assert stated_fluid_grams("330 ml", "ml", 330.0) == 330.0
+    assert stated_fluid_grams("8", "fl oz", 8.0) == pytest.approx(236.588)
+
+
+def test_stated_fluid_grams_leaves_weights_alone():
+    assert stated_fluid_grams("8 oz", "oz", 8.0) is None
+    assert stated_fluid_grams("100 grams", "grams", 100.0) is None
+
+
+def test_prompt_says_drink_ounces_are_fluid_ounces():
+    assert "Drinks measured in ounces are fluid ounces" in SYSTEM_PROMPT
+    assert "milk → fluid ounce" in SYSTEM_PROMPT
+    assert "milk → ounce" not in SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_8_fl_oz_of_milk_scales_by_volume():
+    result = await _parse("8 oz of milk", "8 fl oz", "milk", MILK_NUTRITION)
+    _assert_scaled(result, MILK_NUTRITION, 8 * 29.5735 / 244.0)
+    assert result["amount"] == 8.0
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,7 @@ Rules:
   One rule for every case:
   - Countable items (banana, egg, yogurt, cookie, apple): serving_size is the count as a number string only — '1', '2', '3', '12'. Wrong: '2 bananas', '2 eggs', 'two yogurts'. Right: '2' (food is 'banana' / 'egg' / 'yogurt').
   - Measured amounts (cups, oz, tablespoons, grams): serving_size is the number plus the unit only — '1 cup', '2 cups', '8 oz', '1 tablespoon'. Wrong: '2 cups of rice'. Right: serving_size '2 cups', food 'rice'.
+  - Drinks measured in ounces are fluid ounces: write 'fl oz', never plain 'oz'. "8 oz of milk" → '8 fl oz'; "a 12 ounce soda" → '12 fl oz'. Plain 'oz' is only for solid food by weight ("4 oz of chicken" → '4 oz').
   - Size words: '1 medium', '1 large', '1 small' — still no food name.
   - Word numbers from the user ('two', 'a dozen') must be converted to digits in serving_size ('2', '12').
 - amount, when present, MUST be a JSON number (2, 1.5) — never a string like "2 bananas"
@@ -66,11 +67,11 @@ Rules:
   - If the food has a natural standard measurement unit, infer that unit even when quantity is vague:
     butter → tablespoon
     oil, olive oil, vegetable oil → tablespoon
-    milk → ounce
+    milk → fluid ounce
     cream, heavy cream → tablespoon
     vinegar → tablespoon
     sauce, hot sauce, soy sauce → tablespoon
-    Examples: "a little butter" → "1 tablespoon"; "a splash of milk" → "1 ounce"
+    Examples: "a little butter" → "1 tablespoon"; "a splash of milk" → "1 fl oz"
   - If the food is an uncountable solid with no natural measurement unit (pasta, rice, chicken, oatmeal, salad, soup), default to "1 serving"
   - If the food is a countable item (eggs, apples, crackers, grapes), return the number with no unit (e.g. "2", "1")
   - When the user says a plural countable food item (e.g. 'two yogurts', 'three cookies', 'two dannon yogurts'), treat each as one individual container/unit. serving_size should be the number (e.g. '2'). Do not interpret plural packaged foods as cups or other measurements.
@@ -416,6 +417,29 @@ def _unit_after_quantity(serving_size) -> str:
     text = str(serving_size or "").strip().lower()
     match = re.match(r"^(?:\d+(?:\.\d+)?|[a-z]+)\s+(.+)$", text)
     return match.group(1).strip().rstrip(".") if match else ""
+
+
+# Drinks are stated by volume. At 1 g/ml the error is ~3% for milk, juice and
+# soda, far below the serving-mismatch errors this replaces.
+_ML_PER_FLUID_UNIT = {
+    "fl oz": 29.5735,
+    "fl. oz": 29.5735,
+    "floz": 29.5735,
+    "fluid ounce": 29.5735,
+    "fluid ounces": 29.5735,
+    "ml": 1.0,
+    "milliliter": 1.0,
+    "milliliters": 1.0,
+}
+
+
+def stated_fluid_grams(serving_size, unit, amount: float) -> float | None:
+    """Grams for a stated drink volume ('8 fl oz', '330 ml') at 1 g/ml, else None."""
+    rest = _unit_after_quantity(serving_size)
+    for candidate in (rest, str(unit or "").strip().lower()):
+        if candidate in _ML_PER_FLUID_UNIT:
+            return amount * _ML_PER_FLUID_UNIT[candidate]
+    return None
 
 
 def stated_weight_grams(serving_size, unit, amount: float) -> float | None:
@@ -822,9 +846,13 @@ async def _enrich_with_nutrition(
         # serving grams, not against the serving itself. The logged amount
         # stays what the user said.
         stated_amount = quantity
-        stated_grams = stated_weight_grams(
+        stated_grams = stated_fluid_grams(
             parsed.get("serving_size"), parsed.get("unit"), quantity
         )
+        if stated_grams is None:
+            stated_grams = stated_weight_grams(
+                parsed.get("serving_size"), parsed.get("unit"), quantity
+            )
         try:
             serving_g = float(nutrition.get("serving_size_g") or 0)
         except (TypeError, ValueError):
