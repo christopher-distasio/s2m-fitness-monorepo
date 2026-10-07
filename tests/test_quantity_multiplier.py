@@ -423,6 +423,21 @@ def test_grams_per_tablespoon_from_portions():
     ) == pytest.approx(13.8)
 
 
+def test_grams_per_tablespoon_skips_yield_portions():
+    """'yields' rows convert between forms (in shell -> kernels, dry -> cooked)."""
+    peanuts = [
+        {"label": "1 cup, in shell, yields", "gram_weight": 51.0},
+        {"label": "1 cup", "gram_weight": 146.0},
+    ]
+    assert grams_per_tablespoon(peanuts) == 146.0 / 16
+    oatmeal = [
+        {"label": "1 cup, dry, yields", "gram_weight": 485.0},
+        {"label": "1 cup, cooked", "gram_weight": 240.0},
+    ]
+    assert grams_per_tablespoon(oatmeal) == 240.0 / 16
+    assert grams_per_tablespoon([{"label": "1 cup, dry, yields", "gram_weight": 485.0}]) is None
+
+
 def test_grams_per_tablespoon_none_without_volume_portion():
     assert grams_per_tablespoon(ALMOND_NUTRITION["portion_options"]) is None
     assert grams_per_tablespoon(

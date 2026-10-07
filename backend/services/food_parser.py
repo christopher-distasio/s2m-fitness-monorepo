@@ -507,6 +507,10 @@ def grams_per_tablespoon(portion_options) -> float | None:
         grams = option.get("gram_weight")
         if not label or not grams:
             continue
+        # "1 cup, in shell, yields 51 g" / "1 oz, dry, yields 80 g" give the
+        # weight of a different form of the food, not what a cup weighs.
+        if "yield" in label:
+            continue
         count = leading_fraction(label)
         if count is None:
             number = re.match(r"^(\d+(?:\.\d+)?)\b", label)
