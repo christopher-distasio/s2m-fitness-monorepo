@@ -391,6 +391,47 @@ def parse_quantity_multiplier(serving_size) -> float:
     return 1.0
 
 
+# Weight units convert to grams exactly, so a stated weight never needs the
+# record's default serving to mean anything. Volume units (cup, tbsp) are not
+# here: their grams depend on the food.
+_GRAMS_PER_WEIGHT_UNIT = {
+    "g": 1.0,
+    "gram": 1.0,
+    "grams": 1.0,
+    "kg": 1000.0,
+    "kilogram": 1000.0,
+    "kilograms": 1000.0,
+    "oz": 28.3495,
+    "ounce": 28.3495,
+    "ounces": 28.3495,
+    "lb": 453.592,
+    "lbs": 453.592,
+    "pound": 453.592,
+    "pounds": 453.592,
+}
+
+
+def _unit_after_quantity(serving_size) -> str:
+    """'100 grams' -> 'grams', '8 oz' -> 'oz'. Empty when there is no unit."""
+    text = str(serving_size or "").strip().lower()
+    match = re.match(r"^(?:\d+(?:\.\d+)?|[a-z]+)\s+(.+)$", text)
+    return match.group(1).strip().rstrip(".") if match else ""
+
+
+def stated_weight_grams(serving_size, unit, amount: float) -> float | None:
+    """Grams the user stated by weight, or None when the amount is not a weight.
+
+    serving_size text is checked first because GPT's separate unit field has
+    been seen to say 'serving' where the text says '3 tablespoons'.
+    """
+    rest = _unit_after_quantity(serving_size)
+    candidates = (rest, rest.split()[0] if rest else "", str(unit or "").strip().lower())
+    for candidate in candidates:
+        if candidate in _GRAMS_PER_WEIGHT_UNIT:
+            return amount * _GRAMS_PER_WEIGHT_UNIT[candidate]
+    return None
+
+
 def _format_alt(name: str, brand: str | None, calories, extra: str | None = None) -> str:
     label = format_branded_name(name, brand)
     parts = [label]
@@ -777,6 +818,20 @@ async def _enrich_with_nutrition(
         else:
             quantity = parse_quantity_multiplier(parsed.get("serving_size", "1"))
 
+        # A stated weight ("100 grams", "8 oz") scales against the record's
+        # serving grams, not against the serving itself. The logged amount
+        # stays what the user said.
+        stated_amount = quantity
+        stated_grams = stated_weight_grams(
+            parsed.get("serving_size"), parsed.get("unit"), quantity
+        )
+        try:
+            serving_g = float(nutrition.get("serving_size_g") or 0)
+        except (TypeError, ValueError):
+            serving_g = 0.0
+        if stated_grams is not None and serving_g > 0:
+            quantity = stated_grams / serving_g
+
         if quantity > 0 and quantity != 1:
             if parsed["calories"] is not None:
                 parsed["calories"] = int(round(parsed["calories"] * quantity))
@@ -794,7 +849,7 @@ async def _enrich_with_nutrition(
             parsed["nutrients"] = nutrients
 
         parsed["quantity_used"] = quantity
-        parsed["amount"] = quantity
+        parsed["amount"] = stated_amount
         print(f"quantity: {quantity}, calories after: {parsed['calories']}")
         logger.info(
             "quantity_used=%s calories_after=%s serving_size=%r",

@@ -12,6 +12,7 @@ from backend.services.food_parser import (
     SYSTEM_PROMPT,
     parse_food_input,
     parse_quantity_multiplier,
+    stated_weight_grams,
 )
 
 pytestmark = pytest.mark.unit
@@ -219,6 +220,64 @@ async def test_half_word_serving_size_scales_down():
 async def test_two_cups_of_rice_measured_quantity():
     result = await _parse("2 cups of rice", "2 cups", "rice", RICE_NUTRITION)
     _assert_scaled(result, RICE_NUTRITION, 2.0)
+
+
+# --- stated weights convert to grams ---
+
+CHICKEN_NUTRITION = {
+    "calories": 140,
+    "carbs": 0.0,
+    "protein": 26.0,
+    "fat": 3.0,
+    "nutrients": {"sodium": 60.0},
+    "serving_size_g": 85.0,
+    "candidates": [],
+    "portion_options": [],
+    "resolution": {"status": "ok"},
+}
+
+
+def test_stated_weight_grams_units():
+    assert stated_weight_grams("100 grams", "grams", 100.0) == 100.0
+    assert stated_weight_grams("100 g", "", 100.0) == 100.0
+    assert stated_weight_grams("8 oz", "oz", 8.0) == pytest.approx(226.796)
+    assert stated_weight_grams("1 lb", "", 1.0) == pytest.approx(453.592)
+    assert stated_weight_grams("0.5 kg", "", 0.5) == 500.0
+
+
+def test_stated_weight_grams_trusts_text_over_unit_field():
+    assert stated_weight_grams("100 grams", "serving", 100.0) == 100.0
+
+
+def test_stated_weight_grams_ignores_counts_and_volumes():
+    assert stated_weight_grams("2", "count", 2.0) is None
+    assert stated_weight_grams("2 cups", "cup", 2.0) is None
+    assert stated_weight_grams("1 medium", "", 1.0) is None
+    assert stated_weight_grams("a dozen", "", 12.0) is None
+
+
+@pytest.mark.asyncio
+async def test_100_grams_scales_by_serving_grams():
+    """Regression: '100 grams of chicken breast' logged 100 x the default serving."""
+    result = await _parse(
+        "100 grams of chicken breast", "100 grams", "chicken breast", CHICKEN_NUTRITION
+    )
+    _assert_scaled(result, CHICKEN_NUTRITION, 100.0 / 85.0)
+    assert result["amount"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_8_oz_by_weight_scales_by_serving_grams():
+    result = await _parse("8 oz of steak", "8 oz", "steak", CHICKEN_NUTRITION)
+    _assert_scaled(result, CHICKEN_NUTRITION, 8 * 28.3495 / 85.0)
+    assert result["amount"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_weight_without_serving_grams_keeps_count_scaling():
+    """No serving_size_g to convert against: fall back to the leading number."""
+    result = await _parse("100 grams of banana", "100 grams", "banana", BANANA_NUTRITION)
+    _assert_scaled(result, BANANA_NUTRITION, 100.0)
 
 
 @pytest.mark.asyncio
