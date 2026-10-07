@@ -14,6 +14,7 @@ from backend.services.food_parser import (
     leading_fraction,
     parse_food_input,
     parse_quantity_multiplier,
+    reference_names_same_food,
     stated_fluid_grams,
     stated_volume_unit,
     stated_weight_grams,
@@ -460,6 +461,138 @@ async def test_tablespoon_of_olive_oil_uses_tablespoon_portion():
 async def test_cups_convert_through_quarter_cup_portion():
     result = await _parse("2 cups of rice", "2 cups", "rice", DRY_RICE_NUTRITION)
     _assert_scaled(result, DRY_RICE_NUTRITION, 8.0)
+
+
+def test_reference_names_same_food_accepts_curated_versions():
+    assert reference_names_same_food("cooked rice", "Rice, cooked, NFS")
+    assert reference_names_same_food("almonds", "Almonds, NFS")
+    assert reference_names_same_food("blueberries", "Blueberries, raw")
+    assert reference_names_same_food("frozen peas", "Peas, green, frozen, cooked, boiled")
+
+
+def test_reference_names_same_food_rejects_other_foods():
+    """Live case: 'dry rice' retrieved 'Rice noodles, dry'."""
+    assert not reference_names_same_food("dry rice", "Rice noodles, dry")
+    assert not reference_names_same_food("cheerios", "Cereal, O's, NFS")
+    assert not reference_names_same_food("almonds", "Peanuts, NFS")
+    assert not reference_names_same_food("cooked", "Rice, cooked, NFS")
+
+
+COOKED_RICE_NUTRITION = {
+    "food_name": "COOKED WHITE RICE",
+    "calories": 150.15,
+    "carbs": 33.0,
+    "protein": 3.0,
+    "fat": 0.3,
+    "nutrients": {},
+    "serving_size_g": 105.0,
+    "candidates": [],
+    "portion_options": [{"label": "3.7 ONZ", "gram_weight": 105.0, "calories": 150.15}],
+    "resolution": {"status": "resolved", "axis": None},
+}
+
+GENERIC_RICE_REFERENCE = {
+    "food_name": "Rice, cooked, NFS",
+    "calories": 205.0,
+    "serving_size_g": 158.0,
+    "portion_options": [{"label": "1 cup, cooked", "gram_weight": 158.0, "calories": 205.0}],
+    "resolution": {"status": "resolved", "axis": None},
+}
+
+GENERIC_ALMOND_REFERENCE = {
+    "food_name": "Almonds, NFS",
+    "calories": 164.0,
+    "serving_size_g": 28.35,
+    "portion_options": [
+        {"label": "1 oz", "gram_weight": 28.35, "calories": 164.0},
+        {"label": "1 cup", "gram_weight": 141.0, "calories": 816.0},
+    ],
+    "resolution": {"status": "resolved", "axis": None},
+}
+
+
+async def _parse_with_reference(raw_input, serving_size, food, nutrition, reference):
+    """First lookup is the matched record; the generic-only lookup returns reference."""
+
+    async def fake_lookup(query, source_filter=None, **kwargs):
+        return dict(reference) if source_filter == "generic" else dict(nutrition)
+
+    with patch(
+        "backend.services.food_parser.client.chat.completions.create",
+        side_effect=_fake_gpt(_gpt_payload(food, serving_size)),
+    ):
+        with patch("backend.services.food_parser.lookup_food", side_effect=fake_lookup):
+            return await parse_food_input(raw_input, conversation_history=[])
+
+
+@pytest.mark.asyncio
+async def test_cup_of_rice_borrows_cup_weight_from_generic_record(caplog):
+    """Regression: the cooked-rice record lists only '3.7 ONZ', so a cup showed 150."""
+    with caplog.at_level("INFO"):
+        result = await _parse_with_reference(
+            "a cup of rice", "1 cup", "cooked rice", COOKED_RICE_NUTRITION, GENERIC_RICE_REFERENCE
+        )
+    _assert_scaled(result, COOKED_RICE_NUTRITION, 158.0 / 105.0)
+    assert result["calories"] == 226
+    assert result["resolution_status"] == "resolved"
+    assert any("Rice, cooked, NFS" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_quarter_cup_of_almonds_borrows_cup_weight():
+    result = await _parse_with_reference(
+        "a quarter cup of almonds", "1/4 cup", "almonds", ALMOND_NUTRITION, GENERIC_ALMOND_REFERENCE
+    )
+    _assert_scaled(result, ALMOND_NUTRITION, (141.0 / 4) / 28.0)
+    assert result["calories"] == 201
+
+
+@pytest.mark.asyncio
+async def test_mismatched_reference_still_asks(caplog):
+    noodles = dict(GENERIC_RICE_REFERENCE, food_name="Rice noodles, dry")
+    with caplog.at_level("INFO"):
+        result = await _parse_with_reference(
+            "half a cup of dry rice", "1/2 cup", "dry rice", COOKED_RICE_NUTRITION, noodles
+        )
+    assert not any("volume_density_source" in rec.getMessage() for rec in caplog.records)
+    assert result["resolution_status"] == "needs_clarification"
+    assert result["resolution"]["axis"] == "amount"
+
+
+DRY_OATS_NUTRITION = {
+    "food_name": "FOSKA OATMEAL",
+    "calories": 270.1,
+    "carbs": 50.0,
+    "protein": 9.0,
+    "fat": 5.0,
+    "nutrients": {},
+    "serving_size_g": 74.0,
+    "candidates": [],
+    "portion_options": [{"label": "74 GRM", "gram_weight": 74.0, "calories": 270.1}],
+    "resolution": {"status": "resolved", "axis": None},
+}
+
+GENERIC_COOKED_OATMEAL_REFERENCE = {
+    "food_name": "Oatmeal, NFS",
+    "calories": 166.0,
+    "serving_size_g": 240.0,
+    "portion_options": [{"label": "1 cup, cooked", "gram_weight": 240.0, "calories": 166.0}],
+    "resolution": {"status": "resolved", "axis": None},
+}
+
+
+@pytest.mark.asyncio
+async def test_cooked_cup_weight_not_applied_to_dry_record(caplog):
+    """Live case: dry-oats record x cooked-oatmeal cup weight logged 876 kcal."""
+    with caplog.at_level("INFO"):
+        result = await _parse_with_reference(
+            "a cup of oatmeal", "1 cup", "cooked oatmeal",
+            DRY_OATS_NUTRITION, GENERIC_COOKED_OATMEAL_REFERENCE,
+        )
+    assert result["calories"] != 876
+    assert result["resolution_status"] == "needs_clarification"
+    assert result["resolution"]["axis"] == "amount"
+    assert any("volume_density_rejected" in rec.getMessage() for rec in caplog.records)
 
 
 @pytest.mark.asyncio

@@ -522,6 +522,88 @@ def grams_per_tablespoon(portion_options) -> float | None:
     return None
 
 
+_PREP_WORDS = {"cooked", "uncooked", "dry", "raw", "plain"}
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", (text or "").lower().replace("'", ""))
+
+
+def _word_in(word: str, words: set[str]) -> bool:
+    forms = {word, word + "s", word + "es", word.rstrip("s")}
+    if word.endswith("es"):
+        forms.add(word[:-2])
+    return bool(forms & words)
+
+
+def reference_names_same_food(food: str, reference_name: str) -> bool:
+    """True when a curated record is the same food, so its cup weight applies.
+
+    Both directions: every word the user said is in the record name, and the
+    record's head (text before the first comma, e.g. 'Rice noodles') is only
+    words the user said. Prep words are ignored on the user's side.
+    """
+    food_words = [w for w in _words(food) if w not in _PREP_WORDS]
+    name_words = set(_words(reference_name))
+    head_words = _words(reference_name.split(",")[0])
+    if not food_words or not head_words:
+        return False
+    said = set(food_words)
+    return all(_word_in(w, name_words) for w in food_words) and all(
+        _word_in(w, said) for w in head_words
+    )
+
+
+# Calories per gram within this factor = same food in the same state. Dry
+# oats (3.7 kcal/g) vs cooked oatmeal (0.7) differ ~5x and must not mix.
+_MAX_KCAL_PER_GRAM_RATIO = 1.5
+
+
+def _kcal_per_gram(record: dict) -> float | None:
+    try:
+        calories = float(record.get("calories") or 0)
+        grams = float(record.get("serving_size_g") or 0)
+    except (TypeError, ValueError):
+        return None
+    return calories / grams if calories > 0 and grams > 0 else None
+
+
+async def borrowed_grams_per_tablespoon(
+    food: str, matched: dict
+) -> tuple[float, str] | None:
+    """Cup weight from the curated (SR Legacy/FNDDS) version of the same food,
+    for records that list no volume portion. Only the density is borrowed;
+    calories per gram still come from the matched record, so the two must
+    agree on calories per gram (same state: cooked vs dry)."""
+    try:
+        reference = await lookup_food(
+            food, source_filter="generic", modifiers=parse_query_modifiers(food)
+        )
+    except NutritionStoreUnavailable:
+        return None
+    if not reference or reference.get("blocked_by_allergy"):
+        return None
+    name = reference.get("food_name") or ""
+    if not reference_names_same_food(food, name):
+        return None
+    matched_density = _kcal_per_gram(matched)
+    reference_density = _kcal_per_gram(reference)
+    if not matched_density or not reference_density:
+        return None
+    ratio = matched_density / reference_density
+    if not (1 / _MAX_KCAL_PER_GRAM_RATIO <= ratio <= _MAX_KCAL_PER_GRAM_RATIO):
+        logger.info(
+            "volume_density_rejected=%r food=%r kcal_per_g matched=%.2f reference=%.2f",
+            name,
+            food,
+            matched_density,
+            reference_density,
+        )
+        return None
+    per_tbsp = grams_per_tablespoon(reference.get("portion_options"))
+    return (per_tbsp, name) if per_tbsp else None
+
+
 def stated_weight_grams(serving_size, unit, amount: float) -> float | None:
     """Grams the user stated by weight, or None when the amount is not a weight.
 
@@ -946,7 +1028,18 @@ async def _enrich_with_nutrition(
                 if per_tbsp:
                     stated_grams = quantity * _TBSP_PER_VOLUME_UNIT[volume_unit] * per_tbsp
                 else:
-                    unconverted_volume = volume_unit
+                    borrowed = await borrowed_grams_per_tablespoon(food_query, nutrition)
+                    if borrowed:
+                        per_tbsp, reference_name = borrowed
+                        stated_grams = quantity * _TBSP_PER_VOLUME_UNIT[volume_unit] * per_tbsp
+                        logger.info(
+                            "volume_density_source=%r food=%r grams_per_tbsp=%.2f",
+                            reference_name,
+                            food_query,
+                            per_tbsp,
+                        )
+                    else:
+                        unconverted_volume = volume_unit
         try:
             serving_g = float(nutrition.get("serving_size_g") or 0)
         except (TypeError, ValueError):
