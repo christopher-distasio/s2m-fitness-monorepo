@@ -777,7 +777,7 @@ async def _enrich_with_nutrition(
         else:
             quantity = parse_quantity_multiplier(parsed.get("serving_size", "1"))
 
-        if quantity > 1:
+        if quantity > 0 and quantity != 1:
             if parsed["calories"] is not None:
                 parsed["calories"] = int(round(parsed["calories"] * quantity))
             macros = parsed["macronutrients"]

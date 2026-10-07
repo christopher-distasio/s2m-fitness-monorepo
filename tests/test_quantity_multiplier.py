@@ -203,6 +203,19 @@ async def test_a_dozen_eggs():
 
 
 @pytest.mark.asyncio
+async def test_half_a_banana_scales_down():
+    """Regression: quantities below 1 were skipped, so 'half a banana' logged a whole one."""
+    result = await _parse("half a banana", "0.5", "banana", BANANA_NUTRITION)
+    _assert_scaled(result, BANANA_NUTRITION, 0.5)
+
+
+@pytest.mark.asyncio
+async def test_half_word_serving_size_scales_down():
+    result = await _parse("half a bagel", "half", "bagel", BANANA_NUTRITION)
+    _assert_scaled(result, BANANA_NUTRITION, 0.5)
+
+
+@pytest.mark.asyncio
 async def test_two_cups_of_rice_measured_quantity():
     result = await _parse("2 cups of rice", "2 cups", "rice", RICE_NUTRITION)
     _assert_scaled(result, RICE_NUTRITION, 2.0)
