@@ -351,6 +351,12 @@ def test_prompt_says_drink_ounces_are_fluid_ounces():
     assert "milk → ounce" not in SYSTEM_PROMPT
 
 
+def test_prompt_defaults_unbranded_grains_to_cooked():
+    assert "Unbranded grains and pasta" in SYSTEM_PROMPT
+    assert "\"a cup of rice\" → food 'cooked rice'" in SYSTEM_PROMPT
+    assert "unless the user says dry, uncooked or raw" in SYSTEM_PROMPT
+
+
 @pytest.mark.asyncio
 async def test_8_fl_oz_of_milk_scales_by_volume():
     result = await _parse("8 oz of milk", "8 fl oz", "milk", MILK_NUTRITION)

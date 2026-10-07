@@ -45,6 +45,7 @@ Return this exact shape:
 Rules:
 - Do NOT include calories or macronutrients — those come from the nutrition database
 - Normalize the food name for database lookup but PRESERVE brand names. For branded items, include the brand name in the food field (e.g. 'great value light greek yogurt' not just 'greek yogurt', 'chobani nonfat plain yogurt' not just 'yogurt'). Brand names are essential for accurate nutrition lookup.
+- Unbranded grains and pasta (rice, pasta, noodles, oatmeal, quinoa, couscous) are logged as eaten: put "cooked" in the food name unless the user says dry, uncooked or raw. "a cup of rice" → food 'cooked rice'; "half a cup of dry oats" → food 'dry oats'. If the user names a brand, keep the name as said.
 - Set "brand" to the brand/manufacturer ONLY when the user explicitly named one (e.g. 'Chobani', 'Great Value', "McDonald's"). If they named no brand (e.g. just 'banana', 'yogurt', 'chicken'), set "brand" to an empty string "".
 - If multiple foods are mentioned, combine them into one descriptive name (e.g. "2 eggs and black coffee")
 - If the input is completely unparseable as food, return { "error": "unparseable", "raw": "<input>" }
