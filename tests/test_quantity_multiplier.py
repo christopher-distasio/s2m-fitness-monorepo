@@ -8,11 +8,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from backend.services.food_parser import (
-    SYSTEM_PROMPT,
+from backend.services.food_parser import SYSTEM_PROMPT, parse_food_input
+from backend.services.quantity import (
     grams_per_tablespoon,
     leading_fraction,
-    parse_food_input,
     parse_quantity_multiplier,
     reference_names_same_food,
     stated_fluid_grams,
