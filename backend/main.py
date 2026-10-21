@@ -1,3 +1,6 @@
+import os
+
+from dotenv import load_dotenv
 from backend.routes.food import router as food_router
 from backend.routes.user import router as user_router
 from fastapi import FastAPI
@@ -14,6 +17,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+load_dotenv()
+# Extra origins for machine-specific hosts (e.g. a private Tailscale address
+# used to reach a dev machine from a phone), comma-separated in .env.
+_EXTRA_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_EXTRA_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -24,7 +36,7 @@ app.add_middleware(
         "https://www.speaktomefitness.com",
         "https://speaktomefitness.com",
         "https://s2m-fitness-monorepo.vercel.app"
-    ],
+    ] + _EXTRA_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
