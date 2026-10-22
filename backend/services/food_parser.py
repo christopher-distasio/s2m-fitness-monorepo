@@ -12,7 +12,9 @@ from backend.services.nutrition_service import (
 from backend.services.query_match_rank import is_zero_calorie_query
 from backend.services.parse_query_modifiers import parse_query_modifiers
 from backend.services.quantity import (
+    counted_item_label,
     resolve_quantity,
+    restate_candidates_per_item,
     unconverted_volume_resolution,
 )
 from backend.services.dietary_filters import FDA_ALLERGENS
@@ -714,6 +716,15 @@ async def _enrich_with_nutrition(
                     except (TypeError, ValueError):
                         pass
             parsed["nutrients"] = nutrients
+
+        if stated.counted_item:
+            item_label = counted_item_label(
+                parsed.get("serving_size"), stated_amount, stated.counted_item
+            )
+            parsed["serving_label"] = item_label
+            parsed["candidates"] = restate_candidates_per_item(
+                parsed["candidates"], stated_amount, stated.counted_item, item_label
+            )
 
         parsed["quantity_used"] = quantity
         parsed["amount"] = stated_amount

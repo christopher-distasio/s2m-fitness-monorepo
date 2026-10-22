@@ -396,6 +396,7 @@ class StatedQuantity:
     multiplier: float  # applied to the record's default-serving nutrition
     amount: float  # what the user said: 100 for "100 grams", 0.5 for "half"
     unconverted_volume: str | None  # kitchen unit with no honest gram figure
+    counted_item: str | None = None  # "pizza" when whole items were counted
 
 
 async def resolve_quantity(
@@ -428,6 +429,7 @@ async def resolve_quantity(
     # A kitchen volume ("1 tablespoon") converts through the food's own
     # volume portion. Without one there is no honest gram figure.
     unconverted_volume = None
+    counted_item = None
     if stated_grams is None:
         volume_unit = stated_volume_unit(parsed.get("serving_size"), parsed.get("unit"))
         if volume_unit:
@@ -453,6 +455,7 @@ async def resolve_quantity(
             per_item = servings_per_stated_item(parsed, nutrition)
             if per_item:
                 quantity = quantity * per_item
+                counted_item = label_item_fraction(nutrition.get("serving_label"))[1]
                 logger.info(
                     "label_item_fraction food=%r label=%r servings_per_item=%.3f",
                     food_query,
@@ -470,7 +473,47 @@ async def resolve_quantity(
         multiplier=quantity,
         amount=stated_amount,
         unconverted_volume=unconverted_volume,
+        counted_item=counted_item,
     )
+
+
+def counted_item_label(serving_size, amount: float, item: str) -> str:
+    """What the user counted, for display: '1/2' + pizza -> '1/2 pizza'."""
+    text = str(serving_size or "").strip().lower() or f"{amount:g}"
+    if _word_in(item, set(_words(text))):
+        return text
+    return f"{text} {item}s" if amount > 1 else f"{text} {item}"
+
+
+# Candidate fields that are not amounts of food and never scale.
+_CANDIDATE_FIXED_FIELDS = {"fdc_id", "score"}
+
+
+def restate_candidates_per_item(candidates, amount: float, item: str, label: str) -> list:
+    """Show each 'did you mean' option as the same amount of the item the user
+    counted ('1/2 pizza'), so its calories compare with the headline and a
+    tap logs that amount. Options whose label is not a fraction of that item
+    are left on their own serving."""
+    restated = []
+    for candidate in candidates or []:
+        labelled = (
+            label_item_fraction(candidate.get("serving_label"))
+            if candidate.get("serving_source") == "branded_serving_size"
+            else None
+        )
+        if not labelled or labelled[1] != item:
+            restated.append(candidate)
+            continue
+        factor = amount / labelled[0]
+        scaled = dict(candidate)
+        for key, value in candidate.items():
+            if key in _CANDIDATE_FIXED_FIELDS or isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                scaled[key] = round(value * factor, 2)
+        scaled["serving_label"] = label
+        restated.append(scaled)
+    return restated
 
 
 def unconverted_volume_resolution(food_name: str, unit: str, portion_options) -> dict:

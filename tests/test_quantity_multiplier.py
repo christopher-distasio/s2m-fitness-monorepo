@@ -10,6 +10,7 @@ import pytest
 
 from backend.services.food_parser import SYSTEM_PROMPT, parse_food_input
 from backend.services.quantity import (
+    counted_item_label,
     grams_per_tablespoon,
     label_item_fraction,
     leading_fraction,
@@ -687,3 +688,38 @@ async def test_label_fraction_ignored_for_non_label_servings():
     curated = dict(STUFFED_CRUST_NUTRITION, serving_source="sr_legacy_default_portion")
     result = await _parse("half a pizza", "1/2", "pizza", curated)
     _assert_scaled(result, curated, 0.5)
+
+
+@pytest.mark.asyncio
+async def test_half_a_pizza_restates_label_and_options_as_half_a_pizza():
+    """Regression: the card said '0.33 PIZZA — 591 cal' and offered other
+    pizzas at their own label serving (330 cal for 0.1 PIZZA)."""
+    marketside = {
+        "fdc_id": "1581563", "name": "MARKETSIDE STUFFED CRUST PIZZA", "brand": "MARKETSIDE",
+        "serving_label": "0.1 PIZZA", "serving_size_g": 130.0,
+        "serving_source": "branded_serving_size", "score": 0.8,
+        "calories": 330.0, "protein": 14.0, "carbs": 36.0, "fat": 14.0, "sodium": 700.0,
+    }
+    sandwich = {
+        "fdc_id": "1745046", "name": "PEPPERONI PIZZA SLICES", "brand": "HILL COUNTRY",
+        "serving_label": "1 sandwich", "serving_size_g": 127.0,
+        "serving_source": "branded_serving_size", "score": 0.7,
+        "calories": 359.0, "protein": 12.0, "carbs": 40.0, "fat": 16.0,
+    }
+    nutrition = dict(STUFFED_CRUST_NUTRITION, candidates=[marketside, sandwich])
+    result = await _parse("half of a stuffed-crust pizza", "1/2", "stuffed-crust pizza", nutrition)
+    assert result["serving_label"] == "1/2 pizza"
+    restated, untouched = result["candidates"]
+    assert restated["serving_label"] == "1/2 pizza"
+    assert restated["calories"] == 1650.0
+    assert restated["fat"] == 70.0
+    assert restated["sodium"] == 3500.0
+    assert restated["serving_size_g"] == 650.0
+    assert restated["fdc_id"] == "1581563" and restated["score"] == 0.8
+    assert untouched == sandwich
+
+
+def test_counted_item_label():
+    assert counted_item_label("1/2", 0.5, "pizza") == "1/2 pizza"
+    assert counted_item_label("1 pizza", 1.0, "pizza") == "1 pizza"
+    assert counted_item_label("2", 2.0, "pizza") == "2 pizzas"
