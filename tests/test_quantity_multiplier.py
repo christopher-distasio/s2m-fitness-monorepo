@@ -11,6 +11,7 @@ import pytest
 from backend.services.food_parser import SYSTEM_PROMPT, parse_food_input
 from backend.services.quantity import (
     grams_per_tablespoon,
+    label_item_fraction,
     leading_fraction,
     parse_quantity_multiplier,
     reference_names_same_food,
@@ -616,3 +617,73 @@ async def test_text_and_voice_transcripts_share_parse_path():
 
     assert typed["calories"] == voiced["calories"] == 178
     assert typed["quantity_used"] == voiced["quantity_used"] == 2.0
+
+
+# --- a count of the item against a label serving that is part of the item ---
+
+STUFFED_CRUST_NUTRITION = {
+    "calories": 390,
+    "carbs": 40.0,
+    "protein": 16.0,
+    "fat": 19.0,
+    "nutrients": {},
+    "serving_size_g": 150.0,
+    "serving_source": "branded_serving_size",
+    "serving_label": "0.33 PIZZA",
+    "candidates": [],
+    "portion_options": [{"label": "0.33 PIZZA", "gram_weight": 150.0, "calories": 390.0}],
+    "resolution": {"status": "resolved", "axis": None},
+}
+
+
+def test_label_item_fraction():
+    assert label_item_fraction("0.33 PIZZA") == (0.33, "pizza")
+    assert label_item_fraction("1/5 pizza (150g)") == (0.2, "pizza")
+    assert label_item_fraction("0.5 BAR") == (0.5, "bar")
+    assert label_item_fraction("1 pizza") is None
+    assert label_item_fraction("1/2 cup") is None
+    assert label_item_fraction("0.75 tsp") is None
+    assert label_item_fraction("0.61 ONZ") is None
+    assert label_item_fraction("0.5 OF 1 BAR") is None
+    assert label_item_fraction("0.25 SECOND SPRAY") is None
+    assert label_item_fraction("0.125 DRY MIX") is None
+    assert label_item_fraction("") is None
+
+
+@pytest.mark.asyncio
+async def test_half_a_pizza_counts_the_pizza_not_the_label_serving(caplog):
+    """Regression: 'half of a stuffed-crust pizza' logged half of a 1/3-pizza serving (195)."""
+    with caplog.at_level("INFO"):
+        result = await _parse(
+            "half of a stuffed-crust pizza", "1/2", "stuffed-crust pizza", STUFFED_CRUST_NUTRITION
+        )
+    _assert_scaled(result, STUFFED_CRUST_NUTRITION, 0.5 / 0.33)
+    assert result["calories"] == 591
+    assert result["amount"] == 0.5
+    assert any("label_item_fraction" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_one_pizza_with_item_word_counts_the_pizza():
+    result = await _parse("a stuffed crust pizza", "1 pizza", "stuffed crust pizza", STUFFED_CRUST_NUTRITION)
+    _assert_scaled(result, STUFFED_CRUST_NUTRITION, 1 / 0.33)
+
+
+@pytest.mark.asyncio
+async def test_slice_of_pizza_keeps_label_serving():
+    result = await _parse("a slice of stuffed crust pizza", "1 slice", "stuffed crust pizza", STUFFED_CRUST_NUTRITION)
+    _assert_scaled(result, STUFFED_CRUST_NUTRITION, 1.0)
+
+
+@pytest.mark.asyncio
+async def test_label_item_must_be_the_food_the_user_named():
+    package = dict(STUFFED_CRUST_NUTRITION, serving_label="0.25 PACKAGE (MAKES 1/2 CUP)")
+    result = await _parse("one mac and cheese", "1", "mac and cheese", package)
+    _assert_scaled(result, package, 1.0)
+
+
+@pytest.mark.asyncio
+async def test_label_fraction_ignored_for_non_label_servings():
+    curated = dict(STUFFED_CRUST_NUTRITION, serving_source="sr_legacy_default_portion")
+    result = await _parse("half a pizza", "1/2", "pizza", curated)
+    _assert_scaled(result, curated, 0.5)

@@ -333,6 +333,64 @@ def stated_weight_grams(serving_size, unit, amount: float) -> float | None:
     return None
 
 
+# A branded label serving is often a fraction of the item: "0.33 PIZZA",
+# "1/5 pizza (150g)", "0.5 BAR". Counting the item then counts whole items,
+# not label servings.
+_LABEL_ITEM_FRACTION = re.compile(r"^(\d+\s*/\s*\d+|\d*\.\d+)\s+([a-z]+)")
+
+
+def label_item_fraction(serving_label) -> tuple[float, str] | None:
+    """'0.33 PIZZA' -> (0.33, 'pizza'), '1/5 pizza (150g)' -> (0.2, 'pizza').
+
+    None unless the label serving is less than one of a named item. Measuring
+    units ('1/2 cup', '0.5 oz') are not items; the volume and weight rules
+    own those.
+    """
+    match = _LABEL_ITEM_FRACTION.match(str(serving_label or "").strip().lower())
+    if not match:
+        return None
+    number, item = match.groups()
+    if "/" in number:
+        top, bottom = (int(part) for part in number.split("/"))
+        fraction = top / bottom if bottom else 0.0
+    else:
+        fraction = float(number)
+    if not 0 < fraction < 1:
+        return None
+    if (
+        item in _GRAMS_PER_WEIGHT_UNIT
+        or item in _ML_PER_FLUID_UNIT
+        or item in _TBSP_PER_VOLUME_UNIT
+        or item in ("fl", "onz", "of", "serving", "sec", "second", "th")
+        or item in _PREP_WORDS
+    ):
+        return None
+    return fraction, item
+
+
+def servings_per_stated_item(parsed: dict, nutrition: dict) -> float | None:
+    """Label servings in one of the item the user counted, or None.
+
+    Applies only when the user counted the food itself ('1/2', '1 pizza'),
+    the record's serving came from its label, and the label names that same
+    item. '1 slice' or '1 serving' keeps the label serving.
+    """
+    if nutrition.get("serving_source") != "branded_serving_size":
+        return None
+    labelled = label_item_fraction(nutrition.get("serving_label"))
+    if not labelled:
+        return None
+    fraction, item = labelled
+    stated_unit = _unit_after_quantity(parsed.get("serving_size")) or str(
+        parsed.get("unit") or ""
+    ).strip().lower()
+    if stated_unit and not _word_in(stated_unit.split()[0], {item}):
+        return None
+    if not _word_in(item, set(_words(parsed.get("food")))):
+        return None
+    return 1 / fraction
+
+
 @dataclass
 class StatedQuantity:
     multiplier: float  # applied to the record's default-serving nutrition
@@ -389,6 +447,18 @@ async def resolve_quantity(
                     )
                 else:
                     unconverted_volume = volume_unit
+        else:
+            # A count of the item itself ("half a pizza") against a label
+            # serving that is part of the item ("0.33 PIZZA").
+            per_item = servings_per_stated_item(parsed, nutrition)
+            if per_item:
+                quantity = quantity * per_item
+                logger.info(
+                    "label_item_fraction food=%r label=%r servings_per_item=%.3f",
+                    food_query,
+                    nutrition.get("serving_label"),
+                    per_item,
+                )
     try:
         serving_g = float(nutrition.get("serving_size_g") or 0)
     except (TypeError, ValueError):
