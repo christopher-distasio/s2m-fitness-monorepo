@@ -64,7 +64,7 @@ def bm25_text(payload: dict) -> str:
 
 def clients(args):
     src = QdrantClient(host=args.source, grpc_port=6334, prefer_grpc=True, timeout=300)
-    dst = QdrantClient(host=args.target, grpc_port=6334, prefer_grpc=True, timeout=300,
+    dst = QdrantClient(host=args.target, grpc_port=6334, prefer_grpc=True, timeout=1800,
                        cloud_inference=True)  # send Documents to the server for BM25
     return src, dst
 
@@ -136,13 +136,19 @@ def cmd_copy(args):
 def cmd_finalize(args):
     src, dst = clients(args)
     schema = src.get_collection(SOURCE_COLLECTION).payload_schema
+    # Rerunnable: a dropped connection mid-run (seen 2026-11-19 on the 2M-point
+    # copy) leaves some indexes built; skip those instead of rebuilding them.
+    existing = set(dst.get_collection(TARGET_COLLECTION).payload_schema)
     for field, info in schema.items():
+        if field in existing:
+            continue
         dtype = info.data_type
         ftype = {"keyword": models.PayloadSchemaType.KEYWORD, "bool": models.PayloadSchemaType.BOOL,
                  "float": models.PayloadSchemaType.FLOAT, "integer": models.PayloadSchemaType.INTEGER,
                  "text": models.PayloadSchemaType.TEXT}[str(dtype.value if hasattr(dtype, "value") else dtype)]
         dst.create_payload_index(TARGET_COLLECTION, field, field_schema=ftype, wait=True)
-    print(f"created {len(schema)} payload indexes")
+        print(f"  index: {field}", flush=True)
+    print(f"payload indexes: {len(schema) - len(existing)} created, {len(existing)} already there")
     thr = src.get_collection(SOURCE_COLLECTION).config.optimizer_config.indexing_threshold or 10000
     dst.update_collection(TARGET_COLLECTION, optimizers_config=models.OptimizersConfigDiff(indexing_threshold=thr))
     print(f"HNSW building on (indexing_threshold={thr}); Qdrant now builds the search index. "

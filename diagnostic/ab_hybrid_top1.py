@@ -42,11 +42,24 @@ def _recording_pick(query, matches):
 ns._pick_match_with_usable_calories = _recording_pick
 
 
+async def _lookup(query: str):
+    # One OpenAI embedding timeout killed the 2026-11-19 overnight run at
+    # query 208 of 230; retry instead of losing the whole run.
+    for attempt in range(4):
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):  # lookup_food prints a lot
+                return await ns.lookup_food(query, modifiers=parse_query_modifiers(query))
+        except Exception as exc:
+            if attempt == 3:
+                raise
+            print(f"    retry {attempt + 1} after {type(exc).__name__}", file=sys.stderr, flush=True)
+            await asyncio.sleep(15 * (attempt + 1))
+
+
 async def top1(query: str, mode: str) -> dict:
     ns.SEARCH_MODE = mode
     _picked.clear()
-    with contextlib.redirect_stdout(io.StringIO()):  # lookup_food prints a lot
-        result = await ns.lookup_food(query, modifiers=parse_query_modifiers(query))
+    result = await _lookup(query)
     m = _picked.get("match") or {}
     meta = m.get("metadata") or {}
     return {
@@ -61,25 +74,38 @@ async def top1(query: str, mode: str) -> dict:
 async def main():
     with open(QUERIES) as f:
         queries = json.load(f)["realistic_queries"]
-    rows, changed = [], 0
-    for i, q in enumerate(queries, 1):
-        d = await top1(q, "dense")
-        h = await top1(q, "hybrid")
-        diff = d["fdc_id"] != h["fdc_id"]
-        changed += diff
-        rows.append({
-            "query": q, "changed": diff,
-            **{f"dense_{k}": v for k, v in d.items() if k != "bm25"},
-            **{f"hybrid_{k}": v for k, v in h.items()},
-        })
-        if diff:
-            print(f"[{i}] {q!r}\n    dense : {d['description']} | {d['brand']} | {d['calories']} kcal"
-                  f"\n    hybrid: {h['description']} | {h['brand']} | {h['calories']} kcal", flush=True)
-    with open(OUT, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        w.writerows(rows)
-    print(f"\n{changed} of {len(queries)} top-1 results changed. Wrote {OUT}")
+    # Written row by row, so a crash keeps everything finished so far and a
+    # rerun skips queries already in the file.
+    done = {}
+    if os.path.exists(OUT):
+        with open(OUT, newline="") as f:
+            done = {r["query"]: r for r in csv.DictReader(f)}
+    fields = ["query", "changed"] + [f"dense_{k}" for k in ("fdc_id", "description", "brand", "calories")] \
+        + [f"hybrid_{k}" for k in ("fdc_id", "description", "brand", "calories", "bm25")]
+    new_file = not done
+    with open(OUT, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        if new_file:
+            w.writeheader()
+        for i, q in enumerate(queries, 1):
+            if q in done:
+                continue
+            d = await top1(q, "dense")
+            h = await top1(q, "hybrid")
+            diff = d["fdc_id"] != h["fdc_id"]
+            row = {
+                "query": q, "changed": diff,
+                **{f"dense_{k}": v for k, v in d.items() if k != "bm25"},
+                **{f"hybrid_{k}": v for k, v in h.items()},
+            }
+            done[q] = row
+            w.writerow(row)
+            f.flush()
+            if diff:
+                print(f"[{i}] {q!r}\n    dense : {d['description']} | {d['brand']} | {d['calories']} kcal"
+                      f"\n    hybrid: {h['description']} | {h['brand']} | {h['calories']} kcal", flush=True)
+    changed = sum(str(r["changed"]) == "True" for r in done.values())
+    print(f"\n{changed} of {len(done)} top-1 results changed. Wrote {OUT}")
 
 
 if __name__ == "__main__":
