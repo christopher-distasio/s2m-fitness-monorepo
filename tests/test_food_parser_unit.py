@@ -383,6 +383,8 @@ def test_brand_check_ignores_apostrophes():
     assert _utterance_mentions_brand("Hellmann's", "hellmanns mayonnaise")
     assert _utterance_mentions_brand("Justin's", "justin almond butter")
     assert not _utterance_mentions_brand("Trader Joe's", "orange chicken")
+    assert _utterance_mentions_brand("Land O'Lakes", "butter stick land o lakes")
+    assert _utterance_mentions_brand("Land O'Lakes", "land o'lakes butter")
 
 
 def test_amount_axis_drops_identity_candidates():

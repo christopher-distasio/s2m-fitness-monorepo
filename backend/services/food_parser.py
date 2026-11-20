@@ -267,19 +267,26 @@ def _utterance_mentions_brand(brand: str, raw_input: str) -> bool:
     so "trader joes", "trader joe's" and "trader joe" all match "Trader
     Joe's". Measured 2026-11-20: splitting on the apostrophe left "joe",
     which "trader joes" does not contain, so the brand was discarded and the
-    missing-food-word rule never ran (Trader Joe's ORANGE JUICE won)."""
-    def words(text: str) -> list[str]:
-        text = re.sub(r"['\u2019]", "", (text or "").lower())
+    missing-food-word rule never ran (Trader Joe's ORANGE JUICE won).
+
+    The apostrophe is also tried as a word break, because some brands put
+    it between words: "Land O'Lakes" said as "land o lakes" (dropping it
+    alone gave "olakes", which discarded the brand)."""
+    def words(text: str, apostrophe: str) -> list[str]:
+        text = re.sub(r"['\u2019]", apostrophe, (text or "").lower())
         return re.findall(r"[a-z0-9]+", text)
 
-    tokens = [t for t in words(brand) if len(t) > 1]
-    if not tokens:
-        return False
-    hay = set(words(raw_input))
-    return all(
-        tok in hay or (tok.endswith("s") and tok[:-1] in hay) or tok + "s" in hay
-        for tok in tokens
-    )
+    def said(apostrophe: str) -> bool:
+        tokens = [t for t in words(brand, apostrophe) if len(t) > 1]
+        if not tokens:
+            return False
+        hay = set(words(raw_input, ""))
+        return all(
+            tok in hay or (tok.endswith("s") and tok[:-1] in hay) or tok + "s" in hay
+            for tok in tokens
+        )
+
+    return said("") or said(" ")
 
 
 def _keep_clarification_axis(parsed: dict, axis: str | None) -> None:
