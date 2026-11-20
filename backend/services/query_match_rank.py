@@ -307,8 +307,32 @@ def match_sort_tiebreak(match: dict) -> str:
     return "" if raw is None else str(raw)
 
 
+# Penalty per food word the user said that the product name lacks, once a
+# brand is named. Brand words fill the query ("trader joes orange chicken"
+# is half brand), so plain coverage barely notices a missing "chicken":
+# measured 2026-11-20, Trader Joe's ORANGE JUICE outranked orange chicken.
+# Larger than one hard extra (0.35) so a missing food word decides it.
+_MISSING_FOOD_WORD_PENALTY = 0.5
+
+
+def missing_food_words(query: str, name: str, stated_brand: str) -> int:
+    """How many of the query's food words (not brand, soft or number words)
+    the product name lacks. 0 when no brand is named."""
+    if not (stated_brand or "").strip():
+        return 0
+    brand_forms = _expand_forms(_tokenize(stated_brand))
+    food = {
+        t for t in _tokenize(query)
+        if t not in brand_forms and t not in _SOFT_MODIFIERS
+        and not t.isdigit() and not _PCT_TOKEN_RE.match(t) and len(t) > 1
+    }
+    n = _tokenize(name)
+    return sum(1 for t in food if not ({t, _singularize(t), _pluralize(t).lower()} & n))
+
+
 def rerank_matches_by_query(
-    query: str, matches: list[dict], modifiers: dict | None = None
+    query: str, matches: list[dict], modifiers: dict | None = None,
+    stated_brand: str | None = None,
 ) -> list[dict]:
     """Stable re-rank: query-match (minus near-zero kcal penalty), then vector score.
 
@@ -328,6 +352,7 @@ def rerank_matches_by_query(
         lexical = query_match_score(query, name, brand)
         lexical -= near_zero_calorie_penalty(query, meta)
         lexical += modifier_match_bonus(modifiers, meta)
+        lexical -= _MISSING_FOOD_WORD_PENALTY * missing_food_words(query, name, stated_brand or "")
         # Negate score terms so the id tiebreak sorts ascending. reverse=True
         # on (lexical, score, id) would rank newer fdc_ids above older ones.
         # bm25_score is present only in hybrid mode; it breaks exact

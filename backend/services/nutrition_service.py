@@ -1390,7 +1390,7 @@ async def lookup_food(
     # foods) before picking the primary + candidate list. Modifiers ride along
     # as a capped bonus so the branded tags _modifier_gate stopped filtering on
     # still order the result.
-    matches = rerank_matches_by_query(query, matches, modifiers)
+    matches = rerank_matches_by_query(query, matches, modifiers, stated_brand=stated_brand)
     matches = filter_matches_to_stated_brand(matches, stated_brand)
 
     # Tier 2 soft preferences (organic, keto, grass-fed, ...) get the final
