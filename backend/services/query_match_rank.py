@@ -330,6 +330,52 @@ def missing_food_words(query: str, name: str, stated_brand: str) -> int:
     return sum(1 for t in food if not ({t, _singularize(t), _pluralize(t).lower()} & n))
 
 
+# A branded product name ends in the kind of product it is: "...Almond Milk"
+# vs "ALMOND MILK CREAMER", "...Granola" vs "CHEWY GRANOLA BARS". When that
+# last word is not one the user said, the row is a different product even
+# if it carries every query word. Applied on top of the hard-extra penalty
+# so a describing extra ("Unsweetened Almond Milk") outranks a
+# product-changing one. Measured 2026-11-20, hybrid mode: Califia almond
+# milk CREAMER (319 kcal vs 35), Cascadian Farm granola BARS, Rice Krispies
+# Treats decorating KIT (20 kcal), Pop-Tarts mini CRISPS (100 vs 207).
+_WRONG_PRODUCT_HEAD_PENALTY = 0.35
+_SIZE_UNIT_WORDS = frozenset({
+    "oz", "ounce", "ounces", "fl", "ml", "lb", "lbs", "ct", "count", "pack",
+    "pk", "kg", "gram", "grams", "liter", "pint", "quart", "gallon",
+})
+
+
+def branded_product_head(name: str, brand: str) -> str:
+    """Last meaningful word of a branded name's product part, or "".
+
+    Skips comma segments that are only the brand ("HEINZ, STEAK SAUCE"),
+    and sizes, digits and soft words at the end ("Strawberry 22oz")."""
+    brand_tokens = _expand_forms(_tokenize(re.sub(r"['\u2019]", "", brand or "")))
+    for segment in (name or "").split(","):
+        tokens = _TOKEN_RE.findall(re.sub(r"['\u2019]", "", segment.lower()))
+        if not tokens or all(t in brand_tokens for t in tokens):
+            continue
+        for t in reversed(tokens):
+            if (len(t) > 1 and not any(c.isdigit() for c in t)
+                    and t not in _SOFT_MODIFIERS and t not in _SIZE_UNIT_WORDS):
+                return t
+        return ""
+    return ""
+
+
+def wrong_product_head(query: str, name: str, brand: str) -> bool:
+    """True when a branded row's product word is not one the user said."""
+    if not (brand or "").strip():
+        return False
+    head = branded_product_head(name, brand)
+    if not head:
+        return False
+    q_forms = _expand_forms(_tokenize(re.sub(r"['\u2019]", "", query or "")))
+    if head in q_forms or _singularize(head) in q_forms:
+        return False
+    return not _is_related_extra(head, q_forms)
+
+
 def rerank_matches_by_query(
     query: str, matches: list[dict], modifiers: dict | None = None,
     stated_brand: str | None = None,
@@ -353,6 +399,8 @@ def rerank_matches_by_query(
         lexical -= near_zero_calorie_penalty(query, meta)
         lexical += modifier_match_bonus(modifiers, meta)
         lexical -= _MISSING_FOOD_WORD_PENALTY * missing_food_words(query, name, stated_brand or "")
+        if wrong_product_head(query, name, brand):
+            lexical -= _WRONG_PRODUCT_HEAD_PENALTY
         # Negate score terms so the id tiebreak sorts ascending. reverse=True
         # on (lexical, score, id) would rank newer fdc_ids above older ones.
         # bm25_score is present only in hybrid mode; it breaks exact
