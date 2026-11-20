@@ -6,6 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from qdrant_client import QdrantClient
@@ -1162,6 +1163,25 @@ def _qdrant_results_to_matches(results) -> list[dict]:
     return matches
 
 
+def _query_points_retrying(client: QdrantClient, **kwargs):
+    """client.query_points, retried once when the server dropped the connection.
+
+    The Mini closes idle keep-alive connections; the next request on that
+    socket fails with "Server disconnected without sending a response"
+    (httpx.RemoteProtocolError). Measured 2026-11-20: 2 of ~900 lookups in
+    two A/B runs failed this way and showed the user "Nutrition search is
+    temporarily unavailable". The query is read-only, so one retry on a fresh
+    connection is safe. Timeouts are not retried (they would double the wait).
+    """
+    try:
+        return client.query_points(**kwargs)
+    except ResponseHandlingException as exc:
+        if not isinstance(getattr(exc, "source", None), httpx.RemoteProtocolError):
+            raise
+        logger.info("Qdrant connection dropped; retrying once")
+        return client.query_points(**kwargs)
+
+
 @lru_cache(maxsize=1)
 def _hybrid_client() -> QdrantClient:
     # cloud_inference sends Document queries to the server, which builds the
@@ -1190,7 +1210,8 @@ def _query_hybrid_points(
     bm25_query = qmodels.Document(text=query_text, model=BM25_MODEL)
     wide = limit * HYBRID_PHANTOM_HEADROOM
     try:
-        fused = client.query_points(
+        fused = _query_points_retrying(
+            client,
             collection_name=HYBRID_COLLECTION_NAME,
             prefetch=[
                 qmodels.Prefetch(query=vector, filter=qdrant_filter, limit=wide),
@@ -1214,14 +1235,16 @@ def _query_hybrid_points(
             only_ids = qmodels.Filter(must=[qmodels.HasIdCondition(has_id=ids)])
             cosine = {
                 p.id: p.score
-                for p in client.query_points(
+                for p in _query_points_retrying(
+                    client,
                     collection_name=HYBRID_COLLECTION_NAME, query=vector,
                     query_filter=only_ids, limit=len(ids), with_payload=False,
                 ).points
             }
             bm25 = {
                 p.id: p.score
-                for p in client.query_points(
+                for p in _query_points_retrying(
+                    client,
                     collection_name=HYBRID_COLLECTION_NAME, query=bm25_query,
                     using=BM25_VECTOR_NAME, query_filter=only_ids,
                     limit=len(ids), with_payload=False,
@@ -1263,7 +1286,8 @@ def _query_qdrant_points(
     # first live end-to-end test. query_points() returns a QueryResponse
     # object with a .points attribute (not a bare list like .search() did).
     try:
-        return qdrant_client.query_points(
+        return _query_points_retrying(
+            qdrant_client,
             collection_name=COLLECTION_NAME,
             query=vector,
             limit=limit,
