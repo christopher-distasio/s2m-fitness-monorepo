@@ -42,3 +42,10 @@ def test_brand_filter_keeps_brand_rows_with_the_food():
     pool = [_hit("ORANGE CHICKEN", "WEIS"), _hit("ORANGE CHICKEN", "TRADER JOE'S")]
     out = filter_matches_to_stated_brand(pool, "Trader Joe's", "trader joes orange chicken")
     assert [m["metadata"]["brand_name"] for m in out] == ["TRADER JOE'S"]
+
+
+def test_bbq_counts_as_barbecue():
+    assert missing_food_words("heinz barbecue sauce", "BBQ SAUCE", "Heinz") == 0
+    assert missing_food_words("heinz barbecue sauce", "BAR-B-Q SAUCE", "Heinz") == 0
+    assert missing_food_words("heinz barbecue sauce", "STEAK SAUCE", "Heinz") == 1
+

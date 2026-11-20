@@ -76,8 +76,15 @@ def _percent_token(m: re.Match) -> str:
     return f" {n}pct "
 
 
+# Spellings of barbecue become one word. Measured 2026-11-20: "heinz
+# barbecue sauce" scored Heinz "BBQ SAUCE" as missing "barbecue", so
+# Heinz STEAK SAUCE won in hybrid mode.
+_BARBECUE_RE = re.compile(r"\b(?:bbq|bar-?b-?q(?:ue)?|barbeque)\b")
+
+
 def _tokenize(text: str) -> set[str]:
     lowered = _PERCENT_RE.sub(_percent_token, (text or "").lower())
+    lowered = _BARBECUE_RE.sub("barbecue", lowered)
     return set(_TOKEN_RE.findall(lowered))
 
 
