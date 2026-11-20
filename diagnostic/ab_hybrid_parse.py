@@ -29,7 +29,7 @@ import backend.services.nutrition_service as ns  # noqa: E402
 
 HERE = os.path.dirname(__file__)
 QUERIES = os.path.join(HERE, "realistic_food_queries.json")
-OUT = os.path.join(HERE, "ab_hybrid_parse.csv")
+OUT = os.getenv("AB_OUT") or os.path.join(HERE, "ab_hybrid_parse.csv")
 
 _gpt_cache: dict[str, object] = {}
 _real_create = fp.client.chat.completions.create
