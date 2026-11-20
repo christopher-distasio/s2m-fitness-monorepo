@@ -80,11 +80,16 @@ def _percent_token(m: re.Match) -> str:
 # barbecue sauce" scored Heinz "BBQ SAUCE" as missing "barbecue", so
 # Heinz STEAK SAUCE won in hybrid mode.
 _BARBECUE_RE = re.compile(r"\b(?:bbq|bar-?b-?q(?:ue)?|barbeque)\b")
+# "mac" is how people say macaroni. Measured 2026-11-20: "kraft mac and
+# cheese" scored KRAFT, MACARONI & CHEESE DINNER as missing "mac", so the
+# brand filter dropped it for FOUR CHEESE HOMESTYLE MAC & CHEESE (619 kcal).
+_MACARONI_RE = re.compile(r"\bmac\b")
 
 
 def _tokenize(text: str) -> set[str]:
     lowered = _PERCENT_RE.sub(_percent_token, (text or "").lower())
     lowered = _BARBECUE_RE.sub("barbecue", lowered)
+    lowered = _MACARONI_RE.sub("macaroni", lowered)
     return set(_TOKEN_RE.findall(lowered))
 
 

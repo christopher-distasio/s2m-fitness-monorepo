@@ -49,3 +49,6 @@ def test_bbq_counts_as_barbecue():
     assert missing_food_words("heinz barbecue sauce", "BAR-B-Q SAUCE", "Heinz") == 0
     assert missing_food_words("heinz barbecue sauce", "STEAK SAUCE", "Heinz") == 1
 
+
+def test_mac_counts_as_macaroni():
+    assert missing_food_words("kraft mac and cheese", "KRAFT, MACARONI & CHEESE DINNER", "Kraft") == 0
