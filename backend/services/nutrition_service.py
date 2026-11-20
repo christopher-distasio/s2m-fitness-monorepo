@@ -15,6 +15,7 @@ from qdrant_client.http.exceptions import ResponseHandlingException
 from backend.services.query_match_rank import (
     effective_calories_per_100g,
     is_zero_calorie_query,
+    missing_food_words,
     rerank_matches_by_query,
 )
 from backend.services.dietary_filters import (
@@ -695,10 +696,19 @@ def _retrieval_gap(matches: list[dict]) -> tuple[float | None, float | None, flo
     return top1, top2, gap
 
 
-def filter_matches_to_stated_brand(matches: list[dict], stated_brand: str | None) -> list[dict]:
+def filter_matches_to_stated_brand(
+    matches: list[dict], stated_brand: str | None, query: str | None = None,
+) -> list[dict]:
     """Keep retrieval hits that belong to a user-named brand.
 
     If none match, return the original list so lookup can still succeed.
+
+    With `query`, a brand hit must also contain every food word the user
+    said; when no brand hit does, the brand does not have that food in the
+    pool and the original (already re-ranked) list is returned. The right
+    food from another brand beats the wrong food from the right brand.
+    Measured 2026-11-20: "trader joes orange chicken" kept only Trader Joe's
+    ORANGE JUICE (110 kcal) because it was the pool's one Trader Joe's row.
     """
     stated = (stated_brand or "").strip()
     if not stated or not matches:
@@ -714,6 +724,17 @@ def filter_matches_to_stated_brand(matches: list[dict], stated_brand: str | None
             owner=str(meta.get("brand_owner") or ""),
         ):
             kept.append(match)
+    if query and kept:
+        complete = [
+            m for m in kept
+            if missing_food_words(
+                query,
+                (m.get("metadata") or {}).get("description")
+                or (m.get("metadata") or {}).get("name") or "",
+                stated,
+            ) == 0
+        ]
+        return complete or matches
     return kept or matches
 
 
@@ -1391,7 +1412,7 @@ async def lookup_food(
     # as a capped bonus so the branded tags _modifier_gate stopped filtering on
     # still order the result.
     matches = rerank_matches_by_query(query, matches, modifiers, stated_brand=stated_brand)
-    matches = filter_matches_to_stated_brand(matches, stated_brand)
+    matches = filter_matches_to_stated_brand(matches, stated_brand, query)
 
     # Tier 2 soft preferences (organic, keto, grass-fed, ...) get the final
     # polish pass -- boosts ranking within the semantically/name relevant
