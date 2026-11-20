@@ -375,6 +375,16 @@ def test_utterance_must_contain_brand_tokens():
     assert not _utterance_mentions_brand("CHOBANI", "I had some yogurt")
 
 
+def test_brand_check_ignores_apostrophes():
+    from backend.services.food_parser import _utterance_mentions_brand
+
+    assert _utterance_mentions_brand("Trader Joe's", "trader joes orange chicken")
+    assert _utterance_mentions_brand("Trader Joe's", "trader joe's orange chicken")
+    assert _utterance_mentions_brand("Hellmann's", "hellmanns mayonnaise")
+    assert _utterance_mentions_brand("Justin's", "justin almond butter")
+    assert not _utterance_mentions_brand("Trader Joe's", "orange chicken")
+
+
 def test_amount_axis_drops_identity_candidates():
     from backend.services.food_parser import _keep_clarification_axis
 

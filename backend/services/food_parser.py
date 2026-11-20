@@ -261,12 +261,25 @@ _VAGUE_SERVING_RE = re.compile(
 
 def _utterance_mentions_brand(brand: str, raw_input: str) -> bool:
     """GPT sometimes invents a brand (Chobani for 'yogurt'). Only treat it as
-    stated when the user actually said it."""
-    tokens = [t for t in re.findall(r"[a-z0-9]+", (brand or "").lower()) if len(t) > 1]
+    stated when the user actually said it.
+
+    Apostrophes are dropped first, and a trailing possessive "s" is optional,
+    so "trader joes", "trader joe's" and "trader joe" all match "Trader
+    Joe's". Measured 2026-11-20: splitting on the apostrophe left "joe",
+    which "trader joes" does not contain, so the brand was discarded and the
+    missing-food-word rule never ran (Trader Joe's ORANGE JUICE won)."""
+    def words(text: str) -> list[str]:
+        text = re.sub(r"['\u2019]", "", (text or "").lower())
+        return re.findall(r"[a-z0-9]+", text)
+
+    tokens = [t for t in words(brand) if len(t) > 1]
     if not tokens:
         return False
-    hay = set(re.findall(r"[a-z0-9]+", (raw_input or "").lower()))
-    return all(tok in hay for tok in tokens)
+    hay = set(words(raw_input))
+    return all(
+        tok in hay or (tok.endswith("s") and tok[:-1] in hay) or tok + "s" in hay
+        for tok in tokens
+    )
 
 
 def _keep_clarification_axis(parsed: dict, axis: str | None) -> None:
