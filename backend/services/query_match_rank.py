@@ -86,10 +86,15 @@ _BARBECUE_RE = re.compile(r"\b(?:bbq|bar-?b-?q(?:ue)?|barbeque)\b")
 _MACARONI_RE = re.compile(r"\bmac\b")
 
 
-def _tokenize(text: str) -> set[str]:
+def _tokenize_text(text: str) -> str:
+    """Lowercased text with percent, barbecue and macaroni spellings unified."""
     lowered = _PERCENT_RE.sub(_percent_token, (text or "").lower())
     lowered = _BARBECUE_RE.sub("barbecue", lowered)
-    lowered = _MACARONI_RE.sub("macaroni", lowered)
+    return _MACARONI_RE.sub("macaroni", lowered)
+
+
+def _tokenize(text: str) -> set[str]:
+    lowered = _tokenize_text(text)
     return set(_TOKEN_RE.findall(lowered))
 
 
@@ -339,7 +344,25 @@ def missing_food_words(query: str, name: str, stated_brand: str) -> int:
         and not t.isdigit() and not _PCT_TOKEN_RE.match(t) and len(t) > 1
     }
     n = _tokenize(name)
-    return sum(1 for t in food if not ({t, _singularize(t), _pluralize(t).lower()} & n))
+    # Compounds: "oat milk" said, "OATMILK" on the label, or the reverse.
+    # Measured 2026-11-20: Oatly's rows all say OATMILK, so "oatly oat milk"
+    # counted 2 missing words on every one and the stated-brand filter fell
+    # through to Planet Oat.
+    q_words = _TOKEN_RE.findall(_tokenize_text(query))
+    n_words = _TOKEN_RE.findall(_tokenize_text(name))
+    present = set()
+    for a, b in zip(q_words, q_words[1:]):
+        joined = a + b
+        if {joined, _singularize(joined), _pluralize(joined).lower()} & n:
+            present |= {a, b}
+    n_joined = {a + b for a, b in zip(n_words, n_words[1:])}
+    for t in food:
+        if {t, _singularize(t)} & n_joined:
+            present.add(t)
+    return sum(
+        1 for t in food
+        if t not in present and not ({t, _singularize(t), _pluralize(t).lower()} & n)
+    )
 
 
 # A branded product name ends in the kind of product it is: "...Almond Milk"

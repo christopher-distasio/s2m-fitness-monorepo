@@ -52,3 +52,9 @@ def test_bbq_counts_as_barbecue():
 
 def test_mac_counts_as_macaroni():
     assert missing_food_words("kraft mac and cheese", "KRAFT, MACARONI & CHEESE DINNER", "Kraft") == 0
+
+
+def test_compound_words_match_both_ways():
+    assert missing_food_words("oatly oat milk", "OATMILK", "Oatly") == 0
+    assert missing_food_words("oatly oatmilk", "OAT MILK", "Oatly") == 0
+    assert missing_food_words("oatly oat milk", "OAT CREAMER", "Oatly") == 1
