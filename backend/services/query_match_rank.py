@@ -262,7 +262,7 @@ def rerank_matches_by_query(
     branded tags still influence order without overturning relevance.
     """
 
-    def sort_key(match: dict) -> tuple[float, float, str]:
+    def sort_key(match: dict) -> tuple[float, float, float, str]:
         meta = match.get("metadata") or {}
         # Payload field is "description" in Qdrant; accept "name" too so unit
         # fixtures and any legacy metadata still re-rank correctly.
@@ -273,9 +273,12 @@ def rerank_matches_by_query(
         lexical += modifier_match_bonus(modifiers, meta)
         # Negate score terms so the id tiebreak sorts ascending. reverse=True
         # on (lexical, score, id) would rank newer fdc_ids above older ones.
+        # bm25_score is present only in hybrid mode; it breaks exact
+        # lexical+cosine ties before the arbitrary fdc_id order.
         return (
             -lexical,
             -float(match.get("score") or 0),
+            -float(match.get("bm25_score") or 0),
             match_sort_tiebreak(match),
         )
 

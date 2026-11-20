@@ -4,6 +4,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -48,6 +49,18 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 QDRANT_TIMEOUT_SECONDS = 20.0
 COLLECTION_NAME = "food-vectors"
 EMBEDDING_MODEL = "text-embedding-3-large"
+
+# Hybrid search (dense + BM25), off unless SEARCH_MODE=hybrid. The hybrid
+# collection is a copy of food-vectors with a "bm25" sparse vector added
+# (scripts/build_hybrid_collection.py) and may live on another Qdrant, so it
+# has its own URL. BM25 only changes WHICH candidates enter the pool; scores
+# handed downstream stay cosine so thresholds, the variant pick and the
+# top1/top2 gap mean what they meant before.
+SEARCH_MODE = os.getenv("SEARCH_MODE", "dense").strip().lower()
+HYBRID_COLLECTION_NAME = os.getenv("HYBRID_COLLECTION_NAME", "food-vectors-hybrid")
+HYBRID_QDRANT_URL = os.getenv("HYBRID_QDRANT_URL", QDRANT_URL)
+BM25_VECTOR_NAME = "bm25"
+BM25_MODEL = "qdrant/bm25"
 SCORE_THRESHOLD = 0.3
 
 
@@ -1063,19 +1076,102 @@ def _qdrant_results_to_matches(results) -> list[dict]:
     matches = []
     for point in results:
         payload = point.payload or {}
-        matches.append({
+        match = {
             "id": payload.get("qdrant_id"),
             "score": point.score,
             "metadata": attach_calorie_macro_mismatch(
                 normalize_nutrients_to_per_100g(payload)
             ),
-        })
+        }
+        # Only hybrid points carry a BM25 score; dense matches stay as before.
+        if hasattr(point, "bm25_score"):
+            match["bm25_score"] = point.bm25_score
+        matches.append(match)
     return matches
 
 
-def _query_qdrant_points(
-    vector: list[float], limit: int, qdrant_filter: qmodels.Filter | None
+@lru_cache(maxsize=1)
+def _hybrid_client() -> QdrantClient:
+    # cloud_inference sends Document queries to the server, which builds the
+    # BM25 vector itself (no local fastembed install needed).
+    return QdrantClient(
+        url=HYBRID_QDRANT_URL, timeout=QDRANT_TIMEOUT_SECONDS, cloud_inference=True
+    )
+
+
+def _query_hybrid_points(
+    vector: list[float], query_text: str, limit: int, qdrant_filter: qmodels.Filter | None
 ):
+    """Dense + BM25 candidate pool fused with RRF, returned sorted by cosine.
+
+    RRF scores are rank-based and not comparable to cosine, so the fused set
+    is re-scored: one dense and one BM25 query restricted to the fused ids.
+    """
+    client = _hybrid_client()
+    bm25_query = qmodels.Document(text=query_text, model=BM25_MODEL)
+    try:
+        fused = client.query_points(
+            collection_name=HYBRID_COLLECTION_NAME,
+            prefetch=[
+                qmodels.Prefetch(query=vector, filter=qdrant_filter, limit=limit),
+                qmodels.Prefetch(
+                    query=bm25_query, using=BM25_VECTOR_NAME,
+                    filter=qdrant_filter, limit=limit,
+                ),
+            ],
+            query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
+            limit=limit,
+            with_payload=True,
+        )
+        ids = [p.id for p in fused.points]
+        cosine, bm25 = {}, {}
+        if ids:
+            only_ids = qmodels.Filter(must=[qmodels.HasIdCondition(has_id=ids)])
+            cosine = {
+                p.id: p.score
+                for p in client.query_points(
+                    collection_name=HYBRID_COLLECTION_NAME, query=vector,
+                    query_filter=only_ids, limit=len(ids), with_payload=False,
+                ).points
+            }
+            bm25 = {
+                p.id: p.score
+                for p in client.query_points(
+                    collection_name=HYBRID_COLLECTION_NAME, query=bm25_query,
+                    using=BM25_VECTOR_NAME, query_filter=only_ids,
+                    limit=len(ids), with_payload=False,
+                ).points
+            }
+    except (ResponseHandlingException, TimeoutError, OSError, ConnectionError) as exc:
+        logger.warning(
+            "Qdrant hybrid query failed (%s): %r",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        raise NutritionStoreUnavailable("Nutrition search is temporarily unavailable.") from exc
+
+    points = [
+        SimpleNamespace(
+            id=p.id,
+            payload=p.payload,
+            score=cosine.get(p.id, 0.0),
+            bm25_score=bm25.get(p.id, 0.0),
+        )
+        for p in fused.points
+    ]
+    points.sort(key=lambda p: -p.score)
+    return SimpleNamespace(points=points)
+
+
+def _query_qdrant_points(
+    vector: list[float],
+    limit: int,
+    qdrant_filter: qmodels.Filter | None,
+    query_text: str | None = None,
+):
+    if SEARCH_MODE == "hybrid" and query_text:
+        return _query_hybrid_points(vector, query_text, limit, qdrant_filter)
     # NOTE (2026-08-05): qdrant_client.search() was renamed to
     # query_points() in this client version -- .search() doesn't exist
     # at all here, confirmed against a real AttributeError during the
@@ -1121,11 +1217,14 @@ async def _retrieve_best(
     best_score = -1.0
     best_variant = query
     for variant, vector in zip(variants, vectors):
-        response = _query_qdrant_points(vector, RETRIEVAL_TOP_K, qdrant_filter)
+        response = _query_qdrant_points(
+            vector, RETRIEVAL_TOP_K, qdrant_filter, query_text=variant
+        )
         matches = _qdrant_results_to_matches(response.points)
         if matches and not filter_phantom_matches(matches):
             response = _query_qdrant_points(
-                vector, RETRIEVAL_TOP_K_PHANTOM_ESCALATION, qdrant_filter
+                vector, RETRIEVAL_TOP_K_PHANTOM_ESCALATION, qdrant_filter,
+                query_text=variant,
             )
             matches = _qdrant_results_to_matches(response.points)
         top_score = matches[0]["score"] if matches else 0
