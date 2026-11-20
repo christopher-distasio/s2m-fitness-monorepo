@@ -61,6 +61,7 @@ HYBRID_COLLECTION_NAME = os.getenv("HYBRID_COLLECTION_NAME", "food-vectors-hybri
 HYBRID_QDRANT_URL = os.getenv("HYBRID_QDRANT_URL", QDRANT_URL)
 BM25_VECTOR_NAME = "bm25"
 BM25_MODEL = "qdrant/bm25"
+HYBRID_PHANTOM_HEADROOM = 2  # fetch 2x, drop phantoms, keep `limit`
 SCORE_THRESHOLD = 0.3
 
 
@@ -1106,24 +1107,37 @@ def _query_hybrid_points(
 
     RRF scores are rank-based and not comparable to cosine, so the fused set
     is re-scored: one dense and one BM25 query restricted to the fused ids.
+
+    Phantom rows (no nutrition, see is_phantom_record) share the product
+    name's words, so BM25 ranks them as high as the real product and they
+    took pool slots ("froot loops": 6 of BM25's top 25, 2026-11-20). The
+    pool is fetched at double size and phantoms are dropped before it is cut
+    to `limit`. If every hit is a phantom they are kept, so _retrieve_best's
+    phantom escalation still fires exactly as in dense mode.
     """
     client = _hybrid_client()
     bm25_query = qmodels.Document(text=query_text, model=BM25_MODEL)
+    wide = limit * HYBRID_PHANTOM_HEADROOM
     try:
         fused = client.query_points(
             collection_name=HYBRID_COLLECTION_NAME,
             prefetch=[
-                qmodels.Prefetch(query=vector, filter=qdrant_filter, limit=limit),
+                qmodels.Prefetch(query=vector, filter=qdrant_filter, limit=wide),
                 qmodels.Prefetch(
                     query=bm25_query, using=BM25_VECTOR_NAME,
-                    filter=qdrant_filter, limit=limit,
+                    filter=qdrant_filter, limit=wide,
                 ),
             ],
             query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
-            limit=limit,
+            limit=wide,
             with_payload=True,
         )
-        ids = [p.id for p in fused.points]
+        real = [
+            p for p in fused.points
+            if not is_phantom_record(normalize_nutrients_to_per_100g(p.payload or {}))
+        ]
+        kept = (real or fused.points)[:limit]
+        ids = [p.id for p in kept]
         cosine, bm25 = {}, {}
         if ids:
             only_ids = qmodels.Filter(must=[qmodels.HasIdCondition(has_id=ids)])
@@ -1158,7 +1172,7 @@ def _query_hybrid_points(
             score=cosine.get(p.id, 0.0),
             bm25_score=bm25.get(p.id, 0.0),
         )
-        for p in fused.points
+        for p in kept
     ]
     points.sort(key=lambda p: -p.score)
     return SimpleNamespace(points=points)

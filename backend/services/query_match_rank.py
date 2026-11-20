@@ -51,9 +51,34 @@ _SODA_TOKENS = frozenset({"soda", "coke", "pepsi", "cola", "pop"})
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+# Percentages become one token, so "0%", "0 percent" and "zero percent" all
+# match and "5%" no longer passes as a free digit next to a "0 percent"
+# query. Measured 2026-11-20: "fage total 0 percent yogurt" picked
+# "Fage Total 5% Greek Strained Yogurt" because "%" was dropped and the
+# bare "5" counted as a harmless extra.
+_NUMBER_WORDS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+}
+_PERCENT_RE = re.compile(
+    r"\b(\d+(?:\.\d+)?|" + "|".join(_NUMBER_WORDS) + r")\s*(?:%|percent\b|pct\b)"
+)
+_PCT_TOKEN_RE = re.compile(r"^\d+(?:p\d+)?pct$")
+# When the query states a percentage, these words just restate it ("2%
+# reduced fat milk") and are not extras, while "whole" contradicts it.
+# Measured 2026-11-20: "organic valley 2 percent milk" picked "Organic Valley
+# Whole Milk" over "Organic Valley Milk, Reduced Fat, 2% Milk Fat".
+_FAT_LEVEL_WORDS = frozenset({"reduced", "fat", "lowfat", "low", "nonfat", "milkfat", "skim"})
+
+
+def _percent_token(m: re.Match) -> str:
+    n = _NUMBER_WORDS.get(m.group(1), m.group(1)).replace(".", "p")
+    return f" {n}pct "
+
 
 def _tokenize(text: str) -> set[str]:
-    return set(_TOKEN_RE.findall((text or "").lower()))
+    lowered = _PERCENT_RE.sub(_percent_token, (text or "").lower())
+    return set(_TOKEN_RE.findall(lowered))
 
 
 def _singularize(word: str) -> str:
@@ -89,6 +114,10 @@ def _expand_forms(tokens: set[str]) -> set[str]:
 def _is_related_extra(token: str, q_forms: set[str]) -> bool:
     if token.isdigit():
         return True
+    if _PCT_TOKEN_RE.match(token):
+        # A percentage is only a conflict when the query names a different
+        # one; "greek yogurt" should not penalize every "2%" product.
+        return not any(_PCT_TOKEN_RE.match(q) for q in q_forms)
     for q in q_forms:
         if len(q) >= 3 and (q in token or token in q):
             return True
@@ -193,9 +222,12 @@ def query_match_score(query: str, name: str, brand: str = "") -> float:
             covered += 1
     coverage = covered / len(q)
 
+    soft = _SOFT_MODIFIERS
+    if any(_PCT_TOKEN_RE.match(t) for t in q):
+        soft = (_SOFT_MODIFIERS | _FAT_LEVEL_WORDS) - {"whole"}
     hard_extras = {
         t
-        for t in (n - q_forms - _SOFT_MODIFIERS)
+        for t in (n - q_forms - soft)
         if not _is_related_extra(t, q_forms)
     }
     extra_penalty = 0.35 * len(hard_extras)

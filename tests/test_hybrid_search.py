@@ -72,3 +72,46 @@ def test_bm25_breaks_only_exact_ties():
 
     dense_only = [{k: v for k, v in m.items() if k != "bm25_score"} for m in (a, b)]
     assert [m["id"] for m in rerank_matches_by_query("food bars", dense_only)] == ["1282741", "1574842"]
+
+
+def _real(pid, desc="FROOT LOOPS CEREAL"):
+    return SimpleNamespace(id=pid, score=0.5, payload={
+        "qdrant_id": str(pid), "description": desc, "fdc_id": str(pid),
+        "calories": 375.0, "protein": 7.0, "carbs": 85.0, "fat": 3.0,
+        "serving_size_g": 29.0, "serving_size_unit": "g",
+    })
+
+
+def test_hybrid_drops_phantoms_before_cutting_pool(monkeypatch):
+    monkeypatch.setattr(ns, "SEARCH_MODE", "hybrid")
+    assert not ns.is_phantom_record(ns.normalize_nutrients_to_per_100g(_real(1).payload))
+    client = MagicMock()
+    fused = SimpleNamespace(points=[_pt(9, 0.9), _real(1), _pt(8, 0.4), _real(2)])
+    client.query_points.side_effect = [
+        fused,
+        SimpleNamespace(points=[_pt(1, 0.7), _pt(2, 0.6)]),
+        SimpleNamespace(points=[]),
+    ]
+    monkeypatch.setattr(ns, "_hybrid_client", lambda: client)
+
+    resp = ns._query_qdrant_points([0.1], 2, None, query_text="froot loops")
+
+    assert [p.id for p in resp.points] == [1, 2]
+    first = client.query_points.call_args_list[0].kwargs
+    assert first["limit"] == 2 * ns.HYBRID_PHANTOM_HEADROOM
+    assert all(pf.limit == 2 * ns.HYBRID_PHANTOM_HEADROOM for pf in first["prefetch"])
+
+
+def test_hybrid_keeps_all_phantom_pool_so_escalation_still_fires(monkeypatch):
+    monkeypatch.setattr(ns, "SEARCH_MODE", "hybrid")
+    client = MagicMock()
+    client.query_points.side_effect = [
+        SimpleNamespace(points=[_pt(9, 0.9), _pt(8, 0.4), _pt(7, 0.3)]),
+        SimpleNamespace(points=[_pt(9, 0.7), _pt(8, 0.6)]),
+        SimpleNamespace(points=[]),
+    ]
+    monkeypatch.setattr(ns, "_hybrid_client", lambda: client)
+
+    resp = ns._query_qdrant_points([0.1], 2, None, query_text="froot loops")
+
+    assert [p.id for p in resp.points] == [9, 8]
