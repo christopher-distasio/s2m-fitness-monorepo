@@ -47,7 +47,10 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 # filters (or a grey/stalled-optimizer collection) measured ~11s and 503'd
 # every log. Two _number_variants queries run sequentially, so keep headroom.
 QDRANT_TIMEOUT_SECONDS = 20.0
-COLLECTION_NAME = "food-vectors"
+# The Mac Mini is the central store (2026-11-20). Its good copy is
+# food-vectors-hybrid; its old food-vectors is stale, so .env names the
+# collection explicitly. The default keeps the old single-machine setup.
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "food-vectors")
 EMBEDDING_MODEL = "text-embedding-3-large"
 
 # Hybrid search (dense + BM25), off unless SEARCH_MODE=hybrid. The hybrid

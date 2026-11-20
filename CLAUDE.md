@@ -9,8 +9,9 @@ from benefiting from conventional fitness apps.
 * Frontend: Next.js 14
 * Backend: FastAPI (Python, Poetry)
 * Database: MongoDB Atlas + Beanie ODM
-* Vector search: Qdrant, self-hosted in Docker (text-embedding-3-large,
-  3072 dims, cosine). Collection `food-vectors`, ~2.01M points.
+* Vector search: Qdrant, self-hosted in Docker on the Mac Mini
+  (text-embedding-3-large, 3072 dims, cosine). Collection
+  `food-vectors-hybrid`, ~2.01M points.
 * AI: OpenAI GPT-4o-mini (parsing) + Whisper (transcription)
 * Food data: USDA FoodData Central (SR Legacy, FNDDS, Branded Foods,
   CSV release 2026-04-30)
@@ -32,11 +33,34 @@ is 3.14, which this project does not support — always use `poetry run`.
 
 ## Qdrant
 
-Runs in Docker on the MacBook Air. `QDRANT_URL=http://localhost:6333`.
+The Mac Mini is the central store for the food data (decided
+2026-11-20). It runs Qdrant 1.19 in Docker (memory limit 16 GB) at
+192.168.1.236 on the home network; ssh user `christopherdistasio`.
+Tailscale (100.95.197.51) does not reach it from the Air yet.
 
-Do not point it at the Mac Mini (192.168.1.229). A stale Mini reference
-sent an earlier debugging session querying an instance the app was not
-using, which made a bug appear to resolve itself.
+.env:
+
+    QDRANT_URL=http://192.168.1.236:6333
+    COLLECTION_NAME=food-vectors-hybrid
+
+Use `food-vectors-hybrid`: a full copy of the Air's `food-vectors`
+(2,013,088 points, counts and a 50-point spot check matched) plus a
+`bm25` sparse vector. The dense vector is unnamed, so dense queries
+work unchanged. `SEARCH_MODE=hybrid` turns on dense + BM25 search;
+dense is the default.
+
+Do NOT use the Mini's `food-vectors` collection. It is an old stale
+copy, and querying a stale copy once made a bug look like it had fixed
+itself.
+
+The Air's Qdrant (1.18.3, `food-vectors`) is legacy. It returns 0 hits
+for searches that combine filters matching a mid-sized set (e.g.
+generic source + cooking_method: 305 rows by count, 0 by search), so
+"general item" lookups with a cooking word come back empty there. The
+Mini answers the same filters correctly.
+
+Docker at 8 GB OOM-killed Qdrant on the Mini while it built payload
+indexes (2026-11-20); keep its memory at 16 GB.
 
 Restart policy is `unless-stopped` — the container cycles on sleep
 otherwise.
@@ -46,7 +70,13 @@ Snapshots (created via the snapshot API, copied out with `docker cp`):
     ~/qdrant-backups/food-vectors/
 
 * 2026-08-15 — 26GB, predates the modifier backfill
-* 2026-09-01 — 33.4GB, current
+* 2026-09-01 — 33.4GB
+* 2026-11-20 (UTC; evening of Nov 19 local) — 33.4GB, checksum
+  verified, taken right before `food-vectors-hybrid` was copied from
+  the Air
+
+These are snapshots of the Air's `food-vectors`. There is no snapshot of
+the Mini's `food-vectors-hybrid` yet.
 
 Take a fresh snapshot before any bulk payload rewrite. A snapshot at this
 size takes ~3-4 minutes; the API call blocks until it finishes.
