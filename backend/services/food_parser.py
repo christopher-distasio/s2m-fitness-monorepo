@@ -12,6 +12,7 @@ from backend.services.nutrition_service import (
 from backend.services.query_match_rank import is_zero_calorie_query
 from backend.services.parse_query_modifiers import parse_query_modifiers
 from backend.services.quantity import (
+    _unit_after_quantity,
     counted_item_label,
     resolve_quantity,
     restate_candidates_per_item,
@@ -608,6 +609,14 @@ async def parse_food_input(
     )
 
 
+def _is_plain_count(parsed: dict) -> bool:
+    """'3', 'a', 'two' with no unit: the user counted whole items."""
+    if parsed.get("quantity_kind") != "count" or (parsed.get("unit") or "").strip():
+        return False
+    size = str(parsed.get("serving_size") or "1").strip().lower()
+    return not _unit_after_quantity(size) and bool(re.fullmatch(r"[\d./ ]+|[a-z]+", size))
+
+
 async def _enrich_with_nutrition(
     parsed: dict,
     *,
@@ -645,6 +654,7 @@ async def _enrich_with_nutrition(
             modifiers=parsed.get("modifiers"),
             dietary_preferences=dietary_preferences,
             stated_brand=stated_brand or None,
+            counted=_is_plain_count(parsed),
         )
     except NutritionStoreUnavailable:
         logger.warning("Nutrition store unavailable for query %r", food_query)

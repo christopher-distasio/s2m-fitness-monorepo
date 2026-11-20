@@ -838,6 +838,53 @@ def _format_portion_label(portion: dict) -> str:
     return f"{amount_f:g} {unit_part}".strip()
 
 
+# A counted food ("3 eggs", "a chicken breast") is one whole item each, but
+# USDA lists portions in its own order and the first is often a volume:
+# hard-boiled egg starts with "1 cup, chopped" (136 g), grilled chicken
+# fillet with "1 nugget" (16 g). Measured 2026-11-20: "3 hard boiled eggs"
+# logged 632 kcal and "a grilled chicken breast" 24 kcal.
+_MEASURE_PORTION_WORDS = frozenset({
+    "cup", "cups", "tbsp", "tablespoon", "tablespoons", "tsp", "teaspoon",
+    "teaspoons", "oz", "ounce", "ounces", "fl", "lb", "lbs", "pound", "g",
+    "gram", "grams", "ml", "cubic", "inch", "pat", "dash", "pinch", "serving",
+    "nlea", "container", "package", "pkg",
+})
+_ITEM_SIZE_RANK = {"medium": 3.0, "large": 2.5, "small": 1.0, "whole": 1.5, "each": 1.5}
+
+
+def counted_item_portion(metadata: dict, query: str = "") -> dict | None:
+    """The portion that is one whole item, for a food the user counted.
+
+    A portion named after the food ("1 fillet" on "Chicken fillet, grilled",
+    "1 breast" for "chicken breast") wins, then the size words USDA uses for
+    one item (medium, large, small). Volume and weight portions never
+    qualify. None when nothing qualifies, so the caller keeps its default.
+    """
+    food_words: set[str] = set()
+    for text in (query, record_display_name(metadata)):
+        for w in re.findall(r"[a-z]+", (text or "").lower()):
+            food_words.add(w)
+            food_words.add(w[:-1] if w.endswith("s") else w)
+    best, best_score = None, 0.0
+    for portion in _parse_portions(metadata):
+        if not portion.get("gram_weight"):
+            continue
+        description = (portion.get("description") or "").strip()
+        if description and not _portion_description_usable(description):
+            continue
+        label = _format_portion_label(portion)
+        words = re.findall(r"[a-z]+", label.lower())
+        if not words or _MEASURE_PORTION_WORDS.intersection(words):
+            continue
+        score = 0.0
+        if food_words.intersection(w for w in words if len(w) > 2):
+            score += 4.0
+        score += max((_ITEM_SIZE_RANK.get(w, 0.0) for w in words), default=0.0)
+        if score > best_score:
+            best, best_score = portion, score
+    return best
+
+
 def build_serving_label(metadata: dict, serving_size_g: float, serving_source: str) -> str:
     """One-line description of the serving the primary calories are based on.
     Prefers the branded household text (e.g. '1 cup (240 ml)'), then the
@@ -1256,8 +1303,12 @@ async def lookup_food(
     modifiers: dict | None = None,
     dietary_preferences: DietaryPreferences | None = None,
     stated_brand: str | None = None,
+    counted: bool = False,
 ) -> dict | None:
     """
+    counted: the user gave a plain count ("3 eggs"), so a USDA record's
+    default serving is its one-whole-item portion (counted_item_portion).
+
     dietary_preferences is passed in by the caller (route layer), already
     fetched from the user's UserProfile — this function stays DB-agnostic
     and testable without a live Mongo connection.
@@ -1366,6 +1417,13 @@ async def lookup_food(
     )
 
     serving_size_g, serving_source = get_serving_size_g(metadata)
+    item_portion = (
+        counted_item_portion(metadata, query)
+        if counted and serving_source == "sr_legacy_default_portion"
+        else None
+    )
+    if item_portion is not None:
+        serving_size_g = float(item_portion["gram_weight"])
     macros = scale_nutrients(metadata, serving_size_g)
     calories = macros["calories"]
     if is_phantom_record(metadata):
@@ -1380,7 +1438,11 @@ async def lookup_food(
     household_serving_fulltext = metadata.get("household_serving_fulltext", "")
     whole_container = is_whole_container_serving(household_serving_fulltext)
 
-    serving_label = build_serving_label(metadata, serving_size_g, serving_source)
+    serving_label = (
+        _format_portion_label(item_portion)
+        if item_portion is not None
+        else build_serving_label(metadata, serving_size_g, serving_source)
+    )
     primary_summary = {
         "fdc_id": fdc_id,
         "name": display_name,
