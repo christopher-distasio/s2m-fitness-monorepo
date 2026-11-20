@@ -35,13 +35,14 @@ is 3.14, which this project does not support — always use `poetry run`.
 ## Qdrant
 
 The Mac Mini is the central store for the food data (decided
-2026-11-20). It runs Qdrant 1.19 in Docker (memory limit 16 GB) at
-192.168.1.236 on the home network; ssh user `christopherdistasio`.
-Tailscale (100.95.197.51) does not reach it from the Air yet.
+2026-11-20). It runs Qdrant 1.19 in Docker (memory limit 16 GB); ssh
+user `christopherdistasio`. Addresses: Tailscale 100.95.197.51 (works
+at home and away; at home it goes direct over the LAN, ~7 ms) and home
+network 192.168.1.236. Tailscale must be running on the Air.
 
 .env:
 
-    QDRANT_URL=http://192.168.1.236:6333
+    QDRANT_URL=http://100.95.197.51:6333
     COLLECTION_NAME=food-vectors-hybrid
 
 Use `food-vectors-hybrid`: a full copy of the Air's `food-vectors`
