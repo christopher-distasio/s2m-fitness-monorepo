@@ -516,6 +516,31 @@ def restate_candidates_per_item(candidates, amount: float, item: str, label: str
     return restated
 
 
+def scale_options_for_count(options, amount: float, label_key: str) -> list:
+    """'Did you mean' options for a counted food, as that many of each.
+
+    The headline is already multiplied by the count; the options were one
+    serving each, and a tap logged that one serving. Measured 2026-11-20:
+    "3 hard boiled eggs" then tapping "1 large" saved 78 kcal, not 234.
+    Labels become "3 × 1 large" so the saved quantity says what was eaten.
+    """
+    if not amount or amount == 1:
+        return list(options or [])
+    scaled_all = []
+    for option in options or []:
+        scaled = dict(option)
+        for key, value in option.items():
+            if key in _CANDIDATE_FIXED_FIELDS or isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                scaled[key] = round(value * amount, 2)
+        label = str(option.get(label_key) or "").strip()
+        if label:
+            scaled[label_key] = f"{amount:g} × {label}"
+        scaled_all.append(scaled)
+    return scaled_all
+
+
 def unconverted_volume_resolution(food_name: str, unit: str, portion_options) -> dict:
     """One amount question, built from the record's own portions, for a kitchen
     volume that could not be converted."""

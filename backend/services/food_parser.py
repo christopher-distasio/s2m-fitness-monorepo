@@ -5,6 +5,7 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from backend.services.nutrition_service import (
     NutritionStoreUnavailable,
+    assess_resolution,
     format_branded_name,
     is_phantom_lookup_result,
     lookup_food,
@@ -16,6 +17,7 @@ from backend.services.quantity import (
     counted_item_label,
     resolve_quantity,
     restate_candidates_per_item,
+    scale_options_for_count,
     unconverted_volume_resolution,
 )
 from backend.services.dietary_filters import FDA_ALLERGENS
@@ -736,6 +738,26 @@ async def _enrich_with_nutrition(
             parsed["candidates"] = restate_candidates_per_item(
                 parsed["candidates"], stated_amount, stated.counted_item, item_label
             )
+
+        elif _is_plain_count(parsed) and stated_amount and stated_amount != 1 and quantity > 0:
+            # The options must log the same count as the headline, and the
+            # question built during lookup quoted one-serving calories.
+            parsed["candidates"] = scale_options_for_count(
+                parsed["candidates"], stated_amount, "serving_label"
+            )
+            parsed["portion_options"] = scale_options_for_count(
+                parsed["portion_options"], stated_amount, "label"
+            )
+            before = nutrition.get("resolution") or {}
+            if before.get("status") == "needs_clarification":
+                after = assess_resolution(
+                    nutrition.get("food_name") or parsed.get("food") or "",
+                    parsed["candidates"],
+                    parsed["portion_options"],
+                )
+                # Same ask/log decision; only the quoted numbers change.
+                if after.get("status") == before.get("status") and after.get("axis") == before.get("axis"):
+                    nutrition["resolution"] = after
 
         parsed["quantity_used"] = quantity
         parsed["amount"] = stated_amount

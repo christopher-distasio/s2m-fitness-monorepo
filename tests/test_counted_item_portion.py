@@ -53,3 +53,16 @@ def test_plain_count_detection():
     assert not _is_plain_count({"quantity_kind": "measure", "serving_size": "2 cups"})
     assert not _is_plain_count({"quantity_kind": "count", "serving_size": "2 slices"})
     assert not _is_plain_count({"quantity_kind": "count", "serving_size": "1", "unit": "slice"})
+
+
+def test_options_scale_with_the_count():
+    from backend.services.quantity import scale_options_for_count
+    portions = [{"label": "1 large", "gram_weight": 50.0, "calories": 77.5, "protein": 6.3}]
+    out = scale_options_for_count(portions, 3, "label")
+    assert out[0]["label"] == "3 × 1 large"
+    assert out[0]["calories"] == 232.5 and out[0]["protein"] == 18.9
+    cands = [{"fdc_id": 173424, "score": 0.81, "serving_label": "1 large", "calories": 90.0, "is_x": True}]
+    c = scale_options_for_count(cands, 2, "serving_label")[0]
+    assert c["fdc_id"] == 173424 and c["score"] == 0.81 and c["is_x"] is True
+    assert c["calories"] == 180.0 and c["serving_label"] == "2 × 1 large"
+    assert scale_options_for_count(portions, 1, "label") == portions
