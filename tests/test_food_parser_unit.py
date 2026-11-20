@@ -308,7 +308,9 @@ async def test_multi_item_utterance_returns_three_events():
             )
 
     assert len(result["food_events"]) == 3
-    assert mock_lookup.await_count == 3
+    # Per item: plain-food-first lookup, then all sources (the mock's
+    # name is not an exact plain match, so it falls through).
+    assert mock_lookup.await_count == 6
     names = [event["food"] for event in result["food_events"]]
     assert names == ["eggs", "toast", "coffee"]
 

@@ -513,10 +513,16 @@ GENERIC_ALMOND_REFERENCE = {
 
 
 async def _parse_with_reference(raw_input, serving_size, food, nutrition, reference):
-    """First lookup is the matched record; the generic-only lookup returns reference."""
+    """The plain-food-first lookup finds nothing, the all-sources lookup is the
+    matched record, and the later generic-only lookup (cup weight) returns
+    reference."""
+    generic_calls = []
 
     async def fake_lookup(query, source_filter=None, **kwargs):
-        return dict(reference) if source_filter == "generic" else dict(nutrition)
+        if source_filter == "generic":
+            generic_calls.append(query)
+            return None if len(generic_calls) == 1 else dict(reference)
+        return dict(nutrition)
 
     with patch(
         "backend.services.food_parser.client.chat.completions.create",

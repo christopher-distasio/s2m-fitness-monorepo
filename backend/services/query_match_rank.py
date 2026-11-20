@@ -243,6 +243,31 @@ def query_match_score(query: str, name: str, brand: str = "") -> float:
     return coverage + head_bonus - extra_penalty - brand_penalty - length_penalty
 
 
+def is_exact_plain_match(query: str, name: str) -> bool:
+    """True when `name` says what the user said and nothing more.
+
+    Every query word is present (singular/plural forms count) and the name
+    adds no hard extra word; soft words like raw, cooked, whole and NFS are
+    allowed. Used to trust a plain USDA match without asking "brand or
+    general?". Measured 2026-11-20 on 56 queries: "Bananas, raw" and
+    "Egg, whole, cooked, scrambled" pass; "Chicken, back", "Chips, rice"
+    and "Nutella sandwich on white bread" do not.
+    """
+    q = _tokenize(query)
+    n = _tokenize(name)
+    if not q or not n:
+        return False
+    for t in q:
+        if not ({t, _singularize(t), _pluralize(t).lower()} & n):
+            return False
+    q_forms = _expand_forms(q)
+    extras = {
+        t for t in (n - q_forms - _SOFT_MODIFIERS)
+        if not _is_related_extra(t, q_forms)
+    }
+    return not extras
+
+
 def modifier_match_bonus(modifiers: dict | None, metadata: dict | None) -> float:
     """Capped lexical bonus for each query modifier the record actually carries.
 

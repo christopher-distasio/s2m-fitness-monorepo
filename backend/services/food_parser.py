@@ -10,7 +10,7 @@ from backend.services.nutrition_service import (
     is_phantom_lookup_result,
     lookup_food,
 )
-from backend.services.query_match_rank import is_zero_calorie_query
+from backend.services.query_match_rank import is_exact_plain_match, is_zero_calorie_query
 from backend.services.parse_query_modifiers import parse_query_modifiers
 from backend.services.quantity import (
     _unit_after_quantity,
@@ -650,14 +650,36 @@ async def _enrich_with_nutrition(
 
     print("calling lookup_food with:", food_query, "| source:", effective_source)
     try:
-        nutrition = await lookup_food(
-            food_query,
-            source_filter=effective_source,
-            modifiers=parsed.get("modifiers"),
-            dietary_preferences=dietary_preferences,
-            stated_brand=stated_brand or None,
-            counted=_is_plain_count(parsed),
-        )
+        nutrition = None
+        if effective_source is None:
+            # No brand named: most people mean the plain food. Use the USDA
+            # record when it says exactly what they said; otherwise fall
+            # through to the all-sources search and its brand question.
+            plain = await lookup_food(
+                food_query,
+                source_filter="generic",
+                modifiers=parsed.get("modifiers"),
+                dietary_preferences=dietary_preferences,
+                counted=_is_plain_count(parsed),
+            )
+            if (
+                plain
+                and not plain.get("blocked_by_allergy")
+                and not is_phantom_lookup_result(plain)
+                and is_exact_plain_match(food_query, plain.get("food_name") or "")
+            ):
+                nutrition = plain
+                effective_source = "generic"
+                print("plain food match:", plain.get("food_name"))
+        if nutrition is None:
+            nutrition = await lookup_food(
+                food_query,
+                source_filter=effective_source,
+                modifiers=parsed.get("modifiers"),
+                dietary_preferences=dietary_preferences,
+                stated_brand=stated_brand or None,
+                counted=_is_plain_count(parsed),
+            )
     except NutritionStoreUnavailable:
         logger.warning("Nutrition store unavailable for query %r", food_query)
         return {
@@ -773,7 +795,7 @@ async def _enrich_with_nutrition(
         parsed["resolution"] = resolution
 
         if (
-            source_filter is None
+            effective_source is None
             and not stated_brand
             and resolution.get("status") == "needs_clarification"
             and resolution.get("axis") != "lactose"
