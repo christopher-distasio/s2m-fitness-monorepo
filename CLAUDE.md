@@ -77,8 +77,16 @@ Snapshots (created via the snapshot API, copied out with `docker cp`):
   verified, taken right before `food-vectors-hybrid` was copied from
   the Air
 
-These are snapshots of the Air's `food-vectors`. There is no snapshot of
-the Mini's `food-vectors-hybrid` yet.
+These are snapshots of the Air's `food-vectors`.
+
+The Mini's `food-vectors-hybrid` is backed up on the Air (off-machine on
+purpose; the Mini has ~64 GB free):
+
+    ~/qdrant-backups/food-vectors-hybrid/
+
+* 2026-11-20 — 29.8GB, sha256 verified. Made by
+  `logs/mini_snapshot.sh`: snapshot on the Mini, download, verify, then
+  delete only the in-container copy it created.
 
 Take a fresh snapshot before any bulk payload rewrite. A snapshot at this
 size takes ~3-4 minutes; the API call blocks until it finishes.
