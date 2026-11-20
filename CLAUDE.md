@@ -21,7 +21,8 @@ from benefiting from conventional fitness apps.
 
     poetry run pytest tests/ -m "not live and not slow" -q
 
-Baseline: 391 passed, 26 deselected. Never merge below baseline.
+Baseline: 448 passed, 22 deselected (2026-11-20). Never merge below
+baseline.
 
 Eval suite lives in `tests/eval_food_parser.py` — 34 entries, 33 unique
 queries ('a cup of black coffee' appears twice on purpose: once as a
