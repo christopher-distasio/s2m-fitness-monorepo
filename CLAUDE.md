@@ -21,7 +21,7 @@ from benefiting from conventional fitness apps.
 
     poetry run pytest tests/ -m "not live and not slow" -q
 
-Baseline: 448 passed, 22 deselected (2026-11-20). Never merge below
+Baseline: 464 passed, 22 deselected (2026-11-21). Never merge below
 baseline.
 
 Eval suite lives in `tests/eval_food_parser.py` — 34 entries, 33 unique
@@ -44,12 +44,21 @@ network 192.168.1.236. Tailscale must be running on the Air.
 
     QDRANT_URL=http://100.95.197.51:6333
     COLLECTION_NAME=food-vectors-hybrid
+    SEARCH_MODE=hybrid
 
 Use `food-vectors-hybrid`: a full copy of the Air's `food-vectors`
 (2,013,088 points, counts and a 50-point spot check matched) plus a
 `bm25` sparse vector. The dense vector is unnamed, so dense queries
-work unchanged. `SEARCH_MODE=hybrid` turns on dense + BM25 search;
-dense is the default.
+work unchanged. `SEARCH_MODE=hybrid` turns on dense + BM25 search; the
+code default is dense.
+
+Local .env runs hybrid since 2026-11-21. A/B run 3 through
+parse_food_input (`diagnostic/ab_hybrid_parse.py`, 230 queries): ~36
+wins, ~10 moderate losses, none badly wrong; warm lookup ~0.67s vs
+0.40s dense. Known hybrid losses: nutella (with breadsticks), barilla
+penne (marinara penne meal), canned black beans (soup), granola queries
+picking granola bars. Render (production) is still dense and cannot
+reach the Mini yet.
 
 Do NOT use the Mini's `food-vectors` collection. It is an old stale
 copy, and querying a stale copy once made a bug look like it had fixed
