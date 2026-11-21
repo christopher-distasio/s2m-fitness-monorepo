@@ -21,3 +21,13 @@ async def async_client():
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             yield client
+
+@pytest.fixture(autouse=True)
+def _dense_search_mode_by_default(monkeypatch):
+    """Unit tests run in the code default (dense) whatever the local .env
+    sets; hybrid tests opt in with monkeypatch. The local .env switched to
+    SEARCH_MODE=hybrid on 2026-11-21, which sent tests that fake the dense
+    client through the real hybrid client instead."""
+    import backend.services.nutrition_service as ns
+
+    monkeypatch.setattr(ns, "SEARCH_MODE", "dense")
