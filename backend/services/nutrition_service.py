@@ -44,6 +44,9 @@ logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
+# The Mini's Qdrant requires a key once it is reachable from the internet
+# (Render). Unset means no key, which keeps a local keyless Qdrant working.
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
 # Fail fast on a down store instead of hanging the parse/voice request.
 # 5s was too tight: a 2M-point 3072-d search with unindexed allergen payload
 # filters (or a grey/stalled-optimizer collection) measured ~11s and 503'd
@@ -64,6 +67,7 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 SEARCH_MODE = os.getenv("SEARCH_MODE", "dense").strip().lower()
 HYBRID_COLLECTION_NAME = os.getenv("HYBRID_COLLECTION_NAME", "food-vectors-hybrid")
 HYBRID_QDRANT_URL = os.getenv("HYBRID_QDRANT_URL", QDRANT_URL)
+HYBRID_QDRANT_API_KEY = os.getenv("HYBRID_QDRANT_API_KEY") or QDRANT_API_KEY
 BM25_VECTOR_NAME = "bm25"
 BM25_MODEL = "qdrant/bm25"
 HYBRID_PHANTOM_HEADROOM = 2  # fetch 2x, drop phantoms, keep `limit`
@@ -115,7 +119,9 @@ SOURCE_GROUPS = {
 NONE_MODIFIER = "NONE"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-qdrant_client = QdrantClient(url=QDRANT_URL, timeout=QDRANT_TIMEOUT_SECONDS)
+qdrant_client = QdrantClient(
+    url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=QDRANT_TIMEOUT_SECONDS
+)
 
 
 # ============================================================================
@@ -1187,7 +1193,10 @@ def _hybrid_client() -> QdrantClient:
     # cloud_inference sends Document queries to the server, which builds the
     # BM25 vector itself (no local fastembed install needed).
     return QdrantClient(
-        url=HYBRID_QDRANT_URL, timeout=QDRANT_TIMEOUT_SECONDS, cloud_inference=True
+        url=HYBRID_QDRANT_URL,
+        api_key=HYBRID_QDRANT_API_KEY,
+        timeout=QDRANT_TIMEOUT_SECONDS,
+        cloud_inference=True,
     )
 
 
