@@ -148,7 +148,11 @@ def unparsed_tail(transcript: str, food: str | None) -> str:
         if idx < 0:
             return ""
         f = first
-    rest = t[idx + len(f) :].strip(" .,!?;:")
+    end = idx + len(f)
+    # Finish the word the food was found in: the parse names "egg" when the
+    # user said "eggs", and the leftover "s" is not unparsed speech.
+    end += len(re.match(r"[a-z']*", t[end:]).group())
+    rest = t[end:].strip(" .,!?;:")
     words = [re.sub(r"[^a-z0-9.]", "", w) for w in rest.split()]
     words = [w for w in words if w]
     leftover = [

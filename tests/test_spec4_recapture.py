@@ -64,6 +64,19 @@ def test_partial_recapture_names_captured_food_not_generic_restart():
     assert ERROR_PROCESSING_AUDIO not in state["prompt"]
 
 
+def test_plural_of_captured_food_is_not_an_unparsed_tail():
+    # Voice "3 eggs" parses as food "egg"; the plural "s" is not leftover speech.
+    assert unparsed_tail("3 eggs", "egg") == ""
+    assert unparsed_tail("Three eggs.", "egg") == ""
+    assert unparsed_tail("2 bananas", "banana") == ""
+    assert unparsed_tail("two baked potatoes", "baked potato") == ""
+    assert not should_enter_recapture(
+        _parsed(food="egg"), "3 eggs", asr=-0.2, input_modality="voice"
+    )
+    # Real trailing content after the plural still counts.
+    assert unparsed_tail("3 eggs and toast", "egg") == "and toast"
+
+
 def test_nothing_usable_is_actionable_not_generic_audio_error():
     parsed = {"error": "unparseable", "raw": "asdfgh"}
     assert should_enter_recapture(parsed, "asdfgh", asr=-1.2, input_modality="voice")
