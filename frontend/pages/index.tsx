@@ -1628,6 +1628,7 @@ export default function Home() {
         parsed?: ParsedResult;
         id?: string;
         logged?: boolean;
+        silence?: boolean;
         confirmation?: ParsedResult["confirmation"];
         spoken_message?: string;
         allergen_readback?: {
@@ -1706,6 +1707,18 @@ export default function Home() {
         awaitingMoreTimeReplyRef.current = false;
         flushSync(() => setLoadingBoth(false));
         await startRecordingRef.current({ fromAutoListen: true });
+        return;
+      }
+      // Mic heard nothing (backend checks Whisper's no-speech signal). First
+      // silence asks "Do you need more time?"; silence after that stops.
+      if (data.silence) {
+        flushSync(() => setLoadingBoth(false));
+        if (awaitingMoreTimeReplyRef.current) {
+          awaitingMoreTimeReplyRef.current = false;
+          setStatus("");
+          return;
+        }
+        await handleRecordingSilenceTimeout();
         return;
       }
       if (awaitingMoreTimeReplyRef.current) {

@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 from backend.models import FoodLog, Correction, UserProfile, DietaryPreferences
 from backend.services.food_parser import parse_food_input
-from backend.services.transcriber import transcribe_audio_detailed
+from backend.services.transcriber import is_silence, transcribe_audio_detailed
 from backend.services.allergy_check import check_allergy_block, moderate_allergy_warnings
 from beanie import PydanticObjectId
 from datetime import datetime, timezone, timedelta
@@ -559,6 +559,12 @@ async def log_food_voice(
         in ("list", "brand_choice", "true", "1", "yes"),
     )
     raw_input = transcript.text
+
+    # A silent clip (mic left open after the user finished) is not an
+    # utterance. The screen asks "Do you need more time?" instead of
+    # treating Whisper's invented "you" as speech it failed to catch.
+    if is_silence(transcript):
+        return {"transcription": "", "silence": True}
 
     history = json.loads(conversation_history)
 

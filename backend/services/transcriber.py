@@ -27,6 +27,26 @@ class TranscriptResult:
     no_speech_prob: float | None = None
 
 
+# Whisper invents short words ("you", "Thank you.") for a clip with no
+# speech, and reports no_speech_prob ~0.94 for it vs ~0.01 for real speech
+# (measured 2026-11-27). Only short text is dropped, so a quiet speaker whose
+# real sentence scores high is still heard.
+NO_SPEECH_PROB_SILENCE = 0.6
+SILENCE_MAX_WORDS = 3
+
+
+def is_silence(result: "TranscriptResult") -> bool:
+    """True when the clip had no speech and the text is a Whisper invention."""
+    if not (result.text or "").strip():
+        return True
+    if result.no_speech_prob is None:
+        return False
+    return (
+        result.no_speech_prob >= NO_SPEECH_PROB_SILENCE
+        and len(result.text.split()) <= SILENCE_MAX_WORDS
+    )
+
+
 def _content_type(filename: str) -> str:
     lower = (filename or "").lower()
     if lower.endswith(".wav"):
